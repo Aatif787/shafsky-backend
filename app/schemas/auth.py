@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Any
 from pydantic import BaseModel, EmailStr
 
 class LoginRequest(BaseModel):
@@ -19,8 +19,7 @@ class AuthDataResponse(BaseModel):
     refreshToken: Optional[str] = None
     user: Optional[UserResponse] = None
 
-
 class ApiResponse(BaseModel):
     success: bool
-    data: Optional[AuthDataResponse] = None
+    data: Optional[Any] = None
     error: Optional[str] = None

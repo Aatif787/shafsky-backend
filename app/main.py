@@ -3,6 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, timezone
 from app.config import settings
 from app.routers import auth_router, flight_router, admin_router, booking_router, notification_router, crm_router
+from app.security.middleware import SecurityMiddleware
+from app.security.secrets import validate_secrets_on_startup
+
+# Validate Secrets on Startup
+validate_secrets_on_startup()
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -11,6 +16,9 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc"
 )
+
+# OWASP Security Middleware & Headers
+app.add_middleware(SecurityMiddleware)
 
 # CORS Middleware
 app.add_middleware(
