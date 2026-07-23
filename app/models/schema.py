@@ -7,10 +7,16 @@ from sqlalchemy.dialects.postgresql import UUID
 from app.database import Base
 
 class Role(str, PyEnum):
+    SUPER_ADMIN = "SUPER_ADMIN"
+    ADMIN = "ADMIN"
+    OPERATIONS_MANAGER = "OPERATIONS_MANAGER"
+    DUTY_OFFICER = "DUTY_OFFICER"
+    MEET_AND_ASSIST_STAFF = "MEET_AND_ASSIST_STAFF"
+    DRIVER = "DRIVER"
+    CONCIERGE_TEAM = "CONCIERGE_TEAM"
+    CUSTOMER_SUPPORT = "CUSTOMER_SUPPORT"
     CUSTOMER = "CUSTOMER"
     DISPATCHER = "DISPATCHER"
-    ADMIN = "ADMIN"
-    SUPER_ADMIN = "SUPER_ADMIN"
 
 class BookingStatus(str, PyEnum):
     DRAFT = "DRAFT"
@@ -105,3 +111,56 @@ class Booking(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     profile = relationship("Profile", back_populates="bookings")
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    actor_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("user_auth.id", ondelete="SET NULL"), nullable=True)
+    actor_email: Mapped[str] = mapped_column(String, index=True, nullable=False)
+    action: Mapped[str] = mapped_column(String, index=True, nullable=False)
+    resource_type: Mapped[str] = mapped_column(String, nullable=False)
+    resource_id: Mapped[str] = mapped_column(String, nullable=True)
+    details: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    ip_address: Mapped[str] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, default=lambda: datetime.now(timezone.utc))
+
+class StaffAssignment(Base):
+    __tablename__ = "staff_assignments"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    booking_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("bookings.id", ondelete="CASCADE"), nullable=False)
+    assigned_by_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("user_auth.id", ondelete="SET NULL"), nullable=True)
+    staff_user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("user_auth.id", ondelete="CASCADE"), nullable=False)
+    role_type: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, default="ASSIGNED", nullable=False)
+    notes: Mapped[str] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+class ShiftRecord(Base):
+    __tablename__ = "shift_records"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    staff_user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("user_auth.id", ondelete="CASCADE"), nullable=False)
+    shift_name: Mapped[str] = mapped_column(String, nullable=False)
+    shift_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    end_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    airport_code: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, default="SCHEDULED", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+class AirportManagement(Base):
+    __tablename__ = "airports"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    code: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    city: Mapped[str] = mapped_column(String, nullable=False)
+    country: Mapped[str] = mapped_column(String, default="IND", nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    operating_hours: Mapped[str] = mapped_column(String, default="24/7", nullable=False)
+    services_config: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
