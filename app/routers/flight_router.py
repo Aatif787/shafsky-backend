@@ -21,8 +21,13 @@ from app.services.flight_duration_resolver import FlightDurationResolver
 from app.services.flight_service import FlightService
 from app.services.flight_cache import FlightCache
 
-from app.integrations.aerodatabox.service import AeroDataBoxService
-from app.integrations.aerodatabox.schemas import FlightValidateRequest, FlightValidateResponse, FlightValidateResponseData
+from app.integrations.aerodatabox.service import FlightIntelligenceService, AeroDataBoxService
+from app.integrations.aerodatabox.schemas import (
+    FlightValidateRequest,
+    FlightValidateResponse,
+    FlightValidateResponseData,
+    GenericFlightApiResponse
+)
 from app.integrations.aerodatabox.exceptions import AeroDataBoxException
 
 router = APIRouter(prefix="/api/flight", tags=["Flight Intelligence & Airport Operations"])
@@ -41,6 +46,56 @@ async def validate_aerodatabox_flight(payload: FlightValidateRequest):
         raise HTTPException(status_code=ae.status_code, detail={"code": ae.code, "message": ae.message})
     except Exception as e:
         raise HTTPException(status_code=503, detail={"code": "FLIGHT_PROVIDER_UNAVAILABLE", "message": str(e)})
+
+@flights_router.get("/status/{flightNumber}", response_model=GenericFlightApiResponse)
+async def get_flight_status(flightNumber: str, date: Optional[str] = None):
+    try:
+        data = await FlightIntelligenceService.get_flight_status(flightNumber, date)
+        return GenericFlightApiResponse(success=True, data=data.model_dump())
+    except AeroDataBoxException as ae:
+        raise HTTPException(status_code=ae.status_code, detail={"code": ae.code, "message": ae.message})
+    except Exception as e:
+        raise HTTPException(status_code=503, detail={"code": "FLIGHT_PROVIDER_UNAVAILABLE", "message": str(e)})
+
+@flights_router.get("/airline/{iata}", response_model=GenericFlightApiResponse)
+async def get_airline_details(iata: str):
+    try:
+        data = await FlightIntelligenceService.get_airline_details(iata)
+        return GenericFlightApiResponse(success=True, data=data.model_dump())
+    except AeroDataBoxException as ae:
+        raise HTTPException(status_code=ae.status_code, detail={"code": ae.code, "message": ae.message})
+
+@flights_router.get("/airport/{iata}", response_model=GenericFlightApiResponse)
+async def get_airport_details(iata: str):
+    try:
+        data = await FlightIntelligenceService.get_airport_details(iata)
+        return GenericFlightApiResponse(success=True, data=data.model_dump())
+    except AeroDataBoxException as ae:
+        raise HTTPException(status_code=ae.status_code, detail={"code": ae.code, "message": ae.message})
+
+@flights_router.get("/aircraft/{registration}", response_model=GenericFlightApiResponse)
+async def get_aircraft_details(registration: str):
+    try:
+        data = await FlightIntelligenceService.get_aircraft_details(registration)
+        return GenericFlightApiResponse(success=True, data=data.model_dump())
+    except AeroDataBoxException as ae:
+        raise HTTPException(status_code=ae.status_code, detail={"code": ae.code, "message": ae.message})
+
+@flights_router.get("/search", response_model=GenericFlightApiResponse)
+async def search_flights(query: str):
+    try:
+        data = await FlightIntelligenceService.search_flights(query)
+        return GenericFlightApiResponse(success=True, data=data)
+    except AeroDataBoxException as ae:
+        raise HTTPException(status_code=ae.status_code, detail={"code": ae.code, "message": ae.message})
+
+@flights_router.get("/live/{flightNumber}", response_model=GenericFlightApiResponse)
+async def get_live_tracking(flightNumber: str):
+    try:
+        data = await FlightIntelligenceService.get_live_tracking(flightNumber)
+        return GenericFlightApiResponse(success=True, data=data.model_dump())
+    except AeroDataBoxException as ae:
+        raise HTTPException(status_code=ae.status_code, detail={"code": ae.code, "message": ae.message})
 
 @router.post("/duration", response_model=FlightDurationResponse)
 async def resolve_flight_duration(payload: FlightDurationRequest):
