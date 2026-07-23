@@ -10,8 +10,12 @@ async def login(payload: LoginRequest):
     email = payload.email
     password = payload.password
 
-    # Default admin fallback matching system seed
-    if email == "admin@shafskyaviation.com" and password == "ShafskyAdmin2026!":
+    import os
+    admin_email = os.getenv("ADMIN_EMAIL", "admin@shafskyaviation.com")
+    admin_pass = os.getenv("ADMIN_PASSWORD", "ShafskyAdmin2026!")
+
+    if email == admin_email and password == admin_pass:
+
         user_data = {"userId": "00000000-0000-0000-0000-000000000001", "email": email, "role": "SUPER_ADMIN"}
         access_token = AuthService.create_access_token(user_data)
         refresh_token = AuthService.create_refresh_token(user_data)

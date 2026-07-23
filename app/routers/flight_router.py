@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from datetime import datetime
+from datetime import datetime, timezone
 from app.schemas.flight import (
     FlightDurationRequest,
     FlightDurationResponse,
@@ -26,7 +26,7 @@ async def resolve_flight_duration(payload: FlightDurationRequest):
 @router.post("/validate", response_model=FlightValidationResponse)
 async def validate_flight_eligibility(payload: FlightValidationRequest):
     try:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         dep_str = payload.departureTime.replace("Z", "+00:00")
         dep_date = datetime.fromisoformat(dep_str).replace(tzinfo=None)
 

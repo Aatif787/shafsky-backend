@@ -15,9 +15,10 @@ class UserResponse(BaseModel):
     fullName: Optional[str] = None
 
 class AuthDataResponse(BaseModel):
-    accessToken: str
+    accessToken: Optional[str] = None
     refreshToken: Optional[str] = None
     user: Optional[UserResponse] = None
+
 
 class ApiResponse(BaseModel):
     success: bool
