@@ -40,11 +40,24 @@ class NotificationStatus(str, PyEnum):
     PROCESSING = "PROCESSING"
     COMPLETED = "COMPLETED"
 
+class VipTier(str, PyEnum):
+    VVIP = "VVIP"
+    VIP = "VIP"
+    CORPORATE = "CORPORATE"
+    AIRLINE_CREW = "AIRLINE_CREW"
+    DIPLOMATIC = "DIPLOMATIC"
+    PRIVATE_CHARTER = "PRIVATE_CHARTER"
+    MEDICAL_ASSISTANCE = "MEDICAL_ASSISTANCE"
+    REGULAR = "REGULAR"
+
 class CaseStatus(str, PyEnum):
     OPEN = "OPEN"
+    ASSIGNED = "ASSIGNED"
+    PENDING = "PENDING"
     IN_PROGRESS = "IN_PROGRESS"
     RESOLVED = "RESOLVED"
     CLOSED = "CLOSED"
+    CANCELLED = "CANCELLED"
 
 class UserAuth(Base):
     __tablename__ = "user_auth"
@@ -84,6 +97,11 @@ class Profile(Base):
     role: Mapped[Role] = mapped_column(Enum(Role), default=Role.CUSTOMER, nullable=False)
     company: Mapped[str] = mapped_column(String, nullable=True)
     vip_status: Mapped[bool] = mapped_column(Boolean, default=False)
+    vip_tier: Mapped[VipTier] = mapped_column(Enum(VipTier), default=VipTier.REGULAR, nullable=False)
+    passport_number: Mapped[str] = mapped_column(String, index=True, nullable=True)
+    tags: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    documents_config: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    notes: Mapped[str] = mapped_column(Text, nullable=True)
     deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
@@ -187,3 +205,29 @@ class NotificationRecord(Base):
     delivered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+class CustomerCase(Base):
+    __tablename__ = "customer_cases"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    case_number: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False)
+    title: Mapped[str] = mapped_column(String, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=True)
+    category: Mapped[str] = mapped_column(String, default="GENERAL", nullable=False)
+    status: Mapped[CaseStatus] = mapped_column(Enum(CaseStatus), default=CaseStatus.OPEN, nullable=False)
+    assigned_to_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("user_auth.id", ondelete="SET NULL"), nullable=True)
+    resolution_notes: Mapped[str] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+class CustomerInteraction(Base):
+    __tablename__ = "customer_interactions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False)
+    event_type: Mapped[str] = mapped_column(String, index=True, nullable=False)
+    title: Mapped[str] = mapped_column(String, nullable=False)
+    details: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    actor_email: Mapped[str] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, default=lambda: datetime.now(timezone.utc))

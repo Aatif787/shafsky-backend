@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, timezone
 from app.config import settings
-from app.routers import auth_router, flight_router, admin_router, booking_router, notification_router
+from app.routers import auth_router, flight_router, admin_router, booking_router, notification_router, crm_router
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -27,6 +27,7 @@ app.include_router(flight_router.router)
 app.include_router(admin_router.router)
 app.include_router(booking_router.router)
 app.include_router(notification_router.router)
+app.include_router(crm_router.router)
 
 @app.get("/health", tags=["Health"])
 async def health_check():
