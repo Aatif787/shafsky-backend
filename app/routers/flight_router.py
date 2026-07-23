@@ -1,16 +1,27 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from sqlalchemy.orm import Session
 from datetime import datetime, timezone
+from typing import Optional, Dict, Any
+
+from app.database import get_db, SessionLocal
 from app.schemas.flight import (
     FlightDurationRequest,
     FlightDurationResponse,
     FlightDurationData,
     FlightValidationRequest,
     FlightValidationResponse,
-    FlightValidationData
+    FlightValidationData,
+    LiveFlightStatusResponse,
+    ServiceEligibilityRequest,
+    ServiceEligibilityResponse,
+    PrivateCharterRequest,
+    PrivateCharterResponse
 )
 from app.services.flight_duration_resolver import FlightDurationResolver
+from app.services.flight_service import FlightService
+from app.services.flight_cache import FlightCache
 
-router = APIRouter(prefix="/api/flight", tags=["Flight Services"])
+router = APIRouter(prefix="/api/flight", tags=["Flight Intelligence & Airport Operations"])
 
 @router.post("/duration", response_model=FlightDurationResponse)
 async def resolve_flight_duration(payload: FlightDurationRequest):
@@ -64,3 +75,44 @@ async def validate_flight_eligibility(payload: FlightValidationRequest):
             success=False,
             error=f"Flight validation failed: {str(e)}"
         )
+
+@router.get("/track/{flight_number}", response_model=LiveFlightStatusResponse)
+async def track_live_flight(
+    flight_number: str,
+    db: Session = Depends(get_db)
+):
+    try:
+        status_data = await FlightService.get_live_flight_status(flight_number, db=db)
+        return LiveFlightStatusResponse(success=True, data=status_data)
+    except Exception as e:
+        return LiveFlightStatusResponse(success=False, error=f"Live flight tracking failed: {str(e)}")
+
+@router.get("/airports/{airport_code}")
+async def get_airport_operations(airport_code: str):
+    code_up = airport_code.upper()
+    return {
+        "success": True,
+        "data": {
+            "airportCode": code_up,
+            "name": f"{code_up} International Airport",
+            "operatingHours": "24/7",
+            "terminals": ["T1", "T2", "T3"],
+            "supportedServices": ["MEET_AND_ASSIST", "VIP_LOUNGE", "FAST_TRACK", "BUGGY", "WHEELCHAIR", "PORTER"],
+            "fboTerminal": "Shafsky Executive Terminal"
+        }
+    }
+
+@router.post("/eligibility", response_model=ServiceEligibilityResponse)
+async def check_service_eligibility(payload: ServiceEligibilityRequest):
+    data = FlightService.determine_service_eligibility(payload)
+    return ServiceEligibilityResponse(success=True, data=data)
+
+@router.post("/charter/validate", response_model=PrivateCharterResponse)
+async def validate_private_charter(payload: PrivateCharterRequest):
+    data = FlightService.validate_private_charter(payload)
+    return PrivateCharterResponse(success=True, data=data)
+
+@router.post("/refresh-cache")
+async def refresh_flight_cache():
+    removed = FlightCache.clear_expired()
+    return {"success": True, "message": f"Expired flight cache records cleared ({removed} keys evicted)."}

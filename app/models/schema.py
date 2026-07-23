@@ -231,3 +231,28 @@ class CustomerInteraction(Base):
     details: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     actor_email: Mapped[str] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, default=lambda: datetime.now(timezone.utc))
+
+class FlightStatusRecord(Base):
+    __tablename__ = "flight_status_records"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    flight_number: Mapped[str] = mapped_column(String, index=True, nullable=False)
+    airline_code: Mapped[str] = mapped_column(String, nullable=True)
+    origin_code: Mapped[str] = mapped_column(String, index=True, nullable=False)
+    dest_code: Mapped[str] = mapped_column(String, index=True, nullable=False)
+    status: Mapped[str] = mapped_column(String, default="SCHEDULED", nullable=False)
+    departure_gate: Mapped[str] = mapped_column(String, nullable=True)
+    arrival_gate: Mapped[str] = mapped_column(String, nullable=True)
+    departure_terminal: Mapped[str] = mapped_column(String, nullable=True)
+    arrival_terminal: Mapped[str] = mapped_column(String, nullable=True)
+    baggage_belt: Mapped[str] = mapped_column(String, nullable=True)
+    checkin_counter: Mapped[str] = mapped_column(String, nullable=True)
+    scheduled_departure: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    estimated_departure: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    actual_departure: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    scheduled_arrival: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    estimated_arrival: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    actual_arrival: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    raw_details: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
