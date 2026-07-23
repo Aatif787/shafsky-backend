@@ -21,7 +21,26 @@ from app.services.flight_duration_resolver import FlightDurationResolver
 from app.services.flight_service import FlightService
 from app.services.flight_cache import FlightCache
 
+from app.integrations.aerodatabox.service import AeroDataBoxService
+from app.integrations.aerodatabox.schemas import FlightValidateRequest, FlightValidateResponse, FlightValidateResponseData
+from app.integrations.aerodatabox.exceptions import AeroDataBoxException
+
 router = APIRouter(prefix="/api/flight", tags=["Flight Intelligence & Airport Operations"])
+flights_router = APIRouter(prefix="/api/flights", tags=["Flight Intelligence & Airport Operations"])
+
+@flights_router.post("/validate", response_model=FlightValidateResponse)
+@router.post("/validate-aerodatabox", response_model=FlightValidateResponse)
+async def validate_aerodatabox_flight(payload: FlightValidateRequest):
+    try:
+        data = await AeroDataBoxService.validate_and_fetch_flight(payload.flightNumber, payload.date)
+        return FlightValidateResponse(
+            success=True,
+            data=FlightValidateResponseData(**data)
+        )
+    except AeroDataBoxException as ae:
+        raise HTTPException(status_code=ae.status_code, detail={"code": ae.code, "message": ae.message})
+    except Exception as e:
+        raise HTTPException(status_code=503, detail={"code": "FLIGHT_PROVIDER_UNAVAILABLE", "message": str(e)})
 
 @router.post("/duration", response_model=FlightDurationResponse)
 async def resolve_flight_duration(payload: FlightDurationRequest):

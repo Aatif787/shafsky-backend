@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     AMADEUS_CLIENT_ID: str = os.getenv("AMADEUS_CLIENT_ID", "")
     AMADEUS_CLIENT_SECRET: str = os.getenv("AMADEUS_CLIENT_SECRET", "")
     AERODATABOX_API_KEY: str = os.getenv("AERODATABOX_API_KEY", "")
+    RAPIDAPI_KEY: str = os.getenv("RAPIDAPI_KEY", os.getenv("AERODATABOX_API_KEY", ""))
+    RAPIDAPI_HOST: str = os.getenv("RAPIDAPI_HOST", "aerodatabox.p.rapidapi.com")
+    AERODATABOX_BASE_URL: str = os.getenv("AERODATABOX_BASE_URL", "https://aerodatabox.p.rapidapi.com")
     AVIATIONSTACK_API_KEY: str = os.getenv("AVIATIONSTACK_API_KEY", "")
 
     class Config:

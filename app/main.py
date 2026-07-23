@@ -43,6 +43,7 @@ from app.disaster_recovery import dr_router
 # Include Routers
 app.include_router(auth_router.router)
 app.include_router(flight_router.router)
+app.include_router(flight_router.flights_router)
 app.include_router(admin_router.router)
 app.include_router(booking_router.router)
 app.include_router(notification_router.router)

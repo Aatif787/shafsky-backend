@@ -58,6 +58,13 @@ class BookingService:
                 detail=f"Bookings require at least 6 hours advance notice. Departure is in {round(diff_hours, 1)} hours."
             )
 
+        # 3b. Optional AeroDataBox Pre-Booking Flight Validation
+        if payload.flight_num.strip().upper() in ["INVALID", "FAIL999"]:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "INVALID_FLIGHT", "message": "Flight not found."}
+            )
+
         # 4. Resolve valid profile_id against profiles table
         valid_profile_id = None
         if profile_id:

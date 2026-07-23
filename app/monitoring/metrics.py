@@ -36,6 +36,37 @@ class PrometheusMetricsCollector:
         with cls._lock:
             cls._flight_api_calls_total += 1
 
+    _flight_api_requests_total = 0
+    _flight_api_failures_total = 0
+    _flight_cache_hits_total = 0
+    _flight_cache_misses_total = 0
+    _flight_api_latency_sum = 0.0
+
+    @classmethod
+    def record_flight_api_request(cls):
+        with cls._lock:
+            cls._flight_api_requests_total += 1
+
+    @classmethod
+    def record_flight_api_failure(cls):
+        with cls._lock:
+            cls._flight_api_failures_total += 1
+
+    @classmethod
+    def record_flight_cache_hit(cls):
+        with cls._lock:
+            cls._flight_cache_hits_total += 1
+
+    @classmethod
+    def record_flight_cache_miss(cls):
+        with cls._lock:
+            cls._flight_cache_misses_total += 1
+
+    @classmethod
+    def record_flight_api_latency(cls, latency_seconds: float):
+        with cls._lock:
+            cls._flight_api_latency_sum += latency_seconds
+
     @classmethod
     def generate_metrics_text(cls) -> str:
         lines = [
@@ -67,5 +98,21 @@ class PrometheusMetricsCollector:
             lines.append("# HELP flight_api_calls_total Total external flight API calls")
             lines.append("# TYPE flight_api_calls_total counter")
             lines.append(f'flight_api_calls_total {cls._flight_api_calls_total}')
+
+            lines.append("# HELP flight_api_requests_total Total AeroDataBox requests")
+            lines.append("# TYPE flight_api_requests_total counter")
+            lines.append(f'flight_api_requests_total {cls._flight_api_requests_total}')
+
+            lines.append("# HELP flight_api_failures_total Total AeroDataBox failures")
+            lines.append("# TYPE flight_api_failures_total counter")
+            lines.append(f'flight_api_failures_total {cls._flight_api_failures_total}')
+
+            lines.append("# HELP flight_cache_hits_total Total flight cache hits")
+            lines.append("# TYPE flight_cache_hits_total counter")
+            lines.append(f'flight_cache_hits_total {cls._flight_cache_hits_total}')
+
+            lines.append("# HELP flight_cache_misses_total Total flight cache misses")
+            lines.append("# TYPE flight_cache_misses_total counter")
+            lines.append(f'flight_cache_misses_total {cls._flight_cache_misses_total}')
 
         return "\n".join(lines) + "\n"
