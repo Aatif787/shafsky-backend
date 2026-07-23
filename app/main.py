@@ -37,6 +37,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from app.routers import auth_router, flight_router, admin_router, booking_router, notification_router, crm_router
+from app.disaster_recovery import dr_router
+
 # Include Routers
 app.include_router(auth_router.router)
 app.include_router(flight_router.router)
@@ -44,6 +47,7 @@ app.include_router(admin_router.router)
 app.include_router(booking_router.router)
 app.include_router(notification_router.router)
 app.include_router(crm_router.router)
+app.include_router(dr_router.router)
 
 # Production Observability & Health Routes
 @app.get("/health", tags=["Observability & Health"])

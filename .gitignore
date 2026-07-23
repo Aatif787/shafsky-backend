@@ -17,3 +17,4 @@ ENV/
 # Testing & Logs
 .pytest_cache/
 *.log
+backups/
