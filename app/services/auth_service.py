@@ -40,11 +40,7 @@ class AuthService:
 
     @staticmethod
     def decode_access_token(token: str) -> Dict[str, Any]:
-        secret = getattr(settings, "JWT_SECRET", "shafsky-dev-secret-key")
-        try:
-            return jwt.decode(token, secret, algorithms=["HS256"])
-        except Exception:
-            return jwt.decode(token, secret, algorithms=["HS256"])
+        return SecurityJWT.decode_token(token)
 
     @staticmethod
     def decode_refresh_token(token: str) -> Dict[str, Any]:

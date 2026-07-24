@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
+    SUPABASE_URL: str = os.getenv("SUPABASE_URL", "https://azhmlumlxyvczomizhdf.supabase.co")
+    SUPABASE_ANON_KEY: str = os.getenv("SUPABASE_ANON_KEY", "")
+    SUPABASE_SERVICE_ROLE_KEY: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+    SUPABASE_JWT_SECRET: str = os.getenv("SUPABASE_JWT_SECRET", os.getenv("SUPABASE_SECRET_KEY", ""))
+
     AMADEUS_CLIENT_ID: str = os.getenv("AMADEUS_CLIENT_ID", "")
     AMADEUS_CLIENT_SECRET: str = os.getenv("AMADEUS_CLIENT_SECRET", "")
     AERODATABOX_API_KEY: str = os.getenv("AERODATABOX_API_KEY", "")

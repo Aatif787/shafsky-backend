@@ -262,3 +262,282 @@ class FlightStatusRecord(Base):
     raw_details: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class ServicesConfig(Base):
+    __tablename__ = "services_config"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    title: Mapped[str] = mapped_column(String, nullable=False)
+    category: Mapped[str] = mapped_column(String, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=True)
+    base_price: Mapped[float] = mapped_column(Numeric(10, 2), default=0.0)
+    currency: Mapped[str] = mapped_column(String, default="INR")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    features: Mapped[dict] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class Coupon(Base):
+    __tablename__ = "coupons"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    code: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
+    discount_percent: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)
+    max_uses: Mapped[int] = mapped_column(Integer, nullable=True)
+    times_used: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class FeatureFlag(Base):
+    __tablename__ = "feature_flags"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=True)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    rules: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class IpRestriction(Base):
+    __tablename__ = "ip_restrictions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    ip_address: Mapped[str] = mapped_column(String, index=True, nullable=False)
+    type: Mapped[str] = mapped_column(String, default="BLOCK", nullable=False)  # BLOCK | ALLOW
+    reason: Mapped[str] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class SystemSetting(Base):
+    __tablename__ = "system_settings"
+
+    key: Mapped[str] = mapped_column(String, primary_key=True)
+    value: Mapped[dict] = mapped_column(JSON, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class Lounge(Base):
+    __tablename__ = "lounges"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    airport_code: Mapped[str] = mapped_column(String, index=True, nullable=False)
+    terminal: Mapped[str] = mapped_column(String, nullable=True)
+    capacity: Mapped[int] = mapped_column(Integer, default=100)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    amenities: Mapped[dict] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class Passenger(Base):
+    __tablename__ = "passengers"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False)
+    first_name: Mapped[str] = mapped_column(String, nullable=False)
+    last_name: Mapped[str] = mapped_column(String, nullable=False)
+    gender: Mapped[str] = mapped_column(String, default="unspecified")
+    date_of_birth: Mapped[str] = mapped_column(String, nullable=True)
+    nationality: Mapped[str] = mapped_column(String, nullable=True)
+    passport_number: Mapped[str] = mapped_column(String, index=True, nullable=True)
+    passport_expiry: Mapped[str] = mapped_column(String, nullable=True)
+    visa_number: Mapped[str] = mapped_column(String, nullable=True)
+    visa_expiry: Mapped[str] = mapped_column(String, nullable=True)
+    phone: Mapped[str] = mapped_column(String, nullable=True)
+    email: Mapped[str] = mapped_column(String, nullable=True)
+    special_assistance: Mapped[str] = mapped_column(Text, nullable=True)
+    meal_preference: Mapped[str] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class BookingPassenger(Base):
+    __tablename__ = "booking_passengers"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    booking_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("bookings.id", ondelete="CASCADE"), nullable=False)
+    passenger_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("passengers.id", ondelete="CASCADE"), nullable=False)
+    seat_preference: Mapped[str] = mapped_column(String, nullable=True)
+    is_primary_contact: Mapped[bool] = mapped_column(Boolean, default=False)
+    remarks: Mapped[str] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class Payment(Base):
+    __tablename__ = "payments"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    booking_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("bookings.id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="SET NULL"), nullable=True)
+    provider: Mapped[str] = mapped_column(String, nullable=False)  # stripe | razorpay
+    provider_payment_id: Mapped[str] = mapped_column(String, index=True, nullable=True)
+    provider_order_id: Mapped[str] = mapped_column(String, nullable=True)
+    amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String, default="INR", nullable=False)
+    status: Mapped[str] = mapped_column(String, default="completed", nullable=False)  # pending | completed | failed | refunded
+    payment_method: Mapped[str] = mapped_column(String, nullable=True)
+    receipt_number: Mapped[str] = mapped_column(String, nullable=True)
+    transaction_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class ContactMessage(Base):
+    __tablename__ = "contact_messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    email: Mapped[str] = mapped_column(String, index=True, nullable=False)
+    phone: Mapped[str] = mapped_column(String, nullable=True)
+    subject: Mapped[str] = mapped_column(String, nullable=True)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String, default="new", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class BrandingProfile(Base):
+    __tablename__ = "branding_profiles"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    company_name: Mapped[str] = mapped_column(String, nullable=False, default="Shafsky Aviation")
+    tagline: Mapped[str] = mapped_column(String, nullable=True)
+    logo_url: Mapped[str] = mapped_column(String, nullable=True)
+    primary_color: Mapped[str] = mapped_column(String, default="#5ed3ff")
+    secondary_color: Mapped[str] = mapped_column(String, default="#06090f")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    metadata_fields: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class SystemEvent(Base):
+    __tablename__ = "system_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    event_type: Mapped[str] = mapped_column(String, index=True, nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    published_by: Mapped[str] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class UserNotification(Base):
+    __tablename__ = "notifications"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False)
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    title: Mapped[str] = mapped_column(String, nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    link: Mapped[str] = mapped_column(String, nullable=True)
+    read_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class NotificationLog(Base):
+    __tablename__ = "notification_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    booking_id: Mapped[str] = mapped_column(String, nullable=True)
+    booking_ref: Mapped[str] = mapped_column(String, nullable=True)
+    recipient: Mapped[str] = mapped_column(String, nullable=False)
+    channel: Mapped[str] = mapped_column(String, nullable=False)
+    template: Mapped[str] = mapped_column(String, nullable=True)
+    subject: Mapped[str] = mapped_column(String, nullable=True)
+    body: Mapped[str] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String, default="sent", nullable=False)
+    error_message: Mapped[str] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class SupportCase(Base):
+    __tablename__ = "support_cases"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    case_ref: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
+    customer_id: Mapped[str] = mapped_column(String, nullable=True)
+    customer_email: Mapped[str] = mapped_column(String, nullable=False)
+    customer_name: Mapped[str] = mapped_column(String, nullable=False)
+    customer_phone: Mapped[str] = mapped_column(String, nullable=True)
+    booking_id: Mapped[str] = mapped_column(String, nullable=True)
+    case_type: Mapped[str] = mapped_column(String, nullable=False)
+    priority: Mapped[str] = mapped_column(String, default="Low", nullable=False)
+    status: Mapped[str] = mapped_column(String, default="OPEN", nullable=False)
+    assigned_admin_id: Mapped[str] = mapped_column(String, nullable=True)
+    tags: Mapped[dict] = mapped_column(JSON, default=list)
+    labels: Mapped[dict] = mapped_column(JSON, default=list)
+    sla_deadline: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    sla_breached: Mapped[bool] = mapped_column(Boolean, default=False)
+    csat_rating: Mapped[int] = mapped_column(Integer, nullable=True)
+    csat_comment: Mapped[str] = mapped_column(Text, nullable=True)
+    resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    closed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class CaseMessage(Base):
+    __tablename__ = "case_messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    case_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("support_cases.id", ondelete="CASCADE"), nullable=False)
+    sender_id: Mapped[str] = mapped_column(String, nullable=True)
+    sender_role: Mapped[str] = mapped_column(String, default="customer", nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    attachments: Mapped[dict] = mapped_column(JSON, default=list)
+    is_internal: Mapped[bool] = mapped_column(Boolean, default=False)
+    note_category: Mapped[str] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class CaseAuditLog(Base):
+    __tablename__ = "case_audit_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    case_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("support_cases.id", ondelete="CASCADE"), nullable=False)
+    actor_id: Mapped[str] = mapped_column(String, nullable=True)
+    action: Mapped[str] = mapped_column(String, nullable=False)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class SavedReply(Base):
+    __tablename__ = "saved_replies"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    shortcut: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class BookingDocument(Base):
+    __tablename__ = "booking_documents"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    booking_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("bookings.id", ondelete="CASCADE"), nullable=False)
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    storage_path: Mapped[str] = mapped_column(String, nullable=False)
+    amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=True)
+    currency: Mapped[str] = mapped_column(String, default="INR", nullable=False)
+    generated_by: Mapped[str] = mapped_column(String, nullable=True)
+    document_type: Mapped[str] = mapped_column(String, nullable=True)
+    filename: Mapped[str] = mapped_column(String, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    checksum: Mapped[str] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class NotificationPreference(Base):
+    __tablename__ = "notification_preferences"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    email_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    whatsapp_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    in_app_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+

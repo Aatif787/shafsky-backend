@@ -13,6 +13,15 @@ from app.database import get_db
 from sqlalchemy.orm import Session
 from fastapi import Depends, Response
 
+from app.database import engine, Base
+import app.models.schema  # Ensure models are loaded
+
+# Create all missing database tables on startup in Neon PostgreSQL
+try:
+    Base.metadata.create_all(bind=engine)
+except Exception as e:
+    print(f"[Startup Warning] Could not auto-create tables: {e}")
+
 # Validate Secrets on Startup
 validate_secrets_on_startup()
 
@@ -38,6 +47,7 @@ app.add_middleware(
 )
 
 from app.routers import auth_router, flight_router, admin_router, booking_router, notification_router, crm_router
+from app.routers import migration_router
 from app.disaster_recovery import dr_router
 
 # Include Routers
@@ -49,6 +59,7 @@ app.include_router(booking_router.router)
 app.include_router(notification_router.router)
 app.include_router(crm_router.router)
 app.include_router(dr_router.router)
+app.include_router(migration_router.router)  # Supabase→FastAPI migration endpoints
 
 # Production Observability & Health Routes
 @app.get("/health", tags=["Observability & Health"])
