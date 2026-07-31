@@ -1,6 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, Header, Query
+from typing import Optional, Dict, Any
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from typing import Optional, List, Dict, Any
 
 from app.database import get_db
 from app.schemas.crm import (
@@ -11,27 +11,9 @@ from app.schemas.crm import (
     CrmApiResponse
 )
 from app.services.crm_service import CrmService
-from app.services.auth_service import AuthService
+from app.security.dependencies import get_required_staff_or_admin
 
 router = APIRouter(prefix="/api/crm", tags=["Enterprise CRM & Customer Management"])
-
-def get_required_staff_or_admin(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid authorization token.")
-    token = authorization.split(" ")[1]
-    try:
-        decoded = AuthService.decode_access_token(token)
-        allowed_roles = [
-            "SUPER_ADMIN", "ADMIN", "OPERATIONS_MANAGER", "DUTY_OFFICER",
-            "MEET_AND_ASSIST_STAFF", "CONCIERGE_TEAM", "CUSTOMER_SUPPORT"
-        ]
-        if decoded.get("role") not in allowed_roles:
-            raise HTTPException(status_code=403, detail="Access denied. Staff or administrative privileges required.")
-        return decoded
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(status_code=401, detail="Token expired or invalid.")
 
 @router.post("/customers", response_model=CrmApiResponse)
 async def create_customer(
@@ -48,7 +30,7 @@ async def search_customers(
     vip_tier: Optional[str] = Query(None, description="Filter by VIP Tier"),
     limit: int = Query(50, le=500),
     db: Session = Depends(get_db),
-    actor_context: Dict[str, Any] = Depends(get_required_staff_or_admin)
+    _actor_context: Dict[str, Any] = Depends(get_required_staff_or_admin)
 ):
     results = CrmService.search_customers(db, query=query, vip_tier=vip_tier, limit=limit)
     return CrmApiResponse(success=True, data=results)
@@ -57,7 +39,7 @@ async def search_customers(
 async def get_customer_details(
     customer_id: str,
     db: Session = Depends(get_db),
-    actor_context: Dict[str, Any] = Depends(get_required_staff_or_admin)
+    _actor_context: Dict[str, Any] = Depends(get_required_staff_or_admin)
 ):
     details = CrmService.get_customer_details_and_stats(db, customer_id)
     return CrmApiResponse(success=True, data=details)
@@ -85,7 +67,7 @@ async def soft_delete_customer(
 async def get_customer_timeline(
     customer_id: str,
     db: Session = Depends(get_db),
-    actor_context: Dict[str, Any] = Depends(get_required_staff_or_admin)
+    _actor_context: Dict[str, Any] = Depends(get_required_staff_or_admin)
 ):
     timeline = CrmService.get_customer_timeline(db, customer_id)
     return CrmApiResponse(success=True, data=timeline)
@@ -103,7 +85,7 @@ async def create_case(
 async def list_cases(
     status: Optional[str] = Query(None, description="Filter by Case Status"),
     db: Session = Depends(get_db),
-    actor_context: Dict[str, Any] = Depends(get_required_staff_or_admin)
+    _actor_context: Dict[str, Any] = Depends(get_required_staff_or_admin)
 ):
     cases = CrmService.list_cases(db, status=status)
     return CrmApiResponse(success=True, data=cases)
@@ -121,7 +103,7 @@ async def update_case(
 @router.get("/reports/stats", response_model=CrmApiResponse)
 async def get_crm_stats(
     db: Session = Depends(get_db),
-    actor_context: Dict[str, Any] = Depends(get_required_staff_or_admin)
+    _actor_context: Dict[str, Any] = Depends(get_required_staff_or_admin)
 ):
     stats = CrmService.get_crm_stats(db)
     return CrmApiResponse(success=True, data=stats)

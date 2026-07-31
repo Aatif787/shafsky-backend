@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 from enum import Enum as PyEnum
-from sqlalchemy import String, Boolean, DateTime, Enum, ForeignKey, Numeric, JSON, Integer, Text
+from sqlalchemy import String, Boolean, DateTime, Enum, ForeignKey, Numeric, JSON, Integer, Text, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 from app.database import Base
@@ -76,9 +76,14 @@ class UserAuth(Base):
 
 class RefreshToken(Base):
     __tablename__ = "refresh_tokens"
+    __table_args__ = (
+        Index("ix_refresh_tokens_family_revoked", "family_id", "revoked"),
+        Index("ix_refresh_tokens_user_revoked", "user_id", "revoked"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("user_auth.id", ondelete="CASCADE"), nullable=False)
+    family_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True, nullable=True, default=uuid.uuid4)
     token_hash: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
     device_id: Mapped[str] = mapped_column(String, index=True, nullable=True)
     browser: Mapped[str] = mapped_column(String, nullable=True)
@@ -120,7 +125,7 @@ class Booking(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     booking_ref: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
-    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="SET NULL"), nullable=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="SET NULL"), index=True, nullable=True)
     passenger_name: Mapped[str] = mapped_column(String, nullable=False)
     passenger_email: Mapped[str] = mapped_column(String, index=True, nullable=False)
     passenger_phone: Mapped[str] = mapped_column(String, nullable=False)
@@ -134,10 +139,15 @@ class Booking(Base):
     total_amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String, default="INR", nullable=False)
     status: Mapped[BookingStatus] = mapped_column(Enum(BookingStatus), default=BookingStatus.PENDING, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     notes: Mapped[str] = mapped_column(Text, nullable=True)
     deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    __mapper_args__ = {
+        "version_id_col": version
+    }
 
     profile = relationship("Profile", back_populates="bookings")
 
@@ -158,9 +168,9 @@ class StaffAssignment(Base):
     __tablename__ = "staff_assignments"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    booking_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("bookings.id", ondelete="CASCADE"), nullable=False)
+    booking_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("bookings.id", ondelete="CASCADE"), index=True, nullable=False)
     assigned_by_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("user_auth.id", ondelete="SET NULL"), nullable=True)
-    staff_user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("user_auth.id", ondelete="CASCADE"), nullable=False)
+    staff_user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("user_auth.id", ondelete="CASCADE"), index=True, nullable=False)
     role_type: Mapped[str] = mapped_column(String, nullable=False)
     status: Mapped[str] = mapped_column(String, default="ASSIGNED", nullable=False)
     notes: Mapped[str] = mapped_column(Text, nullable=True)
@@ -171,7 +181,7 @@ class ShiftRecord(Base):
     __tablename__ = "shift_records"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    staff_user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("user_auth.id", ondelete="CASCADE"), nullable=False)
+    staff_user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("user_auth.id", ondelete="CASCADE"), index=True, nullable=False)
     shift_name: Mapped[str] = mapped_column(String, nullable=False)
     shift_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
     start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

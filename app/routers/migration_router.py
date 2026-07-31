@@ -16,11 +16,11 @@ from sqlalchemy import select, func, desc, or_, and_
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.security.dependencies import get_required_user
 from app.models.schema import (
     AirportManagement,
     AuditLog,
     Booking,
-    BookingService,
     BookingStatus,
     Profile,
     Role,
@@ -287,19 +287,7 @@ async def update_booking_details(
     booking.updated_at = datetime.now(timezone.utc)
 
     if body.services is not None:
-        db.query(BookingService).filter(BookingService.booking_id == booking.id).delete()
-        for s in body.services:
-            srv = BookingService(
-                id=uuid.uuid4(),
-                booking_id=booking.id,
-                service_code=s.get("service_code", s.get("service_name", "").lower().replace(" ", "_")),
-                service_name=s.get("service_name", "Service"),
-                category=s.get("category", "departure"),
-                quantity=s.get("quantity", 1),
-                unit_price=s.get("unit_price", 0),
-                currency=s.get("currency", "INR"),
-            )
-            db.add(srv)
+        booking.selected_services = body.services
 
     db.commit()
 
@@ -1726,15 +1714,7 @@ async def verify_booking(
     if not b:
         raise HTTPException(404, "Booking not found")
 
-    services = db.scalars(
-        select(BookingService)
-        .where(BookingService.booking_id == b.id)
-    ).all()
-
-    services_data = [
-        {"service_name": s.service_name, "quantity": s.quantity}
-        for s in services
-    ]
+    services_data = b.selected_services or []
 
     return _ApiOk(data={
         "id": str(b.id),
@@ -2355,7 +2335,7 @@ class NotificationPreferencesPayload(BaseModel):
 
 @router.get("/api/notifications/preferences", response_model=_ApiOk)
 async def get_notification_preferences(
-    user: dict = Depends(AuthService.get_current_user),
+    user: dict = Depends(get_required_user),
     db: Session = Depends(get_db),
 ):
     uid = user.get("userId") or user.get("sub")
@@ -2375,7 +2355,7 @@ async def get_notification_preferences(
 @router.post("/api/notifications/preferences", response_model=_ApiOk)
 async def update_notification_preferences(
     body: NotificationPreferencesPayload,
-    user: dict = Depends(AuthService.get_current_user),
+    user: dict = Depends(get_required_user),
     db: Session = Depends(get_db),
 ):
     uid = user.get("userId") or user.get("sub")

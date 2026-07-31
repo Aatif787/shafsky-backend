@@ -1,6 +1,10 @@
+"""
+Authentication Router with Refresh Token Rotation, HttpOnly Cookie Security, and Logout Revocation.
+"""
+
 import os
 import uuid
-from fastapi import APIRouter, HTTPException, Depends, Header, Request
+from fastapi import APIRouter, HTTPException, Depends, Header, Request, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import select, update
 from typing import Optional, List, Dict, Any
@@ -10,13 +14,45 @@ from app.models.schema import UserAuth, Profile, RefreshToken, Role
 from app.schemas.auth import LoginRequest, RefreshTokenRequest, ApiResponse, AuthDataResponse, UserResponse
 from app.services.auth_service import AuthService
 from app.security.device_tracking import DeviceTracking
+from app.config import settings
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication & Session Security"])
+
+
+def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
+    """Sets HttpOnly, Secure, SameSite=Strict cookie for refresh token."""
+    max_age_seconds = int(getattr(settings, "REFRESH_TOKEN_EXPIRE_DAYS", 7)) * 86400
+    response.set_cookie(
+        key="refreshToken",
+        value=refresh_token,
+        httponly=True,
+        secure=True,
+        samesite="strict",
+        max_age=max_age_seconds,
+        path="/api/auth"
+    )
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=True,
+        samesite="strict",
+        max_age=max_age_seconds,
+        path="/api/auth"
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    """Clears HttpOnly refresh token cookies."""
+    response.delete_cookie(key="refreshToken", path="/api/auth")
+    response.delete_cookie(key="refresh_token", path="/api/auth")
+
 
 @router.post("/login", response_model=ApiResponse)
 async def login(
     payload: LoginRequest,
     request: Request,
+    response: Response,
     db: Session = Depends(get_db)
 ):
     email = payload.email.lower().strip()
@@ -63,13 +99,16 @@ async def login(
     access_token = AuthService.create_access_token(user_data)
     raw_refresh = AuthService.create_refresh_token(user_data)
 
-    # Save Hashed Refresh Token in DB
-    AuthService.register_refresh_token(
+    # Save Hashed Refresh Token in DB with a new Token Family
+    token_record = AuthService.register_refresh_token(
         db,
         user_id=user.id,
         raw_token=raw_refresh,
         device_info=device_info
     )
+
+    # Set HttpOnly, Secure, SameSite=Strict security cookie
+    _set_refresh_cookie(response, raw_refresh)
 
     return ApiResponse(
         success=True,
@@ -85,15 +124,31 @@ async def login(
         )
     )
 
+
 @router.post("/refresh", response_model=ApiResponse)
 async def refresh_token(
-    payload: RefreshTokenRequest,
     request: Request,
+    response: Response,
+    payload: Optional[RefreshTokenRequest] = None,
     db: Session = Depends(get_db)
 ):
     device_info = DeviceTracking.get_client_device(request)
+
+    # Extract raw refresh token from payload or HttpOnly cookie
+    raw_refresh_token = None
+    if payload and payload.refreshToken:
+        raw_refresh_token = payload.refreshToken
+    elif request.cookies.get("refreshToken"):
+        raw_refresh_token = request.cookies.get("refreshToken")
+    elif request.cookies.get("refresh_token"):
+        raw_refresh_token = request.cookies.get("refresh_token")
+
+    if not raw_refresh_token:
+        raise HTTPException(status_code=401, detail="Missing or invalid refresh token.")
+
     try:
-        token_data = AuthService.rotate_refresh_token(db, payload.refreshToken, device_info)
+        token_data = AuthService.rotate_refresh_token(db, raw_refresh_token, device_info)
+        _set_refresh_cookie(response, token_data["refreshToken"])
         return ApiResponse(
             success=True,
             data=AuthDataResponse(
@@ -103,6 +158,7 @@ async def refresh_token(
         )
     except ValueError as ve:
         err_code = str(ve)
+        _clear_refresh_cookie(response)
         if err_code == "REPLAY_ATTACK_DETECTED":
             raise HTTPException(status_code=401, detail="Security violation: Token replay attack detected. All sessions revoked.")
         elif err_code == "REFRESH_TOKEN_EXPIRED":
@@ -110,7 +166,31 @@ async def refresh_token(
         else:
             raise HTTPException(status_code=401, detail="Invalid or revoked refresh token.")
     except Exception:
+        _clear_refresh_cookie(response)
         raise HTTPException(status_code=401, detail="Invalid refresh token signature.")
+
+
+@router.post("/logout", response_model=ApiResponse)
+async def logout(
+    request: Request,
+    response: Response,
+    payload: Optional[RefreshTokenRequest] = None,
+    db: Session = Depends(get_db)
+):
+    raw_refresh = None
+    if payload and payload.refreshToken:
+        raw_refresh = payload.refreshToken
+    elif request.cookies.get("refreshToken"):
+        raw_refresh = request.cookies.get("refreshToken")
+    elif request.cookies.get("refresh_token"):
+        raw_refresh = request.cookies.get("refresh_token")
+
+    if raw_refresh:
+        AuthService.revoke_refresh_token(db, raw_refresh)
+
+    _clear_refresh_cookie(response)
+    return ApiResponse(success=True, data={"message": "Successfully logged out and session revoked."})
+
 
 @router.get("/me", response_model=ApiResponse)
 async def get_me(authorization: Optional[str] = Header(None)):
@@ -132,6 +212,7 @@ async def get_me(authorization: Optional[str] = Header(None)):
         )
     except Exception:
         raise HTTPException(status_code=401, detail="Token expired or invalid.")
+
 
 @router.get("/device-sessions", response_model=ApiResponse)
 async def get_active_device_sessions(
@@ -170,6 +251,7 @@ async def get_active_device_sessions(
 
     return ApiResponse(success=True, data=sessions)
 
+
 @router.post("/logout-device/{device_id}", response_model=ApiResponse)
 async def logout_device(
     device_id: str,
@@ -186,6 +268,7 @@ async def logout_device(
         DeviceTracking.revoke_device_session(db, user_id_str, device_id)
 
     return ApiResponse(success=True, data={"message": f"Device session '{device_id}' revoked."})
+
 
 @router.post("/logout-all-devices", response_model=ApiResponse)
 async def logout_all_devices(

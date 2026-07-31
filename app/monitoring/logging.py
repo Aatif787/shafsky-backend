@@ -6,7 +6,7 @@ from typing import Dict, Any
 from app.config import settings
 from app.monitoring.tracing import TracingEngine
 
-SENSITIVE_KEYS = {"password", "password_hash", "accesstoken", "refreshtoken", "authorization", "x-rapidapi-key", "secret", "cvv"}
+SENSITIVE_KEYS = {"password", "password_hash", "accesstoken", "refreshtoken", "authorization", "x-api-key", "secret", "cvv"}
 
 def sanitize_data(data: Any) -> Any:
     if isinstance(data, dict):

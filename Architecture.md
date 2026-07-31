@@ -1,6 +1,6 @@
 # Enterprise Platform Architecture - Shafsky Aviation
 
-This document details the production backend architecture for the **Shafsky Aviation Concierge Platform**.
+This document details the production backend architecture for the **Shafsky Aviation Services Platform**.
 
 ---
 

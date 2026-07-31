@@ -34,6 +34,16 @@ def test_01_authentication_and_hashed_tokens():
     db.close()
 
 def test_02_health_and_observability():
+    # Dedicated Backend Connectivity Endpoint
+    res_api_health = client.get("/api/health", headers={"Origin": "http://localhost:5173"})
+    assert res_api_health.status_code == 200
+    data = res_api_health.json()
+    assert data["status"] == "ok"
+    assert data["backend"] == "connected"
+    assert data["service"] == "Shafsky Aviation Backend"
+    assert "timestamp" in data
+    assert res_api_health.headers.get("access-control-allow-origin") == "http://localhost:5173"
+
     # Health Check
     res_health = client.get("/health")
     assert res_health.status_code == 200

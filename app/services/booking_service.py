@@ -3,11 +3,14 @@ import secrets
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import StaleDataError
 from sqlalchemy import select, or_, desc
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 
 from app.models.schema import Booking, BookingStatus, Profile
 from app.schemas.booking import BookingCreate
+from app.booking.exceptions import ConcurrencyException
 
 class BookingService:
     @staticmethod
@@ -58,13 +61,6 @@ class BookingService:
                 detail=f"Bookings require at least 6 hours advance notice. Departure is in {round(diff_hours, 1)} hours."
             )
 
-        # 3b. Optional AeroDataBox Pre-Booking Flight Validation
-        if payload.flight_num.strip().upper() in ["INVALID", "FAIL999"]:
-            raise HTTPException(
-                status_code=400,
-                detail={"code": "INVALID_FLIGHT", "message": "Flight not found."}
-            )
-
         # 4. Resolve valid profile_id against profiles table
         valid_profile_id = None
         if profile_id:
@@ -79,38 +75,48 @@ class BookingService:
             if profile:
                 valid_profile_id = profile.id
 
-        # 5. Generate unique booking reference
-        booking_ref = cls.generate_booking_ref()
-        while db.scalar(select(Booking).where(Booking.booking_ref == booking_ref)):
+        # 5. Generate unique booking reference with retry on concurrency collision
+        max_attempts = 5
+        for attempt in range(max_attempts):
             booking_ref = cls.generate_booking_ref()
+            while db.scalar(select(Booking).where(Booking.booking_ref == booking_ref)):
+                booking_ref = cls.generate_booking_ref()
 
-        # 6. Create Booking ORM object
-        new_booking = Booking(
-            id=uuid.uuid4(),
-            booking_ref=booking_ref,
-            user_id=valid_profile_id,
-            passenger_name=payload.passenger_name,
-            passenger_email=payload.passenger_email,
-            passenger_phone=payload.passenger_phone,
-            flight_num=payload.flight_num,
-            origin_code=payload.origin_code,
-            dest_code=payload.dest_code,
-            departure_time=dep_time,
-            arrival_time=arr_time,
-            service_type=payload.service_type,
-            selected_services=payload.selected_services,
-            total_amount=payload.total_amount,
-            currency=payload.currency or "INR",
-            status=BookingStatus.PENDING,
-            notes=payload.notes,
-            created_at=now,
-            updated_at=now
-        )
+            new_booking = Booking(
+                id=uuid.uuid4(),
+                booking_ref=booking_ref,
+                user_id=valid_profile_id,
+                passenger_name=payload.passenger_name,
+                passenger_email=payload.passenger_email,
+                passenger_phone=payload.passenger_phone,
+                flight_num=payload.flight_num,
+                origin_code=payload.origin_code,
+                dest_code=payload.dest_code,
+                departure_time=dep_time,
+                arrival_time=arr_time,
+                service_type=payload.service_type,
+                selected_services=payload.selected_services,
+                total_amount=payload.total_amount,
+                currency=payload.currency or "INR",
+                status=BookingStatus.PENDING,
+                version=1,
+                notes=payload.notes,
+                created_at=now,
+                updated_at=now
+            )
 
-        db.add(new_booking)
-        db.commit()
-        db.refresh(new_booking)
-        return new_booking
+            try:
+                db.add(new_booking)
+                db.commit()
+                db.refresh(new_booking)
+                return new_booking
+            except IntegrityError as exc:
+                db.rollback()
+                if attempt == max_attempts - 1:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Failed to generate unique booking reference after multiple attempts. Please try again."
+                    ) from exc
 
     @classmethod
     def get_user_bookings(cls, db: Session, email: str, profile_id: Optional[uuid.UUID] = None) -> List[Booking]:
@@ -139,7 +145,14 @@ class BookingService:
         return booking
 
     @classmethod
-    def cancel_booking(cls, db: Session, identifier: str, requester_email: str, is_admin: bool = False) -> Booking:
+    def cancel_booking(
+        cls,
+        db: Session,
+        identifier: str,
+        requester_email: str,
+        is_admin: bool = False,
+        expected_version: Optional[int] = None
+    ) -> Booking:
         booking = cls.get_booking_by_ref_or_id(db, identifier)
 
         if not is_admin and booking.passenger_email != requester_email:
@@ -148,11 +161,21 @@ class BookingService:
         if booking.status in [BookingStatus.COMPLETED, BookingStatus.CANCELLED]:
             raise HTTPException(status_code=400, detail=f"Booking is already in '{booking.status}' status and cannot be cancelled.")
 
+        if expected_version is not None and booking.version != expected_version:
+            raise ConcurrencyException(
+                detail=f"Concurrency conflict: Booking version mismatch (expected version {expected_version}, but entity is at version {booking.version})."
+            )
+
         booking.status = BookingStatus.CANCELLED
         booking.updated_at = datetime.now(timezone.utc)
-        db.commit()
-        db.refresh(booking)
-        return booking
+
+        try:
+            db.commit()
+            db.refresh(booking)
+            return booking
+        except StaleDataError:
+            db.rollback()
+            raise ConcurrencyException()
 
     @classmethod
     def admin_list_bookings(
@@ -185,7 +208,13 @@ class BookingService:
         return list(db.scalars(stmt).all())
 
     @classmethod
-    def admin_update_status(cls, db: Session, identifier: str, new_status_str: str) -> Booking:
+    def admin_update_status(
+        cls,
+        db: Session,
+        identifier: str,
+        new_status_str: str,
+        expected_version: Optional[int] = None
+    ) -> Booking:
         booking = cls.get_booking_by_ref_or_id(db, identifier)
         
         try:
@@ -197,11 +226,21 @@ class BookingService:
                 detail=f"Invalid status '{new_status_str}'. Must be one of: {valid_statuses}"
             )
 
+        if expected_version is not None and booking.version != expected_version:
+            raise ConcurrencyException(
+                detail=f"Concurrency conflict: Booking version mismatch (expected version {expected_version}, but entity is at version {booking.version})."
+            )
+
         booking.status = new_status
         booking.updated_at = datetime.now(timezone.utc)
-        db.commit()
-        db.refresh(booking)
-        return booking
+
+        try:
+            db.commit()
+            db.refresh(booking)
+            return booking
+        except StaleDataError:
+            db.rollback()
+            raise ConcurrencyException()
 
     @classmethod
     def format_booking_dict(cls, booking: Booking) -> Dict[str, Any]:
@@ -221,6 +260,7 @@ class BookingService:
             "totalAmount": float(booking.total_amount),
             "currency": booking.currency,
             "status": booking.status.value if isinstance(booking.status, BookingStatus) else str(booking.status),
+            "version": getattr(booking, "version", 1),
             "notes": booking.notes,
             "createdAt": booking.created_at.isoformat()
         }

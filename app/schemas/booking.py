@@ -50,6 +50,7 @@ class BookingResponseData(BaseModel):
     totalAmount: float
     currency: str
     status: str
+    version: Optional[int] = 1
     notes: Optional[str] = None
     createdAt: str
 
@@ -60,6 +61,7 @@ class BookingApiResponse(BaseModel):
 
 class BookingStatusUpdate(BaseModel):
     status: str
+    version: Optional[int] = None
 
 class BookingAssign(BaseModel):
     assignedTo: str

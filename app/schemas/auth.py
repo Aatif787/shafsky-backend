@@ -6,7 +6,7 @@ class LoginRequest(BaseModel):
     password: str
 
 class RefreshTokenRequest(BaseModel):
-    refreshToken: str
+    refreshToken: Optional[str] = None
 
 class UserResponse(BaseModel):
     id: str

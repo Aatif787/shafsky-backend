@@ -14,6 +14,9 @@ class Settings(BaseSettings):
 
     JWT_SECRET: str = os.getenv("JWT_SECRET", "shafsky-dev-secret-key-change-in-prod")
     JWT_REFRESH_SECRET: str = os.getenv("JWT_REFRESH_SECRET", "shafsky-dev-refresh-secret-key-change-in-prod")
+    JWT_ALGORITHM: str = os.getenv("JWT_ALGORITHM", "RS256")
+    JWT_PRIVATE_KEY: str = os.getenv("JWT_PRIVATE_KEY", "")
+    JWT_PUBLIC_KEY: str = os.getenv("JWT_PUBLIC_KEY", "")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
@@ -21,14 +24,6 @@ class Settings(BaseSettings):
     SUPABASE_ANON_KEY: str = os.getenv("SUPABASE_ANON_KEY", "")
     SUPABASE_SERVICE_ROLE_KEY: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
     SUPABASE_JWT_SECRET: str = os.getenv("SUPABASE_JWT_SECRET", os.getenv("SUPABASE_SECRET_KEY", ""))
-
-    AMADEUS_CLIENT_ID: str = os.getenv("AMADEUS_CLIENT_ID", "")
-    AMADEUS_CLIENT_SECRET: str = os.getenv("AMADEUS_CLIENT_SECRET", "")
-    AERODATABOX_API_KEY: str = os.getenv("AERODATABOX_API_KEY", "")
-    RAPIDAPI_KEY: str = os.getenv("RAPIDAPI_KEY", os.getenv("AERODATABOX_API_KEY", ""))
-    RAPIDAPI_HOST: str = os.getenv("RAPIDAPI_HOST", "aerodatabox.p.rapidapi.com")
-    AERODATABOX_BASE_URL: str = os.getenv("AERODATABOX_BASE_URL", "https://aerodatabox.p.rapidapi.com")
-    AVIATIONSTACK_API_KEY: str = os.getenv("AVIATIONSTACK_API_KEY", "")
 
     class Config:
         env_file = ".env"

@@ -1,23 +1,48 @@
-import sys
-import os
-import time
+"""
+Runtime verification suite for Shafsky Aviation FastAPI backend endpoints.
+"""
 import json
-from datetime import datetime, timezone, timedelta
+import os
+import sys
+import time
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+# pylint: disable=wrong-import-position,import-error
 from fastapi.testclient import TestClient
-from app.main import app
+from sqlalchemy import select
 from app.database import SessionLocal
-from app.models.schema import RefreshToken, Booking, UserAuth
-from sqlalchemy import select, func
+from app.main import app
+from app.models.schema import Booking, RefreshToken
 
 client = TestClient(app)
 
-def print_separator(title):
+
+def print_separator(title: str) -> None:
+    """Print formatted section separator header."""
     print("\n" + "=" * 80)
     print(f" ENDPOINT RUNTIME VERIFICATION: {title}")
     print("=" * 80)
+
+
+# 0. GET /api/health
+print_separator("GET /api/health")
+start = time.time()
+res = client.get("/api/health", headers={"Origin": "http://localhost:5173"})
+resp_time = round((time.time() - start) * 1000, 2)
+print("1. Request: GET /api/health")
+print(f"2. Status Code: {res.status_code}")
+print(f"3. Response Time: {resp_time} ms")
+print("4. Response Headers (CORS):")
+print(f"   Access-Control-Allow-Origin: {res.headers.get('access-control-allow-origin')}")
+print("5. Response Payload:")
+print(json.dumps(res.json(), indent=2))
+assert res.status_code == 200
+assert res.json()["status"] == "ok"
+assert res.json()["backend"] == "connected"
+assert res.json()["service"] == "Shafsky Aviation Backend"
+assert "timestamp" in res.json()
 
 # 1. GET /health
 print_separator("GET /health")
@@ -100,7 +125,8 @@ print(f"   Stored User ID: {db_token.user_id}")
 print(f"   Stored Token Hash: {db_token.token_hash[:20]}...")
 print(f"   Stored Device ID: {db_token.device_id}")
 print(f"   Stored Browser: {db_token.browser}")
-print(f"   Raw Token Match Check (Should be False for security): {db_token.token_hash == refresh_token_1}")
+raw_token_match = db_token.token_hash == refresh_token_1
+print(f"   Raw Token Match Check (Should be False for security): {raw_token_match}")
 db.close()
 
 # 6. POST /api/auth/refresh
@@ -141,7 +167,11 @@ booking_payload = {
     "notes": "VIP Airport Assist"
 }
 start = time.time()
-res = client.post("/api/bookings", json=booking_payload, headers={"Authorization": f"Bearer {access_token}"})
+res = client.post(
+    "/api/bookings",
+    json=booking_payload,
+    headers={"Authorization": f"Bearer {access_token}"}
+)
 resp_time = round((time.time() - start) * 1000, 2)
 print("1. Request: POST /api/bookings")
 print("   Payload:", json.dumps(booking_payload))
@@ -166,7 +196,10 @@ db.close()
 # 8. GET /api/admin/observability/dashboard
 print_separator("GET /api/admin/observability/dashboard")
 start = time.time()
-res = client.get("/api/admin/observability/dashboard", headers={"Authorization": f"Bearer {access_token}"})
+res = client.get(
+    "/api/admin/observability/dashboard",
+    headers={"Authorization": f"Bearer {access_token}"}
+)
 resp_time = round((time.time() - start) * 1000, 2)
 print("1. Request: GET /api/admin/observability/dashboard")
 print(f"2. Status Code: {res.status_code}")

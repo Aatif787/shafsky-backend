@@ -39,8 +39,7 @@ class HealthCheckSuite:
 
         is_healthy = db_health["status"] == "HEALTHY" and resources["memoryUsagePercent"] < 95.0
 
-        from app.integrations.aerodatabox.service import AeroDataBoxService
-        last_req = AeroDataBoxService.get_last_successful_request()
+
 
         return {
             "status": "UP" if is_healthy else "DEGRADED",
@@ -48,11 +47,6 @@ class HealthCheckSuite:
             "totalCheckLatencyMs": elapsed_ms,
             "subsystems": {
                 "database": db_health,
-                "flightIntelligenceService": {
-                    "status": "HEALTHY",
-                    "provider": "AeroDataBox API (RapidAPI)",
-                    "lastSuccessfulRequest": last_req
-                },
                 "notificationService": {"status": "HEALTHY", "provider": "Resend & Meta Cloud API"},
                 "systemResources": resources
             }
