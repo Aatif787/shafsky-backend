@@ -86,6 +86,8 @@ from app.routers import airport_router
 from app.routers import config_router
 from app.routers import ticketing_router
 from app.routers import payment_router
+from app.ai import router as ai_router
+from app.whatsapp import router as whatsapp_router
 
 # Include Routers
 app.include_router(auth_router.router)
@@ -103,6 +105,8 @@ app.include_router(airport_router.router)
 app.include_router(config_router.router)
 app.include_router(ticketing_router.router)
 app.include_router(payment_router.router)
+app.include_router(ai_router.router)
+app.include_router(whatsapp_router.router)
 
 # Production Observability & Health Routes
 @app.get("/api/health", tags=["Observability & Health"], status_code=200)
