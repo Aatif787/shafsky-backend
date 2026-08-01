@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import engine, Base, get_db
 import app.models.schema  # Ensure models are loaded
+import app.models.shared_domain  # Phase B.5 Shared Domain models
+import app.models.airport  # Phase C.1 Airport Meet & Assist models
 from app.security.middleware import SecurityMiddleware
 from app.security.secrets import validate_secrets_on_startup
 from app.monitoring.middlewares import ObservabilityMiddleware
@@ -23,25 +25,10 @@ from app.routers import (
     admin_router,
     booking_router,
     notification_router,
-    crm_router,
-    migration_router
+    crm_router
 )
 from app.flight import router as clean_flight_router, flights_router as clean_flights_router
 from app.disaster_recovery import dr_router
-
-# Create all missing database tables on startup in Neon PostgreSQL
-try:
-    Base.metadata.create_all(bind=engine)
-    from sqlalchemy import text
-    with engine.connect() as conn:
-        conn.execute(text("ALTER TABLE refresh_tokens ADD COLUMN IF NOT EXISTS family_id UUID;"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_refresh_tokens_family_id ON refresh_tokens (family_id);"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_refresh_tokens_family_revoked ON refresh_tokens (family_id, revoked);"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_refresh_tokens_user_revoked ON refresh_tokens (user_id, revoked);"))
-        conn.execute(text("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS version INTEGER DEFAULT 1;"))
-        conn.commit()
-except Exception as err:
-    print(f"[Startup Warning] Could not auto-create tables or apply schema migrations: {err}")
 
 # Validate Secrets on Startup
 validate_secrets_on_startup()
@@ -92,6 +79,14 @@ async def validation_exception_handler(_request, exc: RequestValidationError):
         content={"success": False, "error": "Validation error in request payload.", "details": exc.errors()}
     )
 
+from app.routers import workflow_router
+from app.routers import shared_domain_router
+from app.routers import workflow_admin_router
+from app.routers import airport_router
+from app.routers import config_router
+from app.routers import ticketing_router
+from app.routers import payment_router
+
 # Include Routers
 app.include_router(auth_router.router)
 app.include_router(clean_flight_router)
@@ -101,7 +96,13 @@ app.include_router(booking_router.router)
 app.include_router(notification_router.router)
 app.include_router(crm_router.router)
 app.include_router(dr_router.router)
-app.include_router(migration_router.router)  # Supabase→FastAPI migration endpoints
+app.include_router(workflow_router.router)
+app.include_router(shared_domain_router.router)
+app.include_router(workflow_admin_router.router)
+app.include_router(airport_router.router)
+app.include_router(config_router.router)
+app.include_router(ticketing_router.router)
+app.include_router(payment_router.router)
 
 # Production Observability & Health Routes
 @app.get("/api/health", tags=["Observability & Health"], status_code=200)

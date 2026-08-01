@@ -17,13 +17,9 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = os.getenv("JWT_ALGORITHM", "RS256")
     JWT_PRIVATE_KEY: str = os.getenv("JWT_PRIVATE_KEY", "")
     JWT_PUBLIC_KEY: str = os.getenv("JWT_PUBLIC_KEY", "")
+    JWT_PREVIOUS_PUBLIC_KEYS: str = os.getenv("JWT_PREVIOUS_PUBLIC_KEYS", "")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
-
-    SUPABASE_URL: str = os.getenv("SUPABASE_URL", "https://azhmlumlxyvczomizhdf.supabase.co")
-    SUPABASE_ANON_KEY: str = os.getenv("SUPABASE_ANON_KEY", "")
-    SUPABASE_SERVICE_ROLE_KEY: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
-    SUPABASE_JWT_SECRET: str = os.getenv("SUPABASE_JWT_SECRET", os.getenv("SUPABASE_SECRET_KEY", ""))
 
     class Config:
         env_file = ".env"

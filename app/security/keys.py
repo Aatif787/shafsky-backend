@@ -1,15 +1,16 @@
 """
-RSA Key Loading Infrastructure for RS256 JWT Token Signing and Verification.
+Centralized Enterprise RSA Key Management Infrastructure for RS256 JWT Signing & Rotation.
 
-Provides loading and caching of RSA Private and Public Keys from environment
-variables, raw PEM strings, base64-encoded strings, or key file paths.
-Generates an ephemeral 2048-bit RSA key pair if explicit keys are not configured.
+Provides loading, caching, fingerprinting (Key ID / kid), and validation of RSA
+Private and Public Keys. Enforces strict production key policies and multi-key
+verification registries for zero-downtime key rotation.
 """
 
 import os
 import base64
+import hashlib
 import logging
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
@@ -19,6 +20,7 @@ logger = logging.getLogger("shafsky.security.keys")
 
 _CACHE_PRIVATE_KEY_PEM: Optional[str] = None
 _CACHE_PUBLIC_KEY_PEM: Optional[str] = None
+_CACHE_PUBLIC_KEY_REGISTRY: Optional[Dict[str, str]] = None
 
 
 def _clean_key_input(key_input: str) -> str:
@@ -35,8 +37,8 @@ def _load_pem_from_source(key_source: str) -> Optional[str]:
     """
     Attempt to load a PEM key string from:
     1. Direct PEM string (starts with -----BEGIN...)
-    2. Base64-encoded string
-    3. Existing file path
+    2. File path
+    3. Base64-encoded string
     """
     if not key_source:
         return None
@@ -54,7 +56,7 @@ def _load_pem_from_source(key_source: str) -> Optional[str]:
                 content = f.read()
                 return _clean_key_input(content)
         except Exception as err:
-            logger.error(f"Failed to read key file from {cleaned}: {err}")
+            logger.error(f"Failed to read key file from '{cleaned}': {err}")
 
     # 3. Base64 decode attempt
     try:
@@ -65,6 +67,18 @@ def _load_pem_from_source(key_source: str) -> Optional[str]:
         pass
 
     return None
+
+
+def compute_key_id(pub_pem: str) -> str:
+    """
+    Computes a deterministic Key ID (kid) hash for an RSA public key PEM string.
+    Returns SHA-256 fingerprint digest prefix.
+    """
+    if not pub_pem:
+        return "kid_unknown"
+    normalized = _clean_key_input(pub_pem).strip()
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+    return f"kid_{digest}"
 
 
 def generate_rsa_key_pair() -> Tuple[str, str]:
@@ -91,7 +105,8 @@ def generate_rsa_key_pair() -> Tuple[str, str]:
 
 def _ensure_rsa_keys() -> Tuple[str, str]:
     """
-    Retrieve or generate cached RSA key pair.
+    Retrieve or initialize cached active RSA key pair.
+    Fails fast in production mode if explicit keys are missing.
     """
     global _CACHE_PRIVATE_KEY_PEM, _CACHE_PUBLIC_KEY_PEM
 
@@ -118,8 +133,18 @@ def _ensure_rsa_keys() -> Tuple[str, str]:
         except Exception as err:
             logger.error(f"Failed to derive public key from private key: {err}")
 
+    env = getattr(settings, "ENVIRONMENT", "development").lower()
+
     if not priv_pem or not pub_pem:
-        env = getattr(settings, "ENVIRONMENT", "development").lower()
+        if env not in ["development", "dev", "test", "testing"]:
+            err_msg = (
+                f"CRITICAL PRODUCTION SECURITY ERROR: RSA Private and Public Keys "
+                f"(JWT_PRIVATE_KEY, JWT_PUBLIC_KEY) are mandatory when ENVIRONMENT is set to '{env}'. "
+                f"Ephemeral auto-generated keys are strictly forbidden in non-development environments."
+            )
+            logger.critical(err_msg)
+            raise ValueError(err_msg)
+
         logger.warning(
             f"JWT RSA keys not configured via environment in '{env}' mode. Generating ephemeral RSA 2048-bit key pair."
         )
@@ -127,6 +152,9 @@ def _ensure_rsa_keys() -> Tuple[str, str]:
 
     _CACHE_PRIVATE_KEY_PEM = priv_pem
     _CACHE_PUBLIC_KEY_PEM = pub_pem
+
+    active_kid = compute_key_id(pub_pem)
+    logger.info(f"Loaded active RSA key pair with Key ID (kid): {active_kid}")
 
     return priv_pem, pub_pem
 
@@ -143,8 +171,40 @@ def get_jwt_public_key() -> str:
     return pub_pem
 
 
+def get_jwt_key_id() -> str:
+    """Returns the Key ID (kid) fingerprint of the active RSA public key."""
+    return compute_key_id(get_jwt_public_key())
+
+
+def get_all_verification_public_keys() -> Dict[str, str]:
+    """
+    Returns a dictionary mapping Key IDs (kid) to RSA Public Key PEM strings.
+    Includes the active public key and any rotated previous public keys
+    configured in JWT_PREVIOUS_PUBLIC_KEYS for seamless zero-downtime key rotation.
+    """
+    global _CACHE_PUBLIC_KEY_REGISTRY
+
+    active_pub = get_jwt_public_key()
+    active_kid = compute_key_id(active_pub)
+
+    registry = {active_kid: active_pub}
+
+    raw_prev = getattr(settings, "JWT_PREVIOUS_PUBLIC_KEYS", "")
+    if raw_prev and raw_prev.strip():
+        candidates = [c.strip() for c in raw_prev.replace("|", ",").split(",") if c.strip()]
+        for candidate in candidates:
+            prev_pem = _load_pem_from_source(candidate)
+            if prev_pem:
+                pkid = compute_key_id(prev_pem)
+                registry[pkid] = prev_pem
+
+    _CACHE_PUBLIC_KEY_REGISTRY = registry
+    return registry
+
+
 def reset_key_cache() -> None:
-    """Reset cached keys (primarily for unit test isolation)."""
-    global _CACHE_PRIVATE_KEY_PEM, _CACHE_PUBLIC_KEY_PEM
+    """Reset cached keys and key registry (primarily for unit test isolation)."""
+    global _CACHE_PRIVATE_KEY_PEM, _CACHE_PUBLIC_KEY_PEM, _CACHE_PUBLIC_KEY_REGISTRY
     _CACHE_PRIVATE_KEY_PEM = None
     _CACHE_PUBLIC_KEY_PEM = None
+    _CACHE_PUBLIC_KEY_REGISTRY = None

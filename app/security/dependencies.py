@@ -48,3 +48,16 @@ def get_required_staff_or_admin(authorization: Optional[str] = Header(None)) -> 
     if user.get("role") not in STAFF_OR_ADMIN_ROLES:
         raise HTTPException(status_code=403, detail="Access denied. Staff or administrative privileges required.")
     return user
+
+# Aliases and Helpers for Workflow and Endpoint Authorization
+get_current_user_auth = get_optional_user
+
+def require_role(allowed_roles: list):
+    def role_checker(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        user = get_required_user(authorization)
+        user_role = user.get("role")
+        roles_str = [r.value if hasattr(r, "value") else str(r) for r in allowed_roles]
+        if user_role not in roles_str and user_role not in ["ADMIN", "SUPER_ADMIN"]:
+            raise HTTPException(status_code=403, detail=f"Access denied. Required roles: {roles_str}")
+        return user
+    return role_checker

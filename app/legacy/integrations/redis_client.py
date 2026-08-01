@@ -1,4 +1,8 @@
 """
+[DEPRECATED / ARCHIVED] Legacy integration module: redis_client.py
+Superseded by app.core.redis and app.services.idempotency_service.
+"""
+"""
 Redis Integration and Connection Client with Fallback Resilience.
 
 Provides singleton connection pool management to Redis server using app settings.

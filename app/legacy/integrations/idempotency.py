@@ -1,4 +1,8 @@
 """
+[DEPRECATED / ARCHIVED] Legacy integration module: idempotency.py
+Superseded by app.core.redis and app.services.idempotency_service.
+"""
+"""
 Idempotency and Distributed Locking Manager with In-Memory Fallback.
 
 Key Naming Strategy:

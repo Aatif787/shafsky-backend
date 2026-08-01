@@ -551,3 +551,67 @@ class NotificationPreference(Base):
     in_app_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
+
+class WorkflowDefinition(Base):
+    __tablename__ = "workflow_definitions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    service_type: Mapped[str] = mapped_column(String, index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    initial_state: Mapped[str] = mapped_column(String, nullable=False)
+    states_config: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class WorkflowInstance(Base):
+    __tablename__ = "workflow_instances"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workflow_definition_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("workflow_definitions.id", ondelete="CASCADE"), nullable=False)
+    service_type: Mapped[str] = mapped_column(String, index=True, nullable=False)
+    entity_id: Mapped[str] = mapped_column(String, index=True, nullable=False)
+    current_state: Mapped[str] = mapped_column(String, index=True, nullable=False)
+    context_data: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    is_completed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_frozen: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    definition = relationship("WorkflowDefinition")
+    history = relationship("WorkflowHistory", back_populates="instance", cascade="all, delete-orphan")
+    audit_logs = relationship("WorkflowAuditLog", back_populates="instance", cascade="all, delete-orphan")
+
+
+class WorkflowHistory(Base):
+    __tablename__ = "workflow_history"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    instance_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("workflow_instances.id", ondelete="CASCADE"), index=True, nullable=False)
+    from_state: Mapped[str] = mapped_column(String, nullable=False)
+    to_state: Mapped[str] = mapped_column(String, nullable=False)
+    action: Mapped[str] = mapped_column(String, nullable=False)
+    actor_id: Mapped[str] = mapped_column(String, nullable=True)
+    actor_role: Mapped[str] = mapped_column(String, nullable=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    transition_metadata: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    instance = relationship("WorkflowInstance", back_populates="history")
+
+
+class WorkflowAuditLog(Base):
+    __tablename__ = "workflow_audit_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    instance_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("workflow_instances.id", ondelete="CASCADE"), index=True, nullable=False)
+    event_type: Mapped[str] = mapped_column(String, index=True, nullable=False)
+    actor_id: Mapped[str] = mapped_column(String, nullable=True)
+    details: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, default=lambda: datetime.now(timezone.utc))
+
+    instance = relationship("WorkflowInstance", back_populates="audit_logs")
+
+

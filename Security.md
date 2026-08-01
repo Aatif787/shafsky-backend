@@ -51,3 +51,18 @@ The `SecurityMiddleware` enforces the following headers on every response:
 - `Content-Security-Policy`: `default-src 'self'; img-src 'self' data: https:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';`
 
 **Rate Limiting**: Protects sensitive endpoints against brute-force attacks (`10 req/min` on auth login, `200 req/min` on general APIs).
+
+---
+
+## 5. Enterprise RS256 JWT Key Management & Zero-Downtime Rotation
+
+- **Asymmetric RS256 Signing**: Access tokens are signed using a 2048-bit RSA Private Key and verified via the corresponding Public Key.
+- **Key ID (`kid`) Header Inclusion**: Every issued JWT access token embeds a deterministic `kid` header parameter containing the SHA-256 fingerprint hash of the active signing key.
+- **Production Mode Key Enforcement**: Application startup fails fast (`ValueError`) in non-development environments (`ENVIRONMENT=production` / `staging`) if explicit `JWT_PRIVATE_KEY` or `JWT_PUBLIC_KEY` settings are missing. Ephemeral key auto-generation is permitted **ONLY** in `ENVIRONMENT=development`.
+- **Zero-Downtime Key Rotation Policy**:
+  1. Generate a new RSA 2048-bit key pair (`JWT_PRIVATE_KEY_NEW`, `JWT_PUBLIC_KEY_NEW`).
+  2. Set `JWT_PRIVATE_KEY` and `JWT_PUBLIC_KEY` to the new key pair in production configuration.
+  3. Move the previous public key to `JWT_PREVIOUS_PUBLIC_KEYS`.
+  4. The platform verification registry automatically accepts tokens signed by both active and rotated keys, guaranteeing zero user disruption during key rollover.
+- **Sensitive Data Security**: Private keys, PEM content, and secrets are strictly excluded from structured logs and diagnostics. Log outputs display only public Key IDs (`kid`).
+

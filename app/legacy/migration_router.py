@@ -1,10 +1,12 @@
-"""
-Migration Router — Consolidated FastAPI endpoints for the Supabase→FastAPI migration.
-
-100% Production-Ready ORM-backed FastAPI endpoints connected directly to Neon PostgreSQL.
-"""
-
 from __future__ import annotations
+
+"""
+[DEPRECATED / ARCHIVED] Migration Router
+----------------------------------------
+This router was created for temporary endpoints during the Supabase -> Neon PostgreSQL migration phase.
+It has been unmounted from app.main:app and moved to legacy/ for audit archival.
+All domain endpoints are handled by modern dedicated routers (auth_router, admin_router, booking_router, crm_router, etc.).
+"""
 
 import uuid
 from datetime import datetime, timezone, timedelta

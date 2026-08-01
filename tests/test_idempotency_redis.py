@@ -14,8 +14,8 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from app.main import app
-from app.integrations.idempotency import IdempotencyManager, InMemoryIdempotencyStore
-from app.integrations.redis_client import get_redis_client
+from app.services.idempotency_service import IdempotencyService
+from app.core.redis_lock import InMemoryLockStore
 
 client = TestClient(app)
 
@@ -75,9 +75,9 @@ def test_02_concurrent_inflight_request_returns_http_409():
         "currency": "INR"
     }
 
-    # Manually acquire lock (simulating in-flight processing request)
-    acquired = IdempotencyManager.acquire_lock(key, ttl_seconds=30)
-    assert acquired is True
+    # Manually acquire lock using IdempotencyService
+    token = IdempotencyService.acquire_lock(key, ttl_seconds=30)
+    assert token is not None
 
     try:
         # Submit request while lock is held
@@ -86,7 +86,7 @@ def test_02_concurrent_inflight_request_returns_http_409():
         assert "currently being processed" in res.json()["error"].lower()
     finally:
         # Release lock
-        IdempotencyManager.release_lock(key)
+        IdempotencyService.release_lock(key, token)
 
     # Retry after lock release
     res_retry = client.post("/api/bookings", json=payload, headers={"X-Idempotency-Key": key})
@@ -98,16 +98,14 @@ def test_03_redis_fallback_strategy():
     key = f"fallback_key_{uuid.uuid4().hex[:8]}"
 
     # Test lock in memory store directly
-    acq1 = InMemoryIdempotencyStore.acquire_lock(key, ttl_seconds=10)
+    acq1 = InMemoryLockStore.acquire(f"lock:idempotency:{key}", "token1", 10)
     assert acq1 is True
 
-    acq2 = InMemoryIdempotencyStore.acquire_lock(key, ttl_seconds=10)
+    acq2 = InMemoryLockStore.acquire(f"lock:idempotency:{key}", "token2", 10)
     assert acq2 is False
 
-    InMemoryIdempotencyStore.release_lock(key)
-    acq3 = InMemoryIdempotencyStore.acquire_lock(key, ttl_seconds=10)
-    assert acq3 is True
-    InMemoryIdempotencyStore.release_lock(key)
+    rel = InMemoryLockStore.release(f"lock:idempotency:{key}", "token1")
+    assert rel is True
 
 
 def test_04_lock_timeout_and_release():
@@ -115,20 +113,20 @@ def test_04_lock_timeout_and_release():
     key = f"ttl_key_{uuid.uuid4().hex[:8]}"
 
     # Acquire lock with short TTL (1 second)
-    acq1 = InMemoryIdempotencyStore.acquire_lock(key, ttl_seconds=1)
+    acq1 = InMemoryLockStore.acquire(f"lock:idempotency:{key}", "token1", 1)
     assert acq1 is True
 
     # Immediate second acquire should fail
-    acq2 = InMemoryIdempotencyStore.acquire_lock(key, ttl_seconds=1)
+    acq2 = InMemoryLockStore.acquire(f"lock:idempotency:{key}", "token2", 1)
     assert acq2 is False
 
     # Wait for TTL expiration
     time.sleep(1.1)
 
     # Acquire after TTL should succeed
-    acq3 = InMemoryIdempotencyStore.acquire_lock(key, ttl_seconds=1)
+    acq3 = InMemoryLockStore.acquire(f"lock:idempotency:{key}", "token3", 1)
     assert acq3 is True
-    InMemoryIdempotencyStore.release_lock(key)
+    InMemoryLockStore.release(f"lock:idempotency:{key}", "token3")
 
 
 if __name__ == "__main__":

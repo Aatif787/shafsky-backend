@@ -4,6 +4,7 @@ Authentication Router with Refresh Token Rotation, HttpOnly Cookie Security, and
 
 import os
 import uuid
+from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Depends, Header, Request, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import select, update
@@ -11,7 +12,15 @@ from typing import Optional, List, Dict, Any
 
 from app.database import get_db
 from app.models.schema import UserAuth, Profile, RefreshToken, Role
-from app.schemas.auth import LoginRequest, RefreshTokenRequest, ApiResponse, AuthDataResponse, UserResponse
+from app.schemas.auth import (
+    LoginRequest,
+    RefreshTokenRequest,
+    ApiResponse,
+    AuthDataResponse,
+    UserResponse,
+    ProfileUpdateRequest,
+    ProfileResponse,
+)
 from app.services.auth_service import AuthService
 from app.security.device_tracking import DeviceTracking
 from app.config import settings
@@ -285,3 +294,192 @@ async def logout_all_devices(
         DeviceTracking.revoke_all_user_sessions(db, user_id_str)
 
     return ApiResponse(success=True, data={"message": "All device sessions successfully revoked."})
+
+
+@router.get("/profile", response_model=ApiResponse)
+async def get_user_profile(
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing authorization header.")
+
+    token = authorization.split(" ")[1]
+    decoded = AuthService.decode_access_token(token)
+    user_id_str = decoded.get("user_id")
+    email = decoded.get("sub", "")
+
+    try:
+        u_uuid = uuid.UUID(user_id_str) if user_id_str else None
+    except Exception:
+        u_uuid = None
+
+    profile = None
+    if u_uuid:
+        profile = db.scalar(select(Profile).where(Profile.auth_id == u_uuid))
+    if not profile and email:
+        profile = db.scalar(select(Profile).where(Profile.email == email.lower()))
+
+    if not profile:
+        # Fallback profile response constructed from user claims
+        return ApiResponse(
+            success=True,
+            data={
+                "id": user_id_str or str(uuid.uuid4()),
+                "auth_id": user_id_str or "",
+                "email": email,
+                "full_name": email.split("@")[0].title() if email else "User",
+                "role": decoded.get("role", "CUSTOMER"),
+                "phone_number": None,
+                "avatar_url": None,
+                "company": None,
+                "vip_status": False,
+                "vip_tier": "REGULAR",
+                "passport_number": None,
+            }
+        )
+
+    return ApiResponse(
+        success=True,
+        data={
+            "id": str(profile.id),
+            "auth_id": str(profile.auth_id),
+            "email": profile.email,
+            "full_name": profile.full_name or profile.email.split("@")[0].title(),
+            "phone_number": profile.phone_number,
+            "avatar_url": profile.avatar_url,
+            "role": profile.role.value if hasattr(profile.role, "value") else str(profile.role),
+            "company": profile.company,
+            "vip_status": profile.vip_status,
+            "vip_tier": profile.vip_tier.value if hasattr(profile.vip_tier, "value") else str(profile.vip_tier),
+            "passport_number": profile.passport_number,
+        }
+    )
+
+
+@router.patch("/profile", response_model=ApiResponse)
+async def update_user_profile(
+    payload: ProfileUpdateRequest,
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing authorization header.")
+
+    token = authorization.split(" ")[1]
+    decoded = AuthService.decode_access_token(token)
+    user_id_str = decoded.get("user_id")
+    email = decoded.get("sub", "").lower()
+
+    try:
+        u_uuid = uuid.UUID(user_id_str) if user_id_str else None
+    except Exception:
+        u_uuid = None
+
+    user = None
+    if u_uuid:
+        user = db.scalar(select(UserAuth).where(UserAuth.id == u_uuid))
+    if not user and email:
+        user = db.scalar(select(UserAuth).where(UserAuth.email == email))
+
+    if not user and email:
+        u_id = u_uuid or uuid.uuid4()
+        user = UserAuth(
+            id=u_id,
+            email=email,
+            password_hash="ShafskyUserPasswordHash2026",
+            role=Role.CUSTOMER,
+            is_verified=True,
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        u_uuid = user.id
+
+    profile = None
+    if u_uuid:
+        profile = db.scalar(select(Profile).where(Profile.auth_id == u_uuid))
+    if not profile and email:
+        profile = db.scalar(select(Profile).where(Profile.email == email))
+
+    if not profile and user:
+        # Create profile record if missing
+        profile = Profile(
+            auth_id=user.id,
+            email=user.email,
+            full_name=payload.full_name or user.email.split("@")[0].title(),
+            phone_number=payload.phone_number,
+            avatar_url=payload.avatar_url,
+            company=payload.company,
+            passport_number=payload.passport_number,
+            role=user.role,
+        )
+        db.add(profile)
+    else:
+        if payload.full_name is not None:
+            profile.full_name = payload.full_name
+        if payload.phone_number is not None:
+            profile.phone_number = payload.phone_number
+        if payload.avatar_url is not None:
+            profile.avatar_url = payload.avatar_url
+        if payload.company is not None:
+            profile.company = payload.company
+        if payload.passport_number is not None:
+            profile.passport_number = payload.passport_number
+
+    db.commit()
+    db.refresh(profile)
+
+    return ApiResponse(
+        success=True,
+        data={
+            "id": str(profile.id),
+            "auth_id": str(profile.auth_id),
+            "email": profile.email,
+            "full_name": profile.full_name,
+            "phone_number": profile.phone_number,
+            "avatar_url": profile.avatar_url,
+            "role": profile.role.value if hasattr(profile.role, "value") else str(profile.role),
+            "company": profile.company,
+            "vip_status": profile.vip_status,
+            "vip_tier": profile.vip_tier.value if hasattr(profile.vip_tier, "value") else str(profile.vip_tier),
+            "passport_number": profile.passport_number,
+        }
+    )
+
+
+from app.schemas.auth import ChangePasswordRequest
+
+@router.post("/change-password", response_model=ApiResponse)
+async def change_password(
+    payload: ChangePasswordRequest,
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing authorization header.")
+
+    token = authorization.split(" ")[1]
+    decoded = AuthService.decode_access_token(token)
+    user_id_str = decoded.get("user_id")
+    email = decoded.get("sub", "").lower()
+
+    try:
+        u_uuid = uuid.UUID(user_id_str) if user_id_str else None
+    except Exception:
+        u_uuid = None
+
+    user = None
+    if u_uuid:
+        user = db.scalar(select(UserAuth).where(UserAuth.id == u_uuid))
+    if not user and email:
+        user = db.scalar(select(UserAuth).where(UserAuth.email == email))
+
+    if not user:
+        raise HTTPException(status_code=404, detail="User account not found.")
+
+    user.password_hash = AuthService.hash_password(payload.new_password)
+    user.updated_at = datetime.now(timezone.utc)
+    db.commit()
+
+    return ApiResponse(success=True, data={"message": "Password updated successfully."})
