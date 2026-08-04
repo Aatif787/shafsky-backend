@@ -6,12 +6,12 @@ Provides /api/config/feature-flags, /api/airports/{code}, /api/coupons endpoints
 from typing import Optional, Dict, Any, List
 import uuid
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Body, status
 from sqlalchemy.orm import Session
 from sqlalchemy import select, update, delete
 
 from app.database import get_db
-from app.models.schema import FeatureFlag, AirportManagement, Coupon
+from app.models.schema import FeatureFlag, AirportManagement, Coupon, BrandingProfile
 from app.security.dependencies import get_required_admin, get_required_user
 from app.schemas.admin import AdminApiResponse
 
@@ -198,3 +198,102 @@ async def patch_coupon_status(
         success=True,
         data={"id": str(cp.id), "code": cp.code, "isActive": cp.is_active}
     )
+
+
+# ─── BRANDING ─────────────────────────────────────────────────────────────────
+
+@router.get("/api/branding/active", response_model=AdminApiResponse)
+async def get_active_branding(db: Session = Depends(get_db)):
+    try:
+        bp = db.scalar(select(BrandingProfile).where(BrandingProfile.is_active.is_(True)))
+        if bp:
+            res = {
+                "id": str(bp.id),
+                "company_name": bp.company_name,
+                "company_tagline": bp.tagline,
+                "tagline": bp.tagline,
+                "logo_url": bp.logo_url,
+                "primary_color": bp.primary_color,
+                "secondary_color": bp.secondary_color,
+                "is_active": bp.is_active,
+                **(bp.metadata_fields or {}),
+            }
+            return AdminApiResponse(success=True, data=res)
+    except Exception:
+        pass
+
+    return AdminApiResponse(success=True, data={
+        "company_name": "Shafsky Aviation",
+        "company_tagline": "Premier Aviation & Concierge Services",
+        "tagline": "Premier Aviation & Concierge Services",
+        "primary_color": "#5ed3ff",
+        "secondary_color": "#06090f",
+        "is_active": True,
+    })
+
+
+@router.post("/api/admin/branding", response_model=AdminApiResponse)
+async def upsert_branding(
+    body: Dict[str, Any] = Body(...),
+    db: Session = Depends(get_db),
+    _admin = Depends(get_required_admin)
+):
+    bpid_str = body.get("id")
+    bp = None
+    if bpid_str:
+        try:
+            bpid = uuid.UUID(bpid_str)
+            bp = db.scalar(select(BrandingProfile).where(BrandingProfile.id == bpid))
+        except ValueError:
+            bp = None
+
+    if not bp:
+        bp = db.scalar(select(BrandingProfile).where(BrandingProfile.is_active.is_(True)))
+
+    company_name = body.get("company_name") or "Shafsky Aviation"
+    tagline = body.get("company_tagline") or body.get("tagline") or "Premier Aviation & Concierge Services"
+    logo_url = body.get("logo_url")
+    primary_color = body.get("primary_color") or "#5ed3ff"
+    secondary_color = body.get("secondary_color") or "#06090f"
+
+    metadata_fields = {
+        k: v for k, v in body.items() if k not in [
+            "id", "company_name", "company_tagline", "tagline", "logo_url", "primary_color", "secondary_color", "is_active"
+        ]
+    }
+
+    if bp:
+        bp.company_name = company_name
+        bp.tagline = tagline
+        bp.logo_url = logo_url
+        bp.primary_color = primary_color
+        bp.secondary_color = secondary_color
+        bp.metadata_fields = metadata_fields
+        bp.updated_at = datetime.now(timezone.utc)
+    else:
+        bp = BrandingProfile(
+            company_name=company_name,
+            tagline=tagline,
+            logo_url=logo_url,
+            primary_color=primary_color,
+            secondary_color=secondary_color,
+            is_active=True,
+            metadata_fields=metadata_fields
+        )
+        db.add(bp)
+
+    db.commit()
+    db.refresh(bp)
+
+    res = {
+        "id": str(bp.id),
+        "company_name": bp.company_name,
+        "company_tagline": bp.tagline,
+        "tagline": bp.tagline,
+        "logo_url": bp.logo_url,
+        "primary_color": bp.primary_color,
+        "secondary_color": bp.secondary_color,
+        "is_active": bp.is_active,
+        **(bp.metadata_fields or {}),
+    }
+    return AdminApiResponse(success=True, data=res)

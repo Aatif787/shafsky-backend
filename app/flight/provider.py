@@ -1,12 +1,19 @@
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Optional
 from app.flight.schemas import FlightStatusData, FlightTelemetry
 
 class FlightProvider(ABC):
     """Abstract Base Class defining the interface for all external flight intelligence providers."""
 
     @abstractmethod
-    def validate_flight(self, flight_num: str, date: str) -> FlightStatusData:
+    def validate_flight(
+        self,
+        flight_num: str,
+        date: str,
+        direction: Optional[str] = None,
+        origin_code: Optional[str] = None,
+        destination_code: Optional[str] = None
+    ) -> FlightStatusData:
         """Validate flight status and retrieve metadata."""
         pass
 

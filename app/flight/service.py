@@ -14,9 +14,18 @@ class FlightIntelligenceService:
             raise FlightProviderNotConfiguredException()
         return self._provider
 
-    def validate_flight(self, flight_num: str, date: str) -> FlightStatusData:
+    def validate_flight(
+        self,
+        flight_num: str,
+        date: str,
+        direction: Optional[str] = None,
+        origin_code: Optional[str] = None,
+        destination_code: Optional[str] = None
+    ) -> FlightStatusData:
         """Validate flight existence and return parsed metadata."""
-        return self._get_provider().validate_flight(flight_num, date)
+        return self._get_provider().validate_flight(
+            flight_num, date, direction, origin_code, destination_code
+        )
 
     def get_flight_status(self, flight_num: str) -> FlightStatusData:
         """Retrieve live flight status metrics."""
