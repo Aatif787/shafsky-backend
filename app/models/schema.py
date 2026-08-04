@@ -1,4 +1,5 @@
 import uuid
+from typing import Optional
 from datetime import datetime, timezone
 from enum import Enum as PyEnum
 from sqlalchemy import String, Boolean, DateTime, Enum, ForeignKey, Numeric, JSON, Integer, Text, Index
@@ -129,13 +130,16 @@ class Booking(Base):
     passenger_name: Mapped[str] = mapped_column(String, nullable=False)
     passenger_email: Mapped[str] = mapped_column(String, index=True, nullable=False)
     passenger_phone: Mapped[str] = mapped_column(String, nullable=False)
-    flight_num: Mapped[str] = mapped_column(String, nullable=False)
-    origin_code: Mapped[str] = mapped_column(String, nullable=False)
-    dest_code: Mapped[str] = mapped_column(String, nullable=False)
-    departure_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
-    arrival_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    service_category: Mapped[str] = mapped_column(String, index=True, default="Airport Assistance", nullable=False)
+    flight_num: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    origin_code: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    dest_code: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    departure_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True, nullable=True)
+    arrival_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     service_type: Mapped[str] = mapped_column(String, nullable=False)
-    selected_services: Mapped[dict] = mapped_column(JSON, nullable=False)
+    selected_services: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    service_options: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     total_amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String, default="INR", nullable=False)
     status: Mapped[BookingStatus] = mapped_column(Enum(BookingStatus), default=BookingStatus.PENDING, nullable=False)
@@ -284,8 +288,10 @@ class ServicesConfig(Base):
     base_price: Mapped[float] = mapped_column(Numeric(10, 2), default=0.0)
     currency: Mapped[str] = mapped_column(String, default="INR")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_hidden: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     features: Mapped[dict] = mapped_column(JSON, default=list)
+    options_schema: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 

@@ -1,0 +1,501 @@
+from typing import List, Dict, Any, Optional
+from datetime import datetime, timezone
+from sqlalchemy.orm import Session
+from sqlalchemy import select, or_
+from app.models.schema import ServicesConfig
+
+DEFAULT_SERVICE_CATALOG = [
+    # 1. Airport Assistance
+    {
+        "id": "airport_assistance_meet_greet",
+        "title": "Meet & Greet",
+        "category": "Airport Assistance",
+        "description": "Personalized escort through airport arrival or departure procedures.",
+        "base_price": 4500.0,
+        "currency": "INR",
+        "is_active": True,
+        "is_hidden": False,
+        "sort_order": 1,
+        "features": ["Personal assistant", "Fast-track security", "Baggage help"],
+        "options_schema": {"terminal": "string", "flight_number": "string"}
+    },
+    {
+        "id": "airport_assistance_fast_track",
+        "title": "Fast Track",
+        "category": "Airport Assistance",
+        "description": "Expedited customs, immigration, and security clearance.",
+        "base_price": 3500.0,
+        "currency": "INR",
+        "is_active": True,
+        "is_hidden": False,
+        "sort_order": 2,
+        "features": ["Priority lane access", "Escort service"],
+        "options_schema": {}
+    },
+    {
+        "id": "airport_assistance_lounge_access",
+        "title": "Lounge Access",
+        "category": "Airport Assistance",
+        "description": "VIP lounge access with premium dining, Wi-Fi, and comfort amenities.",
+        "base_price": 2800.0,
+        "currency": "INR",
+        "is_active": True,
+        "is_hidden": False,
+        "sort_order": 3,
+        "features": ["VIP Lounge", "Buffet & Drinks", "High-speed Wi-Fi"],
+        "options_schema": {"lounge_name": "string", "hours": "number"}
+    },
+    {
+        "id": "airport_assistance_baggage_assistance",
+        "title": "Baggage Assistance",
+        "category": "Airport Assistance",
+        "description": "Dedicated porter service to transport luggage from dropoff to check-in or belt to vehicle.",
+        "base_price": 1500.0,
+        "currency": "INR",
+        "is_active": True,
+        "is_hidden": False,
+        "sort_order": 4,
+        "features": ["Dedicated porter", "Heavy luggage support"],
+        "options_schema": {"bag_count": "number"}
+    },
+
+    # 2. Ground Transport
+    {
+        "id": "ground_transport_airport_transfer",
+        "title": "Airport Transfer",
+        "category": "Ground Transport",
+        "description": "Seamless point-to-point transfer between airport and your destination.",
+        "base_price": 2500.0,
+        "currency": "INR",
+        "is_active": True,
+        "is_hidden": False,
+        "sort_order": 10,
+        "features": ["Chauffeur service", "Flight tracking", "Luggage handling"],
+        "options_schema": {"pickup_location": "string", "dropoff_location": "string"}
+    },
+    {
+        "id": "ground_transport_luxury_sedan",
+        "title": "Luxury Sedan",
+        "category": "Ground Transport",
+        "description": "Premium luxury sedan (Mercedes E-Class, BMW 5 Series) with professional chauffeur.",
+        "base_price": 6000.0,
+        "currency": "INR",
+        "is_active": True,
+        "is_hidden": False,
+        "sort_order": 11,
+        "features": ["Mercedes/BMW", "Refreshments", "Executive comfort"],
+        "options_schema": {"vehicle_model": "string"}
+    },
+    {
+        "id": "ground_transport_suv",
+        "title": "SUV",
+        "category": "Ground Transport",
+        "description": "Spacious premium SUV for families or extra luggage capacity.",
+        "base_price": 7500.0,
+        "currency": "INR",
+        "is_active": True,
+        "is_hidden": False,
+        "sort_order": 12,
+        "features": ["Full-size SUV", "Extra legroom", "Ample luggage space"],
+        "options_schema": {"passenger_count": "number"}
+    },
+    {
+        "id": "ground_transport_executive_van",
+        "title": "Executive Van",
+        "category": "Ground Transport",
+        "description": "Luxury multi-seater van ideal for corporate groups or VIP delegations.",
+        "base_price": 12000.0,
+        "currency": "INR",
+        "is_active": True,
+        "is_hidden": False,
+        "sort_order": 13,
+        "features": ["Up to 10 pax", "Luxury interior", "Reclining leather seats"],
+        "options_schema": {"group_size": "number"}
+    },
+
+    # 3. Private Charter
+    {
+        "id": "private_charter_light_jet",
+        "title": "Light Jet",
+        "category": "Private Charter",
+        "description": "Efficient light jet for regional charter travel (4-7 passengers).",
+        "base_price": 250000.0,
+        "currency": "INR",
+        "is_active": True,
+        "is_hidden": False,
+        "sort_order": 20,
+        "features": ["Range: 1500nm", "4-7 Seats", "Private Terminal"],
+        "options_schema": {"origin": "string", "destination": "string", "passengers": "number"}
+    },
+    {
+        "id": "private_charter_midsize_jet",
+        "title": "Midsize Jet",
+        "category": "Private Charter",
+        "description": "Midsize private jet offering enhanced range, cabin height, and seating capacity.",
+        "base_price": 450000.0,
+        "currency": "INR",
+        "is_active": True,
+        "is_hidden": False,
+        "sort_order": 21,
+        "features": ["Stand-up cabin", "8-10 Seats", "Flight Attendant"],
+        "options_schema": {}
+    },
+    {
+        "id": "private_charter_heavy_jet",
+        "title": "Heavy Jet",
+        "category": "Private Charter",
+        "description": "Long-range heavy jet for transcontinental non-stop VIP travel.",
+        "base_price": 850000.0,
+        "currency": "INR",
+        "is_active": True,
+        "is_hidden": False,
+        "sort_order": 22,
+        "features": ["Intercontinental range", "12-16 Seats", "Gourmet Catering"],
+        "options_schema": {}
+    },
+    {
+        "id": "private_charter_turboprop",
+        "title": "Turboprop",
+        "category": "Private Charter",
+        "description": "Cost-effective turboprop for short-distance routes and small airstrips.",
+        "base_price": 180000.0,
+        "currency": "INR",
+        "is_active": True,
+        "is_hidden": False,
+        "sort_order": 23,
+        "features": ["Short runway access", "Economic charter"],
+        "options_schema": {}
+    },
+    {
+        "id": "private_charter_helicopter",
+        "title": "Helicopter",
+        "category": "Private Charter",
+        "description": "Point-to-point helicopter shuttle for rapid city-to-airport or resort transfers.",
+        "base_price": 120000.0,
+        "currency": "INR",
+        "is_active": True,
+        "is_hidden": False,
+        "sort_order": 24,
+        "features": ["Direct helipad transfer", "VIP twin-engine"],
+        "options_schema": {}
+    },
+
+    # 4. Cargo & Logistics
+    {
+        "id": "cargo_logistics_express_air_freight",
+        "title": "Express Air Freight",
+        "category": "Cargo & Logistics",
+        "description": "Priority time-critical air freight transport with end-to-end tracking.",
+        "base_price": 15000.0,
+        "currency": "INR",
+        "is_active": True,
+        "is_hidden": False,
+        "sort_order": 30,
+        "features": ["Next-flight-out", "Door-to-door option", "Real-time GPS"],
+        "options_schema": {"cargo_weight_kg": "number", "dimensions": "string"}
+    },
+    {
+        "id": "cargo_logistics_dangerous_goods",
+        "title": "Dangerous Goods",
+        "category": "Cargo & Logistics",
+        "description": "IATA-compliant transport for hazmat and dangerous goods cargo.",
+        "base_price": 25000.0,
+        "currency": "INR",
+        "is_active": True,
+        "is_hidden": False,
+        "sort_order": 31,
+        "features": ["IATA certified handling", "Specialized packaging"],
+        "options_schema": {"un_number": "string", "hazard_class": "string"}
+    },
+    {
+        "id": "cargo_logistics_temperature_controlled",
+        "title": "Temperature Controlled",
+        "category": "Cargo & Logistics",
+        "description": "Cold-chain air logistics for pharmaceuticals, perishables, and biological samples.",
+        "base_price": 30000.0,
+        "currency": "INR",
+        "is_active": True,
+        "is_hidden": False,
+        "sort_order": 32,
+        "features": ["Cold chain 2°C to 8°C", "Thermal monitoring"],
+        "options_schema": {"temp_range": "string"}
+    },
+    {
+        "id": "cargo_logistics_charter_cargo",
+        "title": "Charter Cargo",
+        "category": "Cargo & Logistics",
+        "description": "Full freighter plane charter for oversized, heavy, or bulk cargo transport.",
+        "base_price": 500000.0,
+        "currency": "INR",
+        "is_active": True,
+        "is_hidden": False,
+        "sort_order": 33,
+        "features": ["Dedicated freighter", "Heavy lift capability"],
+        "options_schema": {}
+    },
+
+    # 5. Medical Assistance
+    {
+        "id": "medical_assistance_air_ambulance",
+        "title": "Air Ambulance",
+        "category": "Medical Assistance",
+        "description": "Fully equipped ICU air ambulance with specialized medical flight crew.",
+        "base_price": 600000.0,
+        "currency": "INR",
+        "is_active": True,
+        "is_hidden": False,
+        "sort_order": 40,
+        "features": ["Airborne ICU", "Doctor & Paramedic", "Bed-to-bed transfer"],
+        "options_schema": {"patient_condition": "string", "origin_hospital": "string", "dest_hospital": "string"}
+    },
+    {
+        "id": "medical_assistance_medical_escort",
+        "title": "Medical Escort",
+        "category": "Medical Assistance",
+        "description": "Qualified flight nurse or doctor escorting patients on commercial flights.",
+        "base_price": 80000.0,
+        "currency": "INR",
+        "is_active": True,
+        "is_hidden": False,
+        "sort_order": 41,
+        "features": ["Commercial flight escort", "Medical monitoring"],
+        "options_schema": {}
+    },
+    {
+        "id": "medical_assistance_stretcher_transport",
+        "title": "Stretcher Transport",
+        "category": "Medical Assistance",
+        "description": "Commercial airliner stretcher installation and logistics for non-ambulatory patients.",
+        "base_price": 150000.0,
+        "currency": "INR",
+        "is_active": True,
+        "is_hidden": False,
+        "sort_order": 42,
+        "features": ["Airliner stretcher clearance", "Privacy screen"],
+        "options_schema": {}
+    },
+    {
+        "id": "medical_assistance_wheelchair_support",
+        "title": "Wheelchair Support",
+        "category": "Medical Assistance",
+        "description": "Airport ramp, aisle chair, and tarmac mobility assistance.",
+        "base_price": 2000.0,
+        "currency": "INR",
+        "is_active": True,
+        "is_hidden": False,
+        "sort_order": 43,
+        "features": ["Ramp & aisle chair", "Dedicated handler"],
+        "options_schema": {}
+    },
+
+    # 6. Travel Support
+    {
+        "id": "travel_support_visa_assistance",
+        "title": "Visa Assistance",
+        "category": "Travel Support",
+        "description": "End-to-end diplomatic, tourist, and business visa processing support.",
+        "base_price": 5000.0,
+        "currency": "INR",
+        "is_active": True,
+        "is_hidden": False,
+        "sort_order": 50,
+        "features": ["Document check", "Fast-track appointment", "Consulate submission"],
+        "options_schema": {"destination_country": "string", "visa_type": "string"}
+    },
+    {
+        "id": "travel_support_travel_insurance",
+        "title": "Travel Insurance",
+        "category": "Travel Support",
+        "description": "Comprehensive international travel insurance covering medical, delay, and luggage loss.",
+        "base_price": 3000.0,
+        "currency": "INR",
+        "is_active": True,
+        "is_hidden": False,
+        "sort_order": 51,
+        "features": ["$500k Medical cover", "Trip cancellation", "Lost baggage"],
+        "options_schema": {"duration_days": "number"}
+    },
+    {
+        "id": "travel_support_hotel_booking",
+        "title": "Hotel Booking",
+        "category": "Travel Support",
+        "description": "VIP luxury 5-star hotel concierge booking with room upgrades and flexible check-in.",
+        "base_price": 10000.0,
+        "currency": "INR",
+        "is_active": True,
+        "is_hidden": False,
+        "sort_order": 52,
+        "features": ["5-Star Partner hotels", "Late checkout", "Complimentary breakfast"],
+        "options_schema": {"hotel_name": "string", "nights": "number"}
+    },
+    {
+        "id": "travel_support_vip_escort",
+        "title": "VIP Escort",
+        "category": "Travel Support",
+        "description": "Private security and personal concierge escort throughout travel itinerary.",
+        "base_price": 20000.0,
+        "currency": "INR",
+        "is_active": True,
+        "is_hidden": False,
+        "sort_order": 53,
+        "features": ["Close protection", "Personal concierge", "Dedicated coordinator"],
+        "options_schema": {}
+    }
+]
+
+class ServiceConfigService:
+    @classmethod
+    def seed_default_catalog(cls, db: Session) -> None:
+        """Seed default service catalog if services_config table is empty or missing entries."""
+        existing_count = db.query(ServicesConfig).count()
+        if existing_count == 0:
+            for item in DEFAULT_SERVICE_CATALOG:
+                sc = ServicesConfig(
+                    id=item["id"],
+                    title=item["title"],
+                    category=item["category"],
+                    description=item["description"],
+                    base_price=item["base_price"],
+                    currency=item["currency"],
+                    is_active=item["is_active"],
+                    is_hidden=item["is_hidden"],
+                    sort_order=item["sort_order"],
+                    features=item["features"],
+                    options_schema=item["options_schema"]
+                )
+                db.add(sc)
+            db.commit()
+        else:
+            # Ensure any new child services exist
+            for item in DEFAULT_SERVICE_CATALOG:
+                sc = db.scalar(select(ServicesConfig).where(ServicesConfig.id == item["id"]))
+                if not sc:
+                    sc = ServicesConfig(
+                        id=item["id"],
+                        title=item["title"],
+                        category=item["category"],
+                        description=item["description"],
+                        base_price=item["base_price"],
+                        currency=item["currency"],
+                        is_active=item["is_active"],
+                        is_hidden=item["is_hidden"],
+                        sort_order=item["sort_order"],
+                        features=item["features"],
+                        options_schema=item["options_schema"]
+                    )
+                    db.add(sc)
+            db.commit()
+
+    @classmethod
+    def get_public_catalog(cls, db: Session) -> List[Dict[str, Any]]:
+        """Return public service catalog (active and not hidden), grouped by category."""
+        cls.seed_default_catalog(db)
+        services = db.scalars(
+            select(ServicesConfig)
+            .where(ServicesConfig.is_active.is_(True))
+            .where(ServicesConfig.is_hidden.is_(False))
+            .order_by(ServicesConfig.sort_order, ServicesConfig.title)
+        ).all()
+
+        categories: Dict[str, List[Dict[str, Any]]] = {}
+        for s in services:
+            cat = s.category
+            if cat not in categories:
+                categories[cat] = []
+            categories[cat].append({
+                "id": s.id,
+                "title": s.title,
+                "category": s.category,
+                "description": s.description,
+                "basePrice": float(s.base_price),
+                "currency": s.currency,
+                "isActive": s.is_active,
+                "isHidden": s.is_hidden,
+                "features": s.features or [],
+                "optionsSchema": s.options_schema or {}
+            })
+
+        result = []
+        for cat_name, child_list in categories.items():
+            result.append({
+                "category": cat_name,
+                "services": child_list
+            })
+        return result
+
+    @classmethod
+    def get_admin_catalog(cls, db: Session) -> List[Dict[str, Any]]:
+        """Return full service catalog for admin configuration."""
+        cls.seed_default_catalog(db)
+        services = db.scalars(
+            select(ServicesConfig)
+            .order_by(ServicesConfig.sort_order, ServicesConfig.category, ServicesConfig.title)
+        ).all()
+
+        return [
+            {
+                "id": s.id,
+                "title": s.title,
+                "category": s.category,
+                "description": s.description,
+                "basePrice": float(s.base_price),
+                "currency": s.currency,
+                "isActive": s.is_active,
+                "isHidden": s.is_hidden,
+                "sortOrder": s.sort_order,
+                "features": s.features or [],
+                "optionsSchema": s.options_schema or {},
+                "createdAt": s.created_at.isoformat() if s.created_at else None,
+                "updatedAt": s.updated_at.isoformat() if s.updated_at else None
+            }
+            for s in services
+        ]
+
+    @classmethod
+    def update_service_config(cls, db: Session, service_id: str, updates: Dict[str, Any]) -> ServicesConfig:
+        """Update service configuration without code changes."""
+        sc = db.scalar(select(ServicesConfig).where(ServicesConfig.id == service_id))
+        if not sc:
+
+            # Allow creating new service config via admin update
+            sc = ServicesConfig(
+                id=service_id,
+                title=updates.get("title", service_id.replace("_", " ").title()),
+                category=updates.get("category", "Airport Assistance"),
+                description=updates.get("description", ""),
+                base_price=updates.get("base_price", updates.get("basePrice", 0.0)),
+                currency=updates.get("currency", "INR"),
+                is_active=updates.get("is_active", updates.get("isActive", True)),
+                is_hidden=updates.get("is_hidden", updates.get("isHidden", False)),
+                sort_order=updates.get("sort_order", updates.get("sortOrder", 0)),
+                features=updates.get("features", []),
+                options_schema=updates.get("options_schema", updates.get("optionsSchema", {}))
+            )
+            db.add(sc)
+        else:
+            if "title" in updates:
+                sc.title = updates["title"]
+            if "category" in updates:
+                sc.category = updates["category"]
+            if "description" in updates:
+                sc.description = updates["description"]
+            if "base_price" in updates or "basePrice" in updates:
+                sc.base_price = float(updates.get("base_price", updates.get("basePrice")))
+            if "currency" in updates:
+                sc.currency = updates["currency"]
+            if "is_active" in updates or "isActive" in updates:
+                sc.is_active = bool(updates.get("is_active", updates.get("isActive")))
+            if "is_hidden" in updates or "isHidden" in updates:
+                sc.is_hidden = bool(updates.get("is_hidden", updates.get("isHidden")))
+            if "sort_order" in updates or "sortOrder" in updates:
+                sc.sort_order = int(updates.get("sort_order", updates.get("sortOrder")))
+            if "features" in updates:
+                sc.features = updates["features"]
+            if "options_schema" in updates or "optionsSchema" in updates:
+                sc.options_schema = updates.get("options_schema", updates.get("optionsSchema"))
+
+            sc.updated_at = datetime.now(timezone.utc)
+
+        db.commit()
+        db.refresh(sc)
+        return sc

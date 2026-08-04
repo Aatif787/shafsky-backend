@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from app.models.schema import Booking, BookingStatus, Profile
 from app.schemas.booking import BookingCreate
 from app.booking.exceptions import ConcurrencyException
+from app.booking.service_validator import ServiceValidator
 
 class BookingService:
     @staticmethod
@@ -27,39 +28,45 @@ class BookingService:
         profile_id: Optional[uuid.UUID] = None
     ) -> Booking:
         now = datetime.now(timezone.utc)
-        
-        # Ensure timezone-aware datetime comparison
+
+        # 1. Dynamic Validation across all service categories
+        service_category = ServiceValidator.validate_booking(payload)
+
+        # 2. Resolve Service Options & Metadata
+        service_options = payload.service_options or payload.options or payload.selected_services or {}
+        selected_services = payload.selected_services or service_options
+        metadata_json = payload.metadata_json or payload.metadata or {}
+
+        # 3. Handle Flight Datetimes if present
         dep_time = payload.departure_time
-        if dep_time.tzinfo is None:
-            dep_time = dep_time.replace(tzinfo=timezone.utc)
-
         arr_time = payload.arrival_time
-        if arr_time.tzinfo is None:
-            arr_time = arr_time.replace(tzinfo=timezone.utc)
 
-        # 1. Arrival after departure check
-        if arr_time <= dep_time:
-            raise HTTPException(
-                status_code=400,
-                detail="Flight arrival time must be after departure time."
-            )
+        if dep_time is not None:
+            if dep_time.tzinfo is None:
+                dep_time = dep_time.replace(tzinfo=timezone.utc)
 
-        # 2. Past flight departure check
-        if dep_time < now:
-            raise HTTPException(
-                status_code=400,
-                detail="This flight has already departed. Past departures cannot be booked."
-            )
+            if arr_time is not None:
+                if arr_time.tzinfo is None:
+                    arr_time = arr_time.replace(tzinfo=timezone.utc)
+                if arr_time <= dep_time:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Flight arrival time must be after departure time."
+                    )
 
-        # 3. 6-Hour Advance Booking Cutoff Rule
-        diff_seconds = (dep_time - now).total_seconds()
-        diff_hours = diff_seconds / 3600.0
+            if dep_time < now:
+                raise HTTPException(
+                    status_code=400,
+                    detail="This flight has already departed. Past departures cannot be booked."
+                )
 
-        if diff_hours < 6.0:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Bookings require at least 6 hours advance notice. Departure is in {round(diff_hours, 1)} hours."
-            )
+            diff_seconds = (dep_time - now).total_seconds()
+            diff_hours = diff_seconds / 3600.0
+            if diff_hours < 6.0:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Bookings require at least 6 hours advance notice. Departure is in {round(diff_hours, 1)} hours."
+                )
 
         # 4. Resolve valid profile_id against profiles table
         valid_profile_id = None
@@ -89,13 +96,16 @@ class BookingService:
                 passenger_name=payload.passenger_name,
                 passenger_email=payload.passenger_email,
                 passenger_phone=payload.passenger_phone,
+                service_category=service_category,
                 flight_num=payload.flight_num,
                 origin_code=payload.origin_code,
                 dest_code=payload.dest_code,
                 departure_time=dep_time,
                 arrival_time=arr_time,
                 service_type=payload.service_type,
-                selected_services=payload.selected_services,
+                selected_services=selected_services,
+                service_options=service_options,
+                metadata_json=metadata_json,
                 total_amount=payload.total_amount,
                 currency=payload.currency or "INR",
                 status=BookingStatus.PENDING,
@@ -250,17 +260,20 @@ class BookingService:
             "passengerName": booking.passenger_name,
             "passengerEmail": booking.passenger_email,
             "passengerPhone": booking.passenger_phone,
+            "serviceCategory": getattr(booking, "service_category", "Airport Assistance"),
+            "serviceType": booking.service_type,
             "flightNum": booking.flight_num,
             "originCode": booking.origin_code,
             "destCode": booking.dest_code,
-            "departureTime": booking.departure_time.isoformat(),
-            "arrivalTime": booking.arrival_time.isoformat(),
-            "serviceType": booking.service_type,
+            "departureTime": booking.departure_time.isoformat() if booking.departure_time else None,
+            "arrivalTime": booking.arrival_time.isoformat() if booking.arrival_time else None,
             "selectedServices": booking.selected_services or {},
+            "serviceOptions": getattr(booking, "service_options", booking.selected_services or {}),
+            "metadataJson": getattr(booking, "metadata_json", {}),
             "totalAmount": float(booking.total_amount),
             "currency": booking.currency,
             "status": booking.status.value if isinstance(booking.status, BookingStatus) else str(booking.status),
             "version": getattr(booking, "version", 1),
             "notes": booking.notes,
-            "createdAt": booking.created_at.isoformat()
+            "createdAt": booking.created_at.isoformat() if booking.created_at else None
         }

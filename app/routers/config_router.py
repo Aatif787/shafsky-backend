@@ -297,3 +297,55 @@ async def upsert_branding(
         **(bp.metadata_fields or {}),
     }
     return AdminApiResponse(success=True, data=res)
+
+
+# ─── SERVICE CATALOG & SERVICE CONFIGURATION ─────────────────────────────────
+
+from app.services.service_config_service import ServiceConfigService
+
+@router.get("/api/services/catalog", response_model=AdminApiResponse)
+@router.get("/api/services/categories", response_model=AdminApiResponse)
+async def get_public_service_catalog(db: Session = Depends(get_db)):
+    catalog = ServiceConfigService.get_public_catalog(db)
+    return AdminApiResponse(success=True, data=catalog)
+
+
+@router.get("/api/admin/services/config", response_model=AdminApiResponse)
+async def get_admin_services_config(
+    db: Session = Depends(get_db),
+    _admin = Depends(get_required_admin)
+):
+    catalog = ServiceConfigService.get_admin_catalog(db)
+    return AdminApiResponse(success=True, data=catalog)
+
+
+@router.patch("/api/admin/services/config/{service_id}", response_model=AdminApiResponse)
+@router.post("/api/admin/services/config", response_model=AdminApiResponse)
+async def patch_admin_service_config(
+    service_id: Optional[str] = None,
+    payload: Dict[str, Any] = Body(...),
+    db: Session = Depends(get_db),
+    _admin = Depends(get_required_admin)
+):
+    target_id = service_id or payload.get("id") or payload.get("serviceId")
+    if not target_id:
+        raise HTTPException(status_code=400, detail="Service ID is required.")
+
+    updated_sc = ServiceConfigService.update_service_config(db, target_id, payload)
+    return AdminApiResponse(
+        success=True,
+        data={
+            "id": updated_sc.id,
+            "title": updated_sc.title,
+            "category": updated_sc.category,
+            "description": updated_sc.description,
+            "basePrice": float(updated_sc.base_price),
+            "currency": updated_sc.currency,
+            "isActive": updated_sc.is_active,
+            "isHidden": updated_sc.is_hidden,
+            "sortOrder": updated_sc.sort_order,
+            "features": updated_sc.features,
+            "optionsSchema": updated_sc.options_schema
+        }
+    )
+
