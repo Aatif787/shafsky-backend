@@ -536,7 +536,7 @@ class AviationEdgeProvider(FlightProvider):
         direction: Optional[str] = None,
         origin_code: Optional[str] = None,
         destination_code: Optional[str] = None,
-        allow_fallback: bool = True
+        allow_fallback: bool = False
     ) -> FlightStatusData:
         """
         Validate flight existence for a given flight number, date, and direction.
@@ -548,7 +548,7 @@ class AviationEdgeProvider(FlightProvider):
         date_clean = validate_date_string(date)
         direction_clean = (direction or "any").strip().lower()
 
-        logger.info(f"[FLIGHT VALIDATION REQUEST] Flight: {flight_clean} | Date: {date_clean} | Direction: {direction_clean} | Provider: {provider_name}")
+        logger.info(f"[FLIGHT VALIDATION REQUEST] Flight: {flight_clean} | Date: {date_clean} | Direction: {direction_clean} | Origin: {origin_code} | Dest: {destination_code} | Provider: {provider_name}")
         
         # Corporate Cache Key: Provider, Flight Number, Travel Date, Direction
         cache_key = f"flight:validate:{provider_name}:{flight_clean}:{date_clean}:{direction_clean}"
@@ -582,24 +582,37 @@ class AviationEdgeProvider(FlightProvider):
             if not results:
                 results = self._make_request("flights", {"flightIata": flight_clean})
         except FlightDomainException as exc:
-            logger.warning(f"[PROVIDER WARNING] Upstream request failed ({exc.message}). Using simulated fallback.")
-            results = []
+            logger.warning(f"[PROVIDER ERROR] Upstream request for {flight_clean} failed ({exc.message}).")
+            raise FlightNotFoundException(flight_num=flight_clean, date=date_clean)
 
-        logger.info(f"[FLIGHT PROVIDER RESPONSE] Provider: {provider_name} | Received {len(results)} item(s) from upstream API")
+        logger.info(f"[FLIGHT PROVIDER RESPONSE] Provider: {provider_name} | Received {len(results)} item(s) from upstream API for {flight_clean}")
 
         if not results:
-            if not allow_fallback:
-                logger.info(f"[PROVIDER RESPONSE] Provider: {provider_name} | Status: 404 No Record Found for {flight_clean} on {date_clean}")
-                raise FlightNotFoundException(flight_num=flight_clean, date=date_clean)
+            logger.info(f"[PROVIDER RESPONSE] Provider: {provider_name} | Status: 404 No Record Found for {flight_clean} on {date_clean}")
+            raise FlightNotFoundException(flight_num=flight_clean, date=date_clean)
 
-            logger.info(f"[PROVIDER RESPONSE] Provider: {provider_name} | Upstream returned no data for {flight_clean} on {date_clean}. Generating simulated fallback flight data.")
-            simulated_status = self._build_simulated_flight(flight_clean, date_clean, origin_code, destination_code)
-            self._set_cached_data(cache_key, simulated_status.model_dump(mode="json"))
-            return simulated_status
+        # Smart Multi-leg Segment Matcher (Never auto-pick wrong route if origin/destination provided)
+        matching_item = None
+        if len(results) > 1:
+            if origin_code:
+                orig_clean = origin_code.strip().upper()
+                for item in results:
+                    dep_code = (item.get("departure", {}).get("iataCode") or item.get("departureIata") or "").upper()
+                    if dep_code == orig_clean:
+                        matching_item = item
+                        break
+            if not matching_item and destination_code:
+                dest_clean = destination_code.strip().upper()
+                for item in results:
+                    arr_code = (item.get("arrival", {}).get("iataCode") or item.get("arrivalIata") or "").upper()
+                    if arr_code == dest_clean:
+                        matching_item = item
+                        break
 
-        flight_status = self._normalize_flight_data(results[0], date_context=date_clean)
+        target_item = matching_item or results[0]
+        flight_status = self._normalize_flight_data(target_item, date_context=date_clean)
         self._set_cached_data(cache_key, flight_status.model_dump(mode="json"))
-        logger.info(f"[RETURNED ROUTE] Flight: {flight_clean} (live) | Final Route: {flight_status.departure.airport} -> {flight_status.arrival.airport} | Status: {flight_status.status}")
+        logger.info(f"[RETURNED ROUTE] Flight: {flight_clean} (verified live) | Final Route: {flight_status.departure.airport} -> {flight_status.arrival.airport} | Status: {flight_status.status}")
         return flight_status
 
     def get_flight_status(self, flight_num: str) -> FlightStatusData:
