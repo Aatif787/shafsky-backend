@@ -15,7 +15,18 @@ from app.models.schema import FeatureFlag, AirportManagement, Coupon, BrandingPr
 from app.security.dependencies import get_required_admin, get_required_user
 from app.schemas.admin import AdminApiResponse
 
+from app.services.service_config_service import ServiceConfigService
+
 router = APIRouter(tags=["System Configuration & Feature Flags"])
+
+# ─── AIRPORT HUB SPECIFIC CONFIGURATION ───────────────────────────────────────
+
+@router.get("/api/config/airports/{code}", response_model=AdminApiResponse)
+@router.get("/api/airports/{code}/config", response_model=AdminApiResponse)
+async def get_airport_hub_configuration(code: str):
+    """Return database & catalog-driven packages, services, and rules for specified airport hub."""
+    config_data = ServiceConfigService.get_airport_configuration(code)
+    return AdminApiResponse(success=True, data=config_data)
 
 # ─── FEATURE FLAGS ─────────────────────────────────────────────────────────────
 

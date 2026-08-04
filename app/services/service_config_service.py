@@ -499,3 +499,183 @@ class ServiceConfigService:
         db.commit()
         db.refresh(sc)
         return sc
+
+    @classmethod
+    def get_airport_configuration(cls, airport_code: str) -> Dict[str, Any]:
+        """Return database & catalog driven configuration for specific airport hub."""
+        code = (airport_code or "DEL").upper().strip()
+
+        AIRPORT_HUB_CONFIGS: Dict[str, Dict[str, Any]] = {
+            "DEL": {
+                "code": "DEL",
+                "name": "Delhi Indira Gandhi International Airport",
+                "country": "India",
+                "city": "New Delhi",
+                "timezone": "Asia/Kolkata",
+                "currency": "INR",
+                "operatingHours": "24/7",
+                "advanceNoticeHours": 6,
+                "packages": [
+                    {
+                        "id": "essential",
+                        "title": "Essential Escort",
+                        "tagline": "Standard terminal guidance & luggage porterage",
+                        "basePrice": 3499.0,
+                        "currency": "INR",
+                        "recommendedBadge": "Best Value",
+                        "features": ["Personal terminal host", "Porter for 2 bags", "Fast-track security line"],
+                        "serviceIds": ["meet_greet", "baggage"]
+                    },
+                    {
+                        "id": "premium",
+                        "title": "Premium VIP Sanctuary",
+                        "tagline": "Full aerobridge greeting, lounge pass & priority immigration",
+                        "basePrice": 6999.0,
+                        "currency": "INR",
+                        "recommendedBadge": "Most Popular",
+                        "features": ["Aerobridge placard greeting", "Dedicated porterage", "Priority immigration lane", "VIP lounge access"],
+                        "serviceIds": ["meet_greet", "fast_track", "lounge", "baggage"]
+                    },
+                    {
+                        "id": "vip",
+                        "title": "VIP Executive Tarmac",
+                        "tagline": "Private luxury tarmac transfer & dedicated diplomat escort",
+                        "basePrice": 12999.0,
+                        "currency": "INR",
+                        "recommendedBadge": "Flagship Luxury",
+                        "features": ["Private luxury tarmac car transfer", "Diplomatic fast-track clearance", "Private lounge suite", "Dedicated host & team"],
+                        "serviceIds": ["meet_greet", "fast_track", "lounge", "buggy", "baggage", "transport"]
+                    }
+                ],
+                "individualServices": [
+                    {"id": "meet_greet", "title": "Meet & Greet Escort", "description": "Aerobridge placard greeting & host escort.", "price": 2499.0, "currency": "INR", "estTime": "30 sec", "icon": "Users", "badge": "Flagship", "isAvailable": True},
+                    {"id": "lounge", "title": "Airport Lounge Pass", "description": "Private lounge suite with hot buffet & showers.", "price": 1999.0, "currency": "INR", "estTime": "1 min", "icon": "Hotel", "badge": "Sanctuary", "isAvailable": True},
+                    {"id": "fast_track", "title": "Fast-Track Clearance", "description": "Diplomatic priority lane passport control.", "price": 1899.0, "currency": "INR", "estTime": "1 min", "icon": "Ticket", "badge": "Express", "isAvailable": True},
+                    {"id": "porter", "title": "Baggage Porter Service", "description": "Dedicated porter for all checked & hand luggage.", "price": 999.0, "currency": "INR", "estTime": "Instant", "icon": "Package", "badge": "Luggage", "isAvailable": True},
+                    {"id": "buggy", "title": "Electric Buggy Transfer", "description": "Airside golf cart transfer between gates.", "price": 1299.0, "currency": "INR", "estTime": "Instant", "icon": "Car", "badge": "Airside", "isAvailable": True},
+                    {"id": "wheelchair", "title": "Wheelchair & Special Assistance", "description": "Dedicated mobility assistance & ramp escort.", "price": 1499.0, "currency": "INR", "estTime": "Instant", "icon": "HeartPulse", "badge": "Care", "isAvailable": True},
+                    {"id": "transport", "title": "Airport Ground Transfer", "description": "Chauffeured sedan or SUV airport pickup.", "price": 2999.0, "currency": "INR", "estTime": "Scheduled", "icon": "Car", "badge": "Transfer", "isAvailable": True}
+                ]
+            },
+            "BOM": {
+                "code": "BOM",
+                "name": "Mumbai Chhatrapati Shivaji Maharaj International Airport",
+                "country": "India",
+                "city": "Mumbai",
+                "timezone": "Asia/Kolkata",
+                "currency": "INR",
+                "operatingHours": "24/7",
+                "advanceNoticeHours": 6,
+                "packages": [
+                    {
+                        "id": "essential",
+                        "title": "Essential Escort",
+                        "tagline": "Terminal host & luggage assistance",
+                        "basePrice": 3499.0,
+                        "currency": "INR",
+                        "recommendedBadge": "Best Value",
+                        "features": ["Personal terminal host", "Porter for 2 bags"],
+                        "serviceIds": ["meet_greet", "baggage"]
+                    },
+                    {
+                        "id": "premium",
+                        "title": "Premium VIP Sanctuary",
+                        "tagline": "Aerobridge welcome, lounge pass & priority fast-track",
+                        "basePrice": 6999.0,
+                        "currency": "INR",
+                        "recommendedBadge": "Most Popular",
+                        "features": ["Aerobridge placard greeting", "Dedicated porterage", "Priority immigration lane", "Adani VIP lounge access"],
+                        "serviceIds": ["meet_greet", "fast_track", "lounge", "baggage"]
+                    }
+                ],
+                "individualServices": [
+                    {"id": "meet_greet", "title": "Meet & Greet Escort", "description": "Aerobridge placard greeting & host escort.", "price": 2499.0, "currency": "INR", "estTime": "30 sec", "icon": "Users", "badge": "Flagship", "isAvailable": True},
+                    {"id": "lounge", "title": "Adani VIP Lounge Pass", "description": "Quiet suite with buffet dining & Wi-Fi.", "price": 1999.0, "currency": "INR", "estTime": "1 min", "icon": "Hotel", "badge": "Sanctuary", "isAvailable": True},
+                    {"id": "fast_track", "title": "Fast-Track Clearance", "description": "Priority lane security & passport control.", "price": 1899.0, "currency": "INR", "estTime": "1 min", "icon": "Ticket", "badge": "Express", "isAvailable": True},
+                    {"id": "porter", "title": "Baggage Porter Service", "description": "Dedicated luggage porter.", "price": 999.0, "currency": "INR", "estTime": "Instant", "icon": "Package", "badge": "Luggage", "isAvailable": True},
+                    {"id": "buggy", "title": "Airside Buggy Ride", "description": "Terminal buggy transport.", "price": 1299.0, "currency": "INR", "estTime": "Instant", "icon": "Car", "badge": "Airside", "isAvailable": True}
+                ]
+            },
+            "DXB": {
+                "code": "DXB",
+                "name": "Dubai International Airport",
+                "country": "United Arab Emirates",
+                "city": "Dubai",
+                "timezone": "Asia/Dubai",
+                "currency": "USD",
+                "operatingHours": "24/7",
+                "advanceNoticeHours": 4,
+                "packages": [
+                    {
+                        "id": "essential",
+                        "title": "Marhaba Essential",
+                        "tagline": "Personal gate escort & fast-track clearance",
+                        "basePrice": 99.0,
+                        "currency": "USD",
+                        "recommendedBadge": "Popular",
+                        "features": ["Aerobridge greeting", "Marhaba fast-track clearance", "Porter for luggage"],
+                        "serviceIds": ["meet_greet", "fast_track", "baggage"]
+                    },
+                    {
+                        "id": "vip",
+                        "title": "Ahlan VIP Suite",
+                        "tagline": "Ahlan VIP lounge suite & dedicated buggy transfer",
+                        "basePrice": 249.0,
+                        "currency": "USD",
+                        "recommendedBadge": "Flagship Luxury",
+                        "features": ["Personal Ahlan ambassador", "Private Ahlan lounge suite", "Buggy transport", "Diplomatic fast-track"],
+                        "serviceIds": ["meet_greet", "fast_track", "lounge", "buggy", "baggage"]
+                    }
+                ],
+                "individualServices": [
+                    {"id": "meet_greet", "title": "Meet & Greet Ahlan", "description": "Gate greeting with personalized sign.", "price": 75.0, "currency": "USD", "estTime": "30 sec", "icon": "Users", "badge": "Flagship", "isAvailable": True},
+                    {"id": "lounge", "title": "Ahlan Lounge Suite", "description": "Luxury Dubai lounge access.", "price": 60.0, "currency": "USD", "estTime": "1 min", "icon": "Hotel", "badge": "Sanctuary", "isAvailable": True},
+                    {"id": "fast_track", "title": "DXB Fast-Track Clearance", "description": "Priority passport control.", "price": 50.0, "currency": "USD", "estTime": "1 min", "icon": "Ticket", "badge": "Express", "isAvailable": True},
+                    {"id": "buggy", "title": "Terminal Buggy Escort", "description": "Electric cart transfer across Terminal 3.", "price": 40.0, "currency": "USD", "estTime": "Instant", "icon": "Car", "badge": "Airside", "isAvailable": True}
+                ]
+            }
+        }
+
+        if code in AIRPORT_HUB_CONFIGS:
+            return AIRPORT_HUB_CONFIGS[code]
+
+        # Default fallback config for any other international airport
+        return {
+            "code": code,
+            "name": f"{code} International Airport",
+            "country": "International",
+            "city": code,
+            "timezone": "UTC",
+            "currency": "INR",
+            "operatingHours": "24/7",
+            "advanceNoticeHours": 6,
+            "packages": [
+                {
+                    "id": "essential",
+                    "title": "Essential Escort",
+                    "tagline": "Personal terminal host & luggage porter",
+                    "basePrice": 3499.0,
+                    "currency": "INR",
+                    "recommendedBadge": "Best Value",
+                    "features": ["Personal terminal host", "Luggage assistance"],
+                    "serviceIds": ["meet_greet", "baggage"]
+                },
+                {
+                    "id": "premium",
+                    "title": "Premium VIP Escort",
+                    "tagline": "Gate welcome, priority clearance & lounge pass",
+                    "basePrice": 6999.0,
+                    "currency": "INR",
+                    "recommendedBadge": "Most Popular",
+                    "features": ["Aerobridge placard greeting", "Dedicated porterage", "Priority clearance", "Lounge access"],
+                    "serviceIds": ["meet_greet", "fast_track", "lounge", "baggage"]
+                }
+            ],
+            "individualServices": [
+                {"id": "meet_greet", "title": "Meet & Greet Escort", "description": "Personal gate welcome & host escort.", "price": 2499.0, "currency": "INR", "estTime": "30 sec", "icon": "Users", "badge": "Flagship", "isAvailable": True},
+                {"id": "lounge", "title": "VIP Lounge Access", "description": "Lounge access with buffet & refreshments.", "price": 1999.0, "currency": "INR", "estTime": "1 min", "icon": "Hotel", "badge": "Sanctuary", "isAvailable": True},
+                {"id": "fast_track", "title": "Fast-Track Clearance", "description": "Priority queue clearance.", "price": 1899.0, "currency": "INR", "estTime": "1 min", "icon": "Ticket", "badge": "Express", "isAvailable": True},
+                {"id": "porter", "title": "Porter Assistance", "description": "Luggage porter service.", "price": 999.0, "currency": "INR", "estTime": "Instant", "icon": "Package", "badge": "Luggage", "isAvailable": True}
+            ]
+        }
+
