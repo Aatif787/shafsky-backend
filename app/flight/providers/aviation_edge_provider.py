@@ -242,20 +242,34 @@ class AviationEdgeProvider(FlightProvider):
             raise last_exception
         raise FlightProviderUnavailableException("Flight intelligence provider is currently unreachable.")
 
-    def _parse_datetime(self, dt_str: Optional[str]) -> Optional[datetime]:
-        """Parse datetime string into timezone-aware datetime object gracefully."""
+    def _parse_datetime(self, dt_str: Optional[str], tz_name: Optional[str] = None) -> Optional[datetime]:
+        """Parse datetime string into timezone-aware datetime object gracefully using airport timezone."""
         if not dt_str:
             return None
         dt_clean = str(dt_str).replace(" ", "T")
         try:
             dt = datetime.fromisoformat(dt_clean)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt
+            if dt.tzinfo is not None:
+                return dt.astimezone(timezone.utc)
+            if tz_name:
+                try:
+                    from zoneinfo import ZoneInfo
+                    local_tz = ZoneInfo(tz_name)
+                    return dt.replace(tzinfo=local_tz).astimezone(timezone.utc)
+                except Exception:
+                    pass
+            return dt.replace(tzinfo=timezone.utc)
         except Exception:
             for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
                 try:
                     dt = datetime.strptime(dt_clean[:19], fmt)
+                    if tz_name:
+                        try:
+                            from zoneinfo import ZoneInfo
+                            local_tz = ZoneInfo(tz_name)
+                            return dt.replace(tzinfo=local_tz).astimezone(timezone.utc)
+                        except Exception:
+                            pass
                     return dt.replace(tzinfo=timezone.utc)
                 except Exception:
                     pass
@@ -410,11 +424,14 @@ class AviationEdgeProvider(FlightProvider):
             timezone=arr_airport_obj.timezone if arr_airport_obj else arr_obj.get("timezone")
         )
 
-        sched_dep = self._parse_datetime(dep_details.scheduled)
-        act_dep = self._parse_datetime(dep_details.actual) or self._parse_datetime(dep_details.estimated) or sched_dep
+        dep_tz = dep_details.timezone or (dep_airport_obj.timezone if dep_airport_obj else None)
+        arr_tz = arr_details.timezone or (arr_airport_obj.timezone if arr_airport_obj else None)
 
-        sched_arr = self._parse_datetime(arr_details.scheduled)
-        act_arr = self._parse_datetime(arr_details.actual) or self._parse_datetime(arr_details.estimated) or sched_arr
+        sched_dep = self._parse_datetime(dep_details.scheduled, dep_tz)
+        act_dep = self._parse_datetime(dep_details.actual, dep_tz) or self._parse_datetime(dep_details.estimated, dep_tz) or sched_dep
+
+        sched_arr = self._parse_datetime(arr_details.scheduled, arr_tz)
+        act_arr = self._parse_datetime(arr_details.actual, arr_tz) or self._parse_datetime(arr_details.estimated, arr_tz) or sched_arr
 
         dur_mins, dur_text = compute_flight_duration(raw, act_dep, act_arr, flight_num or "")
 
