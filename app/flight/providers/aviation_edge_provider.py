@@ -580,6 +580,7 @@ class AviationEdgeProvider(FlightProvider):
                 pass
 
         carrier_code, flight_digits = split_flight_number(flight_clean)
+        padded_digits = flight_digits.zfill(4) if flight_digits.isdigit() else flight_digits
 
         results = []
         try:
@@ -587,17 +588,40 @@ class AviationEdgeProvider(FlightProvider):
             # Tier 1: Routes Endpoint (Master Flight Schedule per Airline IATA + Flight Number)
             results = self._make_request("routes", {"airlineIata": carrier_code, "flightNumber": flight_digits})
 
-            # Tier 2: Timetable Endpoint (Flight IATA)
+            # Tier 2: Routes Endpoint (Flight IATA)
+            if not results:
+                results = self._make_request("routes", {"flightIata": flight_clean})
+
+            # Tier 3: Routes Endpoint (Padded 4-digit Flight Number e.g. 0201 for AI201)
+            if not results and padded_digits != flight_digits:
+                results = self._make_request("routes", {"airlineIata": carrier_code, "flightNumber": padded_digits})
+
+            # Tier 4: Timetable Endpoint (Flight IATA - flight_iata)
             if not results:
                 results = self._make_request("timetable", {"flight_iata": flight_clean})
 
-            # Tier 3: Timetable Endpoint (Origin Airport Departure Timetable)
+            # Tier 5: Timetable Endpoint (Flight IATA - flightIata)
+            if not results:
+                results = self._make_request("timetable", {"flightIata": flight_clean})
+
+            # Tier 6: Timetable Endpoint (Flight Number + Airline IATA)
+            if not results:
+                results = self._make_request("timetable", {"flight_number": flight_digits, "airline_iata": carrier_code})
+
+            # Tier 7: Timetable Endpoint (Padded Flight Number + Airline IATA)
+            if not results and padded_digits != flight_digits:
+                results = self._make_request("timetable", {"flight_number": padded_digits, "airline_iata": carrier_code})
+
+            # Tier 8: Timetable Endpoint (Origin Airport Departure Timetable)
             if not results and origin_code:
                 results = self._make_request("timetable", {"iataCode": origin_code.strip().upper(), "type": "departure", "flight_iata": flight_clean})
 
-            # Tier 4: Live Flight Tracker Endpoint (Active airborne flights)
+            # Tier 9: Live Flight Tracker Endpoint (Active airborne flights)
             if not results:
                 results = self._make_request("flights", {"flightIata": flight_clean})
+
+            if not results and padded_digits != flight_digits:
+                results = self._make_request("flights", {"flightIata": f"{carrier_code}{padded_digits}"})
         except FlightDomainException as exc:
             logger.warning(f"[PROVIDER ERROR] Upstream request for {flight_clean} failed ({exc.message}).")
             raise FlightNotFoundException(flight_num=flight_clean, date=date_clean)
@@ -645,10 +669,17 @@ class AviationEdgeProvider(FlightProvider):
                 pass
 
         carrier_code, flight_digits = split_flight_number(flight_clean)
+        padded_digits = flight_digits.zfill(4) if flight_digits.isdigit() else flight_digits
 
         results = self._make_request("routes", {"airlineIata": carrier_code, "flightNumber": flight_digits})
         if not results:
+            results = self._make_request("routes", {"flightIata": flight_clean})
+        if not results and padded_digits != flight_digits:
+            results = self._make_request("routes", {"airlineIata": carrier_code, "flightNumber": padded_digits})
+        if not results:
             results = self._make_request("timetable", {"flight_iata": flight_clean})
+        if not results:
+            results = self._make_request("timetable", {"flightIata": flight_clean})
         if not results:
             results = self._make_request("flights", {"flightIata": flight_clean})
 
