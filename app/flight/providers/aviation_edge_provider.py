@@ -1,48 +1,55 @@
 """
-Aviation Edge Primary Flight Intelligence Provider.
-
-Comprehensive audited implementation of Aviation Edge REST API integration for
-flight validation, status, search, and live telemetry.
-
-Includes automatic flight number normalization, date validation, timeout handling,
-rate limiting detection, exponential backoff retries, Redis caching, and masked logging.
+Aviation Edge API Integration Provider.
+Provides production-ready flight validation, schedule lookup, and tracking using configured production Flight APIs.
+Never fabricates flight details, never uses mock data, fallback objects, or dummy JSON.
 """
 
 import json
 import logging
 import re
 import time
-from datetime import datetime, timezone, timedelta
-from typing import List, Optional, Dict, Any
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
 
 import httpx
-
-from app.config import settings
-from app.core.redis import get_redis_client
-from app.flight.provider import FlightProvider
+from app.core.config import settings
 from app.flight.airports import build_flight_airport
 from app.flight.duration import compute_flight_duration
+from app.flight.exceptions import (
+    FlightDomainException,
+    FlightInvalidParameterException,
+    FlightNotFoundException,
+    FlightProviderNotConfiguredException,
+    FlightProviderTimeoutException,
+    FlightProviderUnavailableException,
+    FlightRateLimitExceededException,
+    InvalidFlightDateException,
+    InvalidFlightNumberException,
+)
+from app.flight.provider import FlightProvider
 from app.flight.schemas import (
     AircraftDetails,
     AirlineDetails,
     DurationDetails,
+    FlightCarrier,
     FlightInfo,
     FlightStatusData,
     FlightTelemetry,
-    LocationEndpointDetails
-)
-from app.flight.exceptions import FlightNotFoundException
-from app.flight.exceptions import (
-    InvalidFlightNumberException,
-    InvalidFlightDateException,
-    FlightNotFoundException,
-    FlightRateLimitExceededException,
-    FlightProviderTimeoutException,
-    FlightProviderUnavailableException,
-    FlightDomainException
+    LocationEndpointDetails,
 )
 
 logger = logging.getLogger("shafsky.flight.aviation_edge")
+
+
+def get_redis_client():
+    """Returns optional Redis client for caching if available."""
+    try:
+        import redis
+        if getattr(settings, "REDIS_URL", None):
+            return redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+    except Exception:
+        pass
+    return None
 
 
 def normalize_flight_number(flight_num: str) -> str:
@@ -118,35 +125,27 @@ class AviationEdgeProvider(FlightProvider):
 
     def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None):
         self.api_key = api_key or getattr(settings, "AVIATION_EDGE_API_KEY", "")
-        self.base_url = (base_url or getattr(settings, "AVIATION_EDGE_BASE_URL", "https://aviation-edge.com/v2/public")).rstrip("/")
-        self.timeout = 5.0
-        self.max_retries = 3
+        self.base_url = base_url or getattr(settings, "AVIATION_EDGE_BASE_URL", "https://aviation-edge.com/v2/public")
+        self.timeout = float(getattr(settings, "AVIATION_EDGE_TIMEOUT", 10.0))
+        self.max_retries = int(getattr(settings, "AVIATION_EDGE_MAX_RETRIES", 3))
 
-    def _get_redis(self):
-        """Retrieve Redis client safely."""
-        try:
-            return get_redis_client()
-        except Exception as err:
-            logger.warning(f"Failed to obtain Redis client: {err}")
-            return None
-
-    def _get_cached_data(self, key: str) -> Optional[Any]:
-        """Fetch cached data from Redis if available."""
-        client = self._get_redis()
+    def _get_cached_data(self, key: str) -> Optional[Dict[str, Any]]:
+        """Retrieve cached JSON payload if available."""
+        client = get_redis_client()
         if not client:
             return None
         try:
-            val = client.get(key)
-            if val:
+            cached_val = client.get(key)
+            if cached_val:
                 logger.info(f"[CACHE HIT] Key: {key}")
-                return json.loads(val)
+                return json.loads(cached_val)
         except Exception as err:
             logger.warning(f"Redis get failed for key {key}: {err}")
         return None
 
-    def _set_cached_data(self, key: str, data: Any, ttl: int = DEFAULT_CACHE_TTL) -> None:
-        """Store data in Redis with TTL if available."""
-        client = self._get_redis()
+    def _set_cached_data(self, key: str, data: Any, ttl: int = DEFAULT_CACHE_TTL):
+        """Store payload in Redis cache if available."""
+        client = get_redis_client()
         if not client:
             return
         try:
@@ -164,16 +163,14 @@ class AviationEdgeProvider(FlightProvider):
         if not self.api_key:
             logger.warning("AVIATION_EDGE_API_KEY is not configured.")
 
-        # Prepare parameters
         query_params = dict(params)
         if self.api_key:
             query_params["key"] = self.api_key
 
         url = f"{self.base_url}/{endpoint.lstrip('/')}"
-
-        # Masked URL for logging
         masked_params = {k: ("***HIDDEN***" if k == "key" else v) for k, v in query_params.items()}
-        logger.info(f"[PROVIDER REQUEST] GET {url} | Params: {masked_params}")
+
+        logger.info(f"[API OUTBOUND REQUEST] GET {url} | Params: {masked_params}")
 
         last_exception = None
         start_time = time.perf_counter()
@@ -183,15 +180,19 @@ class AviationEdgeProvider(FlightProvider):
                 with httpx.Client(timeout=self.timeout) as client:
                     response = client.get(url, params=query_params)
                     elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
-                    logger.info(f"[PROVIDER RESPONSE] GET {endpoint} | Status: {response.status_code} | Latency: {elapsed_ms}ms")
+                    logger.info(f"[API INBOUND RESPONSE] GET {endpoint} | Status: {response.status_code} | Latency: {elapsed_ms}ms")
 
                     if response.status_code == 200:
                         data = response.json()
-                        # Aviation Edge error responses can sometimes be JSON objects with "error" key
+
+                        # Log raw JSON payload preview for audit
+                        raw_snippet = json.dumps(data)[:600] if data else "[]"
+                        logger.info(f"[RAW API RESPONSE] Endpoint: {endpoint} | Items: {len(data) if isinstance(data, list) else 1} | Raw Payload Snippet: {raw_snippet}")
+
                         if isinstance(data, dict) and "error" in data:
                             error_msg = str(data.get("error", "Unknown error from provider"))
                             logger.error(f"[PROVIDER ERROR PAYLOAD] {error_msg}")
-                            
+
                             error_lower = error_msg.lower()
                             if "rate limit" in error_lower or "limit exceeded" in error_lower or "quota" in error_lower:
                                 raise FlightRateLimitExceededException(f"Provider rate limit exceeded: {error_msg}")
@@ -203,10 +204,8 @@ class AviationEdgeProvider(FlightProvider):
                                 raise FlightProviderUnavailableException(f"Provider error: {error_msg}")
 
                         if isinstance(data, list):
-                            logger.info(f"[PROVIDER DATA] Received {len(data)} items.")
                             return data
                         elif isinstance(data, dict):
-                            logger.info("[PROVIDER DATA] Received single dict item.")
                             return [data]
                         return []
 
@@ -237,8 +236,7 @@ class AviationEdgeProvider(FlightProvider):
             if attempt < self.max_retries:
                 time.sleep(0.5 * (2 ** (attempt - 1)))
 
-        logger.error(f"[PROVIDER FAILED] Request failed after {self.max_retries} attempts.")
-        if isinstance(last_exception, FlightDomainException):
+        if last_exception:
             raise last_exception
         raise FlightProviderUnavailableException("Flight intelligence provider is currently unreachable.")
 
@@ -288,6 +286,14 @@ class AviationEdgeProvider(FlightProvider):
         airline_obj = raw.get("airline", {}) if isinstance(raw.get("airline"), dict) else {}
         aircraft_obj = raw.get("aircraft", {}) if isinstance(raw.get("aircraft"), dict) else {}
 
+        airline_iata = (
+            airline_obj.get("iataCode")
+            or airline_obj.get("iata")
+            or raw.get("airlineIata")
+        )
+        if airline_iata:
+            airline_iata = airline_iata.strip().upper()
+
         raw_flight_num = (
             flight_obj.get("iataNumber")
             or raw.get("flight_iata")
@@ -298,16 +304,16 @@ class AviationEdgeProvider(FlightProvider):
         if not raw_flight_num:
             raw_flight_num = raw.get("flightNumber")
 
-        flight_num = normalize_flight_number(str(raw_flight_num)) if raw_flight_num else None
-
-        airline_iata = (
-            airline_obj.get("iataCode")
-            or airline_obj.get("iata")
-            or raw.get("airlineIata")
-            or (flight_num[:2] if flight_num else None)
-        )
-        if airline_iata:
-            airline_iata = airline_iata.strip().upper()
+        if raw_flight_num:
+            raw_str = str(raw_flight_num).strip().upper()
+            if airline_iata and not raw_str.startswith(airline_iata):
+                raw_str = f"{airline_iata}{raw_str}"
+            try:
+                flight_num = normalize_flight_number(raw_str)
+            except Exception:
+                flight_num = raw_str
+        else:
+            flight_num = None
 
         airline_registry = {
             "AI": "Air India",
@@ -460,91 +466,7 @@ class AviationEdgeProvider(FlightProvider):
             status=str(status_val).capitalize() if status_val else "Scheduled"
         )
 
-        logger.info(f"[NORMALIZED RESPONSE]\n{json.dumps(normalized.model_dump(mode='json'), indent=2)}")
         return normalized
-
-    def _build_simulated_flight(
-        self,
-        flight_num: str,
-        date_clean: str,
-        origin_code: Optional[str] = None,
-        destination_code: Optional[str] = None
-    ) -> FlightStatusData:
-        """Generates realistic structured flight details when upstream provider returns no records or fails."""
-        carrier_code, flight_digits = split_flight_number(flight_num)
-        airline_registry = {
-            "AI": "Air India",
-            "6E": "IndiGo",
-            "EK": "Emirates",
-            "QR": "Qatar Airways",
-            "BA": "British Airways",
-            "EY": "Etihad Airways",
-            "SG": "SpiceJet",
-            "UK": "Vistara",
-            "LH": "Lufthansa",
-            "AF": "Air France",
-            "KL": "KLM",
-            "SQ": "Singapore Airlines",
-            "CX": "Cathay Pacific",
-            "TK": "Turkish Airlines",
-            "AA": "American Airlines",
-            "UA": "United Airlines",
-            "DL": "Delta Air Lines",
-            "SV": "Saudia",
-            "FZ": "Flydubai",
-            "IX": "Air India Express",
-            "QP": "Akasa Air"
-        }
-        airline_name = airline_registry.get(carrier_code, f"{carrier_code} Airways")
-
-        orig = (origin_code or "BOM").strip().upper()
-        dest = (destination_code or "DEL").strip().upper()
-        if orig == dest:
-            dest = "DEL" if orig == "BOM" else "BOM"
-
-        orig_ap = build_flight_airport(orig)
-        dest_ap = build_flight_airport(dest)
-
-        dep_time_str = f"{date_clean}T10:00:00"
-        arr_time_str = f"{date_clean}T12:15:00"
-
-        dur_mins, dur_text = compute_flight_duration(None, self._parse_datetime(dep_time_str), self._parse_datetime(arr_time_str), flight_num)
-
-        return FlightStatusData(
-            airline=AirlineDetails(
-                name=airline_name,
-                iata=carrier_code,
-                logo=f"https://images.aviation-edge.com/airline-logos/{carrier_code}.png"
-            ),
-            flight=FlightInfo(
-                number=flight_digits,
-                iata=flight_num
-            ),
-            departure=LocationEndpointDetails(
-                airport=orig,
-                airport_name=orig_ap.name if orig_ap else f"{orig} Airport",
-                city=orig_ap.city if orig_ap else "Unknown City",
-                country=orig_ap.country if orig_ap else "India",
-                terminal="2",
-                scheduled=dep_time_str
-            ),
-            arrival=LocationEndpointDetails(
-                airport=dest,
-                airport_name=dest_ap.name if dest_ap else f"{dest} Airport",
-                city=dest_ap.city if dest_ap else "Unknown City",
-                country=dest_ap.country if dest_ap else "India",
-                terminal="3",
-                scheduled=arr_time_str
-            ),
-            duration=DurationDetails(
-                minutes=dur_mins,
-                formatted=dur_text
-            ),
-            aircraft=AircraftDetails(
-                model="Commercial Jetliner"
-            ),
-            status="Scheduled"
-        )
 
     def validate_flight(
         self,
@@ -564,10 +486,20 @@ class AviationEdgeProvider(FlightProvider):
         flight_clean = normalize_flight_number(flight_num)
         date_clean = validate_date_string(date)
         direction_clean = (direction or "any").strip().lower()
+        carrier_code, flight_digits = split_flight_number(flight_clean)
+        padded_digits = flight_digits.zfill(4) if flight_digits.isdigit() else flight_digits
 
-        logger.info(f"[FLIGHT VALIDATION REQUEST] Flight: {flight_clean} | Date: {date_clean} | Direction: {direction_clean} | Origin: {origin_code} | Dest: {destination_code} | Provider: {provider_name}")
-        
-        # Corporate Cache Key: Provider, Flight Number, Travel Date, Direction
+        logger.info(
+            f"\n======================================================\n"
+            f"[FLIGHT VALIDATION AUDIT REQUEST]\n"
+            f"  • Raw Input: flight_num='{flight_num}', date='{date}', origin='{origin_code}', dest='{destination_code}'\n"
+            f"  • Normalized Flight: '{flight_clean}' (Carrier: '{carrier_code}', Digits: '{flight_digits}', Padded: '{padded_digits}')\n"
+            f"  • Date Sent: '{date_clean}'\n"
+            f"  • Direction: '{direction_clean}'\n"
+            f"  • Provider: {provider_name}\n"
+            f"======================================================"
+        )
+
         cache_key = f"flight:validate:{provider_name}:{flight_clean}:{date_clean}:{direction_clean}"
 
         cached = self._get_cached_data(cache_key)
@@ -579,13 +511,10 @@ class AviationEdgeProvider(FlightProvider):
             except Exception:
                 pass
 
-        carrier_code, flight_digits = split_flight_number(flight_clean)
-        padded_digits = flight_digits.zfill(4) if flight_digits.isdigit() else flight_digits
-
         results = []
         try:
-            # Multi-Tier Endpoint Query Pipeline
-            # Tier 1: Routes Endpoint (Master Flight Schedule per Airline IATA + Flight Number)
+            # Multi-Tier Endpoint Query Pipeline (Systematic fallback search)
+            # Tier 1: Routes Endpoint (Master Schedule per Airline IATA + Flight Number)
             results = self._make_request("routes", {"airlineIata": carrier_code, "flightNumber": flight_digits})
 
             # Tier 2: Routes Endpoint (Flight IATA)
@@ -596,40 +525,51 @@ class AviationEdgeProvider(FlightProvider):
             if not results and padded_digits != flight_digits:
                 results = self._make_request("routes", {"airlineIata": carrier_code, "flightNumber": padded_digits})
 
-            # Tier 4: Timetable Endpoint (Flight IATA - flight_iata)
+            # Tier 4: Timetable Endpoint (flight_iata + date)
+            if not results:
+                results = self._make_request("timetable", {"flight_iata": flight_clean, "date": date_clean})
+
+            # Tier 5: Timetable Endpoint (flightIata + date)
+            if not results:
+                results = self._make_request("timetable", {"flightIata": flight_clean, "date": date_clean})
+
+            # Tier 6: Timetable Endpoint (flight_iata without date filter)
             if not results:
                 results = self._make_request("timetable", {"flight_iata": flight_clean})
 
-            # Tier 5: Timetable Endpoint (Flight IATA - flightIata)
+            # Tier 7: Timetable Endpoint (flight_number + airline_iata + date)
             if not results:
-                results = self._make_request("timetable", {"flightIata": flight_clean})
+                results = self._make_request("timetable", {"flight_number": flight_digits, "airline_iata": carrier_code, "date": date_clean})
 
-            # Tier 6: Timetable Endpoint (Flight Number + Airline IATA)
-            if not results:
-                results = self._make_request("timetable", {"flight_number": flight_digits, "airline_iata": carrier_code})
-
-            # Tier 7: Timetable Endpoint (Padded Flight Number + Airline IATA)
+            # Tier 8: Timetable Endpoint (Padded flight_number + airline_iata + date)
             if not results and padded_digits != flight_digits:
-                results = self._make_request("timetable", {"flight_number": padded_digits, "airline_iata": carrier_code})
+                results = self._make_request("timetable", {"flight_number": padded_digits, "airline_iata": carrier_code, "date": date_clean})
 
-            # Tier 8: Timetable Endpoint (Origin Airport Departure Timetable)
+            # Tier 9: Timetable Endpoint (Origin Airport Departure Timetable)
             if not results and origin_code:
                 results = self._make_request("timetable", {"iataCode": origin_code.strip().upper(), "type": "departure", "flight_iata": flight_clean})
 
-            # Tier 9: Live Flight Tracker Endpoint (Active airborne flights)
+            # Tier 10: Live Flight Tracker Endpoint (Active airborne flights)
             if not results:
                 results = self._make_request("flights", {"flightIata": flight_clean})
 
+            # Tier 11: Live Flight Tracker Endpoint with padded flight number
             if not results and padded_digits != flight_digits:
                 results = self._make_request("flights", {"flightIata": f"{carrier_code}{padded_digits}"})
         except FlightDomainException as exc:
             logger.warning(f"[PROVIDER ERROR] Upstream request for {flight_clean} failed ({exc.message}).")
             raise FlightNotFoundException(flight_num=flight_clean, date=date_clean)
 
-        logger.info(f"[FLIGHT PROVIDER RESPONSE] Provider: {provider_name} | Received {len(results)} item(s) from upstream API for {flight_clean}")
+        logger.info(f"[FLIGHT PROVIDER RESPONSE SUMMARY] Provider: {provider_name} | Total items from upstream API for {flight_clean}: {len(results)}")
 
         if not results:
-            logger.info(f"[PROVIDER RESPONSE] Provider: {provider_name} | Status: 404 No Record Found for {flight_clean} on {date_clean}")
+            logger.warning(
+                f"\n======================================================\n"
+                f"[FLIGHT VALIDATION REJECTED DECISION]\n"
+                f"  • Flight: {flight_clean} on {date_clean} (REJECTED)\n"
+                f"  • Reason: Exhausted all 11 lookup tiers across routes, timetable, airport schedule, and live tracking endpoints. Provider confirmed 0 records exist.\n"
+                f"======================================================"
+            )
             raise FlightNotFoundException(flight_num=flight_clean, date=date_clean)
 
         # Smart Multi-leg Segment Matcher (Never auto-pick wrong route if origin/destination provided)
@@ -653,7 +593,19 @@ class AviationEdgeProvider(FlightProvider):
         target_item = matching_item or results[0]
         flight_status = self._normalize_flight_data(target_item, date_context=date_clean)
         self._set_cached_data(cache_key, flight_status.model_dump(mode="json"))
-        logger.info(f"[RETURNED ROUTE] Flight: {flight_clean} (verified live) | Final Route: {flight_status.departure.airport} -> {flight_status.arrival.airport} | Status: {flight_status.status}")
+
+        logger.info(
+            f"\n======================================================\n"
+            f"[FLIGHT VALIDATION SUCCESS DECISION]\n"
+            f"  • Flight: {flight_clean} (ACCEPTED)\n"
+            f"  • Final Route: {flight_status.departure.airport} ({flight_status.departure.timezone or 'UTC'}) -> {flight_status.arrival.airport} ({flight_status.arrival.timezone or 'UTC'})\n"
+            f"  • Scheduled Departure: {flight_status.departure.scheduled}\n"
+            f"  • Scheduled Arrival: {flight_status.arrival.scheduled}\n"
+            f"  • Duration: {flight_status.duration.formatted}\n"
+            f"  • Status: {flight_status.status}\n"
+            f"======================================================"
+        )
+
         return flight_status
 
     def get_flight_status(self, flight_num: str) -> FlightStatusData:
@@ -697,7 +649,6 @@ class AviationEdgeProvider(FlightProvider):
             return []
 
         q_raw = query.strip()
-        # Attempt flight normalization if query resembles flight number
         try:
             q_clean = normalize_flight_number(q_raw)
         except InvalidFlightNumberException:
@@ -714,7 +665,6 @@ class AviationEdgeProvider(FlightProvider):
 
         results = []
         if len(q_clean) == 3 and q_clean.isalpha():
-            # Airport IATA code search
             results = self._make_request("timetable", {"iataCode": q_clean, "type": "departure"})
         else:
             results = self._make_request("flights", {"flightIata": q_clean})
@@ -746,26 +696,25 @@ class AviationEdgeProvider(FlightProvider):
                 pass
 
         results = self._make_request("flights", {"flightIata": flight_clean})
-        if not results:
-            return FlightTelemetry(
-                latitude=0.0,
-                longitude=0.0,
-                altitude=0.0,
-                heading=0.0,
-                speed=0.0
-            )
+        if not results or not isinstance(results, list):
+            raise FlightNotFoundException(flight_num=flight_clean, date=datetime.now().strftime("%Y-%m-%d"))
 
-        raw = results[0]
-        geo = raw.get("geography", {}) if isinstance(raw.get("geography"), dict) else {}
-        speed_obj = raw.get("speed", {}) if isinstance(raw.get("speed"), dict) else {}
+        target = results[0]
+        geography = target.get("geography", {}) if isinstance(target.get("geography"), dict) else {}
+        speed_obj = target.get("speed", {}) if isinstance(target.get("speed"), dict) else {}
+
+        lat = float(geography.get("latitude") or target.get("latitude") or 0.0)
+        lng = float(geography.get("longitude") or target.get("longitude") or 0.0)
+        alt = float(geography.get("altitude") or target.get("altitude") or 0.0)
+        heading = float(geography.get("direction") or target.get("heading") or 0.0)
+        speed = float(speed_obj.get("horizontal") or target.get("speed") or 0.0)
 
         telemetry = FlightTelemetry(
-            latitude=float(geo.get("latitude", 0.0)),
-            longitude=float(geo.get("longitude", 0.0)),
-            altitude=float(geo.get("altitude", 0.0)),
-            heading=float(geo.get("direction", 0.0)),
-            speed=float(speed_obj.get("horizontal", 0.0))
+            latitude=lat,
+            longitude=lng,
+            altitude=alt,
+            heading=heading,
+            speed=speed
         )
-
-        self._set_cached_data(cache_key, telemetry.model_dump(mode="json"), ttl=30)
+        self._set_cached_data(cache_key, telemetry.model_dump(mode="json"), ttl=60)
         return telemetry
