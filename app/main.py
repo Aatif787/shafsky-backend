@@ -13,6 +13,8 @@ from app.database import engine, Base, get_db
 import app.models.schema  # Ensure models are loaded
 import app.models.shared_domain  # Phase B.5 Shared Domain models
 import app.models.airport  # Phase C.1 Airport Meet & Assist models
+import app.models.journey_models  # Phase 1 Journey Detection Engine models
+import app.models.operations_models  # Phase 6 Operations & Communication Engine models
 from app.security.middleware import SecurityMiddleware
 from app.security.secrets import validate_secrets_on_startup
 from app.monitoring.middlewares import ObservabilityMiddleware
@@ -86,6 +88,8 @@ from app.routers import airport_router
 from app.routers import config_router
 from app.routers import ticketing_router
 from app.routers import payment_router
+from app.routers import journey_router
+from app.routers import operations_router
 from app.ai import router as ai_router
 from app.whatsapp import router as whatsapp_router
 
@@ -107,6 +111,8 @@ app.include_router(ticketing_router.router)
 app.include_router(payment_router.router)
 app.include_router(ai_router.router)
 app.include_router(whatsapp_router.router)
+app.include_router(journey_router.router)
+app.include_router(operations_router.router)
 
 # Production Observability & Health Routes
 @app.get("/api/health", tags=["Observability & Health"], status_code=200)

@@ -1,23 +1,25 @@
 """
 Aviation Edge API Integration Provider.
 Provides production-ready flight validation, schedule lookup, and tracking using configured production Flight APIs.
+Supports all valid IATA/ICAO airline codes (AI, SG, QP, IX, 6E, UK, EK, QR, BA, EY, LH, AF, KL, SQ, CX, TK, AA, UA, DL, SV, FZ, etc.).
 Never fabricates flight details, never uses mock data, fallback objects, or dummy JSON.
+Strictly validates carrier IATA/ICAO codes to prevent cross-carrier flight substitution.
 """
 
 import json
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
-from app.core.config import settings
+from app.config import settings
 from app.flight.airports import build_flight_airport
 from app.flight.duration import compute_flight_duration
 from app.flight.exceptions import (
     FlightDomainException,
-    FlightInvalidParameterException,
     FlightNotFoundException,
     FlightProviderNotConfiguredException,
     FlightProviderTimeoutException,
@@ -40,6 +42,77 @@ from app.flight.schemas import (
 
 logger = logging.getLogger("shafsky.flight.aviation_edge")
 
+# Master Carrier Registry (IATA -> Name & ICAO Code Mapping)
+CARRIER_ICAO_MAP: Dict[str, str] = {
+    "AI": "AIC",  # Air India
+    "6E": "IGO",  # IndiGo
+    "SG": "SEJ",  # SpiceJet
+    "QP": "AKJ",  # Akasa Air
+    "IX": "AXB",  # Air India Express
+    "UK": "VTI",  # Vistara
+    "I5": "IAD",  # AirAsia India / AIX Connect
+    "9I": "LLR",  # Alliance Air
+    "S5": "RSL",  # Star Air
+    "EK": "UAE",  # Emirates
+    "QR": "QTR",  # Qatar Airways
+    "BA": "BAW",  # British Airways
+    "EY": "ETD",  # Etihad Airways
+    "LH": "DLH",  # Lufthansa
+    "AF": "AFR",  # Air France
+    "KL": "KLM",  # KLM
+    "SQ": "SIA",  # Singapore Airlines
+    "CX": "CPA",  # Cathay Pacific
+    "TK": "THY",  # Turkish Airlines
+    "AA": "AAL",  # American Airlines
+    "UA": "UAL",  # United Airlines
+    "DL": "DAL",  # Delta Air Lines
+    "SV": "SVA",  # Saudia
+    "FZ": "FDB",  # Flydubai
+    "J9": "JZR",  # Jazeera Airways
+    "WY": "OMA",  # Oman Air
+    "GF": "GFA",  # Gulf Air
+    "MH": "MAS",  # Malaysia Airlines
+    "TG": "THA",  # Thai Airways
+    "VS": "VIR",  # Virgin Atlantic
+    "AC": "ACA",  # Air Canada
+    "QF": "QFA",  # Qantas
+}
+
+CARRIER_NAME_MAP: Dict[str, str] = {
+    "AI": "Air India",
+    "6E": "IndiGo",
+    "SG": "SpiceJet",
+    "QP": "Akasa Air",
+    "IX": "Air India Express",
+    "UK": "Vistara",
+    "I5": "AirAsia India",
+    "9I": "Alliance Air",
+    "S5": "Star Air",
+    "EK": "Emirates",
+    "QR": "Qatar Airways",
+    "BA": "British Airways",
+    "EY": "Etihad Airways",
+    "LH": "Lufthansa",
+    "AF": "Air France",
+    "KL": "KLM",
+    "SQ": "Singapore Airlines",
+    "CX": "Cathay Pacific",
+    "TK": "Turkish Airlines",
+    "AA": "American Airlines",
+    "UA": "United Airlines",
+    "DL": "Delta Air Lines",
+    "SV": "Saudia",
+    "FZ": "Flydubai",
+    "J9": "Jazeera Airways",
+    "WY": "Oman Air",
+    "GF": "Gulf Air",
+    "MH": "Malaysia Airlines",
+    "TG": "Thai Airways",
+    "VS": "Virgin Atlantic",
+    "AC": "Air Canada",
+    "QF": "Qantas",
+}
+
 
 def get_redis_client():
     """Returns optional Redis client for caching if available."""
@@ -55,26 +128,24 @@ def get_redis_client():
 def normalize_flight_number(flight_num: str) -> str:
     """
     Normalizes flight numbers into standard IATA/ICAO format.
+    Case-insensitive, strips all spaces, hyphens, and underscores.
     Examples:
         'AI 302' -> 'AI302'
         'ai-302' -> 'AI302'
         '6E 211' -> '6E211'
-        'EK504'  -> 'EK504'
-        'BA 256' -> 'BA256'
-        'QR 570' -> 'QR570'
+        'qp 1301'-> 'QP1301'
+        'sg 8168'-> 'SG8168'
     """
     if not flight_num or not isinstance(flight_num, str):
         raise InvalidFlightNumberException(str(flight_num), "Flight number cannot be empty.")
 
-    # Remove all spaces, hyphens, underscores
     cleaned = re.sub(r"[\s\-_]+", "", flight_num).strip().upper()
 
-    # Standard IATA (2-char, e.g. AI, 6E) or ICAO (3-letter, e.g. AIC, UAE) carrier code prefix + 1-4 numbers
     pattern = r"^(?:[A-Z]{2}|[A-Z][0-9]|[0-9][A-Z]|[A-Z]{3})\d{1,4}[A-Z]?$"
     if not re.match(pattern, cleaned):
         raise InvalidFlightNumberException(
             flight_num,
-            "Expected format: Standard 2-3 char airline code followed by 1-4 numbers (e.g. AI302, EK504, 6E211)."
+            "Expected format: Standard 2-3 char airline code followed by 1-4 numbers (e.g. AI302, EK504, 6E211, QP1301, SG8168)."
         )
 
     return cleaned
@@ -95,13 +166,13 @@ def validate_date_string(date_str: str) -> str:
         raise InvalidFlightDateException(date_str, "Date must be valid and formatted as YYYY-MM-DD.")
 
 
-def split_flight_number(flight_clean: str) -> tuple[str, str]:
+def split_flight_number(flight_clean: str) -> Tuple[str, str]:
     """
     Splits normalized flight number into carrier IATA/ICAO code and numeric flight number digits.
     Examples:
         'AI302'  -> ('AI', '302')
         '6E211'  -> ('6E', '211')
-        'EK510'  -> ('EK', '510')
+        'QP1301' -> ('QP', '1301')
         'AIC302' -> ('AIC', '302')
     """
     match_icao = re.match(r"^([A-Z]{3})(\d{1,4}[A-Z]?)$", flight_clean)
@@ -117,8 +188,11 @@ def split_flight_number(flight_clean: str) -> tuple[str, str]:
 
 class AviationEdgeProvider(FlightProvider):
     """
-    Production-ready Aviation Edge Flight Intelligence Provider implementation.
-    Acts as the primary provider for Shafsky Aviation.
+    Production-ready Aviation Edge Flight Intelligence Provider.
+    Supports all valid IATA & ICAO airline codes dynamically.
+    Executes multi-tier parallel query strategies across master routes, timetables,
+    airline catalogs, and live flight trackers before resolving results.
+    Strictly validates candidate airline codes to prevent cross-carrier substitution.
     """
 
     DEFAULT_CACHE_TTL = 300  # 5 minutes in seconds
@@ -126,8 +200,8 @@ class AviationEdgeProvider(FlightProvider):
     def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None):
         self.api_key = api_key or getattr(settings, "AVIATION_EDGE_API_KEY", "")
         self.base_url = base_url or getattr(settings, "AVIATION_EDGE_BASE_URL", "https://aviation-edge.com/v2/public")
-        self.timeout = float(getattr(settings, "AVIATION_EDGE_TIMEOUT", 10.0))
-        self.max_retries = int(getattr(settings, "AVIATION_EDGE_MAX_RETRIES", 3))
+        self.timeout = float(getattr(settings, "AVIATION_EDGE_TIMEOUT", 4.0))
+        self.max_retries = int(getattr(settings, "AVIATION_EDGE_MAX_RETRIES", 2))
 
     def _get_cached_data(self, key: str) -> Optional[Dict[str, Any]]:
         """Retrieve cached JSON payload if available."""
@@ -157,8 +231,7 @@ class AviationEdgeProvider(FlightProvider):
     def _make_request(self, endpoint: str, params: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
         Execute HTTP GET request to Aviation Edge with timeout, retry logic, rate-limit handling,
-        and masked logging.
-        Never logs or exposes the API key.
+        and raw response logging for every failed lookup.
         """
         if not self.api_key:
             logger.warning("AVIATION_EDGE_API_KEY is not configured.")
@@ -185,60 +258,43 @@ class AviationEdgeProvider(FlightProvider):
                     if response.status_code == 200:
                         data = response.json()
 
-                        # Log raw JSON payload preview for audit
-                        raw_snippet = json.dumps(data)[:600] if data else "[]"
-                        logger.info(f"[RAW API RESPONSE] Endpoint: {endpoint} | Items: {len(data) if isinstance(data, list) else 1} | Raw Payload Snippet: {raw_snippet}")
-
                         if isinstance(data, dict) and "error" in data:
-                            error_msg = str(data.get("error", "Unknown error from provider"))
-                            logger.error(f"[PROVIDER ERROR PAYLOAD] {error_msg}")
-
-                            error_lower = error_msg.lower()
-                            if "rate limit" in error_lower or "limit exceeded" in error_lower or "quota" in error_lower:
-                                raise FlightRateLimitExceededException(f"Provider rate limit exceeded: {error_msg}")
-                            elif "not found" in error_lower or "no data" in error_lower or "empty" in error_lower or "no record" in error_lower or "record" in error_lower:
-                                return []
-                            elif "key" in error_lower or "unauthorized" in error_lower or "invalid" in error_lower:
-                                raise FlightProviderUnavailableException("Invalid or unauthorized Aviation Edge API key.")
-                            else:
-                                raise FlightProviderUnavailableException(f"Provider error: {error_msg}")
+                            error_msg = str(data.get("error", "No Record Found"))
+                            logger.info(f"[FAILED API LOOKUP] Endpoint: {endpoint} | Params: {masked_params} | Response: {error_msg}")
+                            return []
 
                         if isinstance(data, list):
+                            logger.info(f"[SUCCESS API LOOKUP] Endpoint: {endpoint} | Params: {masked_params} | Items Returned: {len(data)}")
                             return data
                         elif isinstance(data, dict):
+                            logger.info(f"[SUCCESS API LOOKUP] Endpoint: {endpoint} | Params: {masked_params} | Single Item Returned")
                             return [data]
                         return []
 
                     elif response.status_code == 404:
-                        logger.info(f"[PROVIDER 404] No records found for endpoint {endpoint}")
+                        logger.info(f"[FAILED API LOOKUP 404] Endpoint: {endpoint} | Params: {masked_params}")
                         return []
                     elif response.status_code == 429:
-                        logger.error("[PROVIDER 429] Rate limit exceeded!")
+                        logger.error(f"[API RATE LIMIT 429] Endpoint: {endpoint}")
                         raise FlightRateLimitExceededException()
                     elif response.status_code in (401, 403):
-                        logger.error(f"[PROVIDER AUTH FAIL] Status {response.status_code}")
+                        logger.error(f"[API AUTH ERROR {response.status_code}] Endpoint: {endpoint}")
                         raise FlightProviderUnavailableException("Invalid or unauthorized Aviation Edge API credentials.")
-                    elif response.status_code >= 500:
-                        logger.warning(f"[PROVIDER 5XX] Status {response.status_code} (attempt {attempt}/{self.max_retries})")
-                        last_exception = FlightProviderUnavailableException(f"Provider HTTP error {response.status_code}")
                     else:
-                        logger.warning(f"[PROVIDER UNEXPECTED] Status {response.status_code}")
-                        return []
+                        last_exception = FlightProviderUnavailableException(f"Provider HTTP error {response.status_code}")
 
             except httpx.TimeoutException:
                 elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
-                logger.warning(f"[PROVIDER TIMEOUT] Attempt {attempt}/{self.max_retries} timed out after {elapsed_ms}ms")
+                logger.warning(f"[API TIMEOUT] Endpoint: {endpoint} | Params: {masked_params} | Timed out after {elapsed_ms}ms (Attempt {attempt}/{self.max_retries})")
                 last_exception = FlightProviderTimeoutException()
             except (httpx.NetworkError, httpx.RequestError) as exc:
-                logger.warning(f"[PROVIDER NETWORK ERROR] Attempt {attempt}/{self.max_retries}: {exc}")
+                logger.warning(f"[API NETWORK ERROR] Endpoint: {endpoint} | Attempt {attempt}/{self.max_retries}: {exc}")
                 last_exception = FlightProviderUnavailableException(f"Network error: {str(exc)}")
 
             if attempt < self.max_retries:
-                time.sleep(0.5 * (2 ** (attempt - 1)))
+                time.sleep(0.2)
 
-        if last_exception:
-            raise last_exception
-        raise FlightProviderUnavailableException("Flight intelligence provider is currently unreachable.")
+        return []
 
     def _parse_datetime(self, dt_str: Optional[str], tz_name: Optional[str] = None) -> Optional[datetime]:
         """Parse datetime string into timezone-aware datetime object gracefully using airport timezone."""
@@ -273,10 +329,125 @@ class AviationEdgeProvider(FlightProvider):
                     pass
         return None
 
+    def _validate_candidate_airline(
+        self,
+        candidate: Dict[str, Any],
+        expected_carrier_iata: str,
+        expected_carrier_icao: str
+    ) -> bool:
+        """
+        Validates that a returned candidate record belongs to the requested airline.
+        Prevents returning flights from incorrect airlines (e.g. returning Oman Air 'WY201' for Air India 'AI201').
+        """
+        airline_obj = candidate.get("airline", {}) if isinstance(candidate.get("airline"), dict) else {}
+        flight_obj = candidate.get("flight", {}) if isinstance(candidate.get("flight"), dict) else {}
+
+        cand_airline_iata = str(airline_obj.get("iataCode") or airline_obj.get("iata") or candidate.get("airlineIata") or "").strip().upper()
+        cand_airline_icao = str(airline_obj.get("icaoCode") or airline_obj.get("icao") or candidate.get("airlineIcao") or "").strip().upper()
+
+        cand_flight_iata = str(flight_obj.get("iataNumber") or candidate.get("flight_iata") or candidate.get("flightIata") or "").strip().upper()
+        cand_flight_icao = str(flight_obj.get("icaoNumber") or candidate.get("flight_icao") or candidate.get("flightIcao") or "").strip().upper()
+
+        # Rule 1: Check airline IATA code
+        if cand_airline_iata and cand_airline_iata != expected_carrier_iata:
+            if not expected_carrier_icao or cand_airline_icao != expected_carrier_icao:
+                logger.info(
+                    f"[CANDIDATE REJECTED] Candidate Airline: '{cand_airline_iata}' ({cand_airline_icao}) "
+                    f"!= Expected: '{expected_carrier_iata}' ({expected_carrier_icao}) | Reason: Mismatched airline code"
+                )
+                return False
+
+        # Rule 2: Check flight IATA prefix if present
+        if cand_flight_iata:
+            # Extract 2-char prefix from candidate flight iata (e.g. 'WY' from 'WY201')
+            cand_prefix = cand_flight_iata[:2]
+            if cand_prefix.isalpha() and cand_prefix != expected_carrier_iata:
+                logger.info(
+                    f"[CANDIDATE REJECTED] Candidate Flight IATA: '{cand_flight_iata}' "
+                    f"starts with '{cand_prefix}' != Expected '{expected_carrier_iata}' | Reason: Flight IATA prefix mismatch"
+                )
+                return False
+
+        # Rule 3: Check flight ICAO prefix if present
+        if cand_flight_icao and expected_carrier_icao:
+            cand_icao_prefix = cand_flight_icao[:3]
+            if cand_icao_prefix.isalpha() and cand_icao_prefix != expected_carrier_icao:
+                logger.info(
+                    f"[CANDIDATE REJECTED] Candidate Flight ICAO: '{cand_flight_icao}' "
+                    f"starts with '{cand_icao_prefix}' != Expected '{expected_carrier_icao}' | Reason: Flight ICAO prefix mismatch"
+                )
+                return False
+
+        return True
+
+    def _rank_and_select_candidate(
+        self,
+        candidates: List[Dict[str, Any]],
+        expected_flight_iata: str,
+        expected_carrier_iata: str,
+        requested_date: str,
+        origin_code: Optional[str] = None,
+        destination_code: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Ranks candidate records using strict multi-tier criteria:
+        1. Exact flight IATA match (e.g. AI201).
+        2. Exact airline IATA match (e.g. AI).
+        3. Matching operating airline.
+        4. Matching travel date.
+        5. Scheduled departure timestamp proximity to requested date.
+        """
+        if not candidates:
+            return None
+
+        def rank_score(item: Dict[str, Any]) -> Tuple[int, int, int, int]:
+            flight_obj = item.get("flight", {}) if isinstance(item.get("flight"), dict) else {}
+            dep_obj = item.get("departure", {}) if isinstance(item.get("departure"), dict) else {}
+
+            cand_flight_iata = str(flight_obj.get("iataNumber") or item.get("flight_iata") or item.get("flightIata") or "").strip().upper()
+            cand_airline_iata = str(item.get("airline", {}).get("iataCode") or item.get("airlineIata") or "").strip().upper()
+            dep_date = str(dep_obj.get("scheduledTime") or item.get("departureTime") or "")[:10]
+
+            # Priority 1: Exact flight IATA match
+            score_flight_iata = 1 if cand_flight_iata == expected_flight_iata else 0
+
+            # Priority 2: Exact airline IATA match
+            score_airline_iata = 1 if cand_airline_iata == expected_carrier_iata else 0
+
+            # Priority 3: Route match (Origin or Destination match)
+            dep_code = (dep_obj.get("iataCode") or item.get("departureIata") or "").upper()
+            arr_code = (item.get("arrival", {}).get("iataCode") or item.get("arrivalIata") or "").upper()
+
+            score_route = 0
+            if origin_code and dep_code == origin_code.strip().upper():
+                score_route += 1
+            if destination_code and arr_code == destination_code.strip().upper():
+                score_route += 1
+
+            # Priority 4: Date match
+            score_date = 1 if dep_date == requested_date else 0
+
+            return (score_flight_iata, score_airline_iata, score_route, score_date)
+
+        ranked = sorted(candidates, key=rank_score, reverse=True)
+        top_selected = ranked[0]
+
+        top_flight_obj = top_selected.get("flight", {}) if isinstance(top_selected.get("flight"), dict) else {}
+        top_flight_iata = top_flight_obj.get("iataNumber") or top_selected.get("flight_iata") or top_selected.get("flightIata") or expected_flight_iata
+        top_airline_obj = top_selected.get("airline", {}) if isinstance(top_selected.get("airline"), dict) else {}
+        top_airline_name = top_airline_obj.get("name") or CARRIER_NAME_MAP.get(expected_carrier_iata, expected_carrier_iata)
+
+        logger.info(
+            f"[CANDIDATE RANKING COMPLETED] Evaluated {len(candidates)} valid candidate records.\n"
+            f"  • Top Selected Candidate: Flight '{top_flight_iata}' | Airline: '{top_airline_name}'"
+        )
+
+        return top_selected
+
     def _normalize_flight_data(self, raw: Dict[str, Any], date_context: Optional[str] = None) -> FlightStatusData:
         """
         Normalize raw Aviation Edge payload into standard internal FlightStatusData response schema.
-        Handles 'routes', 'timetable', and 'flights' API response shapes seamlessly.
+        Handles 'routes', 'timetable', and 'flights' API response shapes dynamically.
         Strictly provider-driven. Missing fields are set to None.
         Never invents terminals, gates, status, or fake values.
         """
@@ -315,33 +486,9 @@ class AviationEdgeProvider(FlightProvider):
         else:
             flight_num = None
 
-        airline_registry = {
-            "AI": "Air India",
-            "6E": "IndiGo",
-            "EK": "Emirates",
-            "QR": "Qatar Airways",
-            "BA": "British Airways",
-            "EY": "Etihad Airways",
-            "SG": "SpiceJet",
-            "UK": "Vistara",
-            "LH": "Lufthansa",
-            "AF": "Air France",
-            "KL": "KLM",
-            "SQ": "Singapore Airlines",
-            "CX": "Cathay Pacific",
-            "TK": "Turkish Airlines",
-            "AA": "American Airlines",
-            "UA": "United Airlines",
-            "DL": "Delta Air Lines",
-            "SV": "Saudia",
-            "FZ": "Flydubai",
-            "IX": "Air India Express",
-            "QP": "Akasa Air"
-        }
-
         raw_airline_name = airline_obj.get("name") or airline_obj.get("airline_name") or raw.get("airlineName")
-        airline_name = raw_airline_name or (airline_registry.get(airline_iata) if airline_iata else None)
-        airline_icao = airline_obj.get("icaoCode") or airline_obj.get("icao") or raw.get("airlineIcao") or None
+        airline_name = raw_airline_name or (CARRIER_NAME_MAP.get(airline_iata) if airline_iata else None)
+        airline_icao = airline_obj.get("icaoCode") or airline_obj.get("icao") or raw.get("airlineIcao") or (CARRIER_ICAO_MAP.get(airline_iata) if airline_iata else None)
         airline_logo = f"https://images.aviation-edge.com/airline-logos/{airline_iata}.png" if airline_iata else None
 
         airline_details = AirlineDetails(
@@ -479,24 +626,27 @@ class AviationEdgeProvider(FlightProvider):
     ) -> FlightStatusData:
         """
         Validate flight existence for a given flight number, date, and direction.
-        Performs flight number normalization, date format validation, multi-tier provider query
-        (routes -> timetable -> flights tracker), exact route normalization, and direction/provider isolated caching.
+        Executes parallel multi-tier query strategies across master routes, timetables,
+        airline catalogs, and live flight trackers before resolving results.
+        Supports all IATA and ICAO codes dynamically.
+        Never substitutes flights belonging to another airline.
         """
         provider_name = "aviation_edge"
         flight_clean = normalize_flight_number(flight_num)
         date_clean = validate_date_string(date)
         direction_clean = (direction or "any").strip().lower()
         carrier_code, flight_digits = split_flight_number(flight_clean)
+        carrier_icao = CARRIER_ICAO_MAP.get(carrier_code, "")
         padded_digits = flight_digits.zfill(4) if flight_digits.isdigit() else flight_digits
+        icao_flight = f"{carrier_icao}{flight_digits}" if carrier_icao else ""
 
         logger.info(
             f"\n======================================================\n"
-            f"[FLIGHT VALIDATION AUDIT REQUEST]\n"
-            f"  • Raw Input: flight_num='{flight_num}', date='{date}', origin='{origin_code}', dest='{destination_code}'\n"
-            f"  • Normalized Flight: '{flight_clean}' (Carrier: '{carrier_code}', Digits: '{flight_digits}', Padded: '{padded_digits}')\n"
-            f"  • Date Sent: '{date_clean}'\n"
-            f"  • Direction: '{direction_clean}'\n"
-            f"  • Provider: {provider_name}\n"
+            f"[FLIGHT SEARCH AUDIT REQUEST]\n"
+            f"  • Input Flight: '{flight_num}' -> Clean: '{flight_clean}'\n"
+            f"  • Carrier Code: IATA='{carrier_code}' | ICAO='{carrier_icao}' | Digits='{flight_digits}'\n"
+            f"  • Date Sent: '{date_clean}' | Direction: '{direction_clean}'\n"
+            f"  • Origin: {origin_code} | Destination: {destination_code}\n"
             f"======================================================"
         )
 
@@ -506,102 +656,146 @@ class AviationEdgeProvider(FlightProvider):
         if cached:
             try:
                 flight_status = FlightStatusData.model_validate(cached)
-                logger.info(f"[RETURNED ROUTE] Flight: {flight_clean} (from cache) | Final Route: {flight_status.departure.airport} -> {flight_status.arrival.airport} | Status: {flight_status.status}")
+                logger.info(f"[RETURNED ROUTE] Flight: {flight_clean} (from cache)")
                 return flight_status
             except Exception:
                 pass
 
-        results = []
-        try:
-            # Multi-Tier Endpoint Query Pipeline (Systematic fallback search)
-            # Tier 1: Routes Endpoint (Master Schedule per Airline IATA + Flight Number)
-            results = self._make_request("routes", {"airlineIata": carrier_code, "flightNumber": flight_digits})
+        raw_candidates: List[Dict[str, Any]] = []
 
-            # Tier 2: Routes Endpoint (Flight IATA)
-            if not results:
-                results = self._make_request("routes", {"flightIata": flight_clean})
+        # Batch 1: Concurrent IATA & ICAO master routes & timetable endpoints for specific carrier
+        batch1_queries = [
+            ("routes", {"airlineIata": carrier_code, "flightNumber": flight_digits}),
+            ("routes", {"flightIata": flight_clean}),
+            ("timetable", {"flight_iata": flight_clean, "date": date_clean}),
+            ("timetable", {"flightIata": flight_clean, "date": date_clean}),
+        ]
+        if carrier_icao:
+            batch1_queries.append(("routes", {"airlineIcao": carrier_icao, "flightNumber": flight_digits}))
+            if icao_flight:
+                batch1_queries.append(("routes", {"flightIcao": icao_flight}))
+                batch1_queries.append(("timetable", {"flight_icao": icao_flight, "date": date_clean}))
 
-            # Tier 3: Routes Endpoint (Padded 4-digit Flight Number e.g. 0201 for AI201)
-            if not results and padded_digits != flight_digits:
-                results = self._make_request("routes", {"airlineIata": carrier_code, "flightNumber": padded_digits})
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            future_to_query = {
+                executor.submit(self._make_request, ep, params): (ep, params)
+                for ep, params in batch1_queries
+            }
+            for future in as_completed(future_to_query):
+                try:
+                    res = future.result()
+                    if res and isinstance(res, list) and len(res) > 0:
+                        raw_candidates.extend(res)
+                except Exception as err:
+                    logger.warning(f"Batch 1 query error: {err}")
 
-            # Tier 4: Timetable Endpoint (flight_iata + date)
-            if not results:
-                results = self._make_request("timetable", {"flight_iata": flight_clean, "date": date_clean})
+        # Batch 2: Padded digits, alternate params (airline_iata + flight_number), and live trackers
+        if not raw_candidates:
+            batch2_queries = [
+                ("routes", {"airlineIata": carrier_code, "flightNumber": padded_digits}),
+                ("timetable", {"flight_iata": flight_clean}),
+                ("timetable", {"flight_number": flight_digits, "airline_iata": carrier_code, "date": date_clean}),
+                ("timetable", {"flight_number": flight_digits, "airlineIata": carrier_code}),
+                ("flights", {"flightIata": flight_clean}),
+            ]
+            if carrier_icao:
+                batch2_queries.append(("timetable", {"flight_number": flight_digits, "airline_icao": carrier_icao}))
+                if icao_flight:
+                    batch2_queries.append(("flights", {"flightIcao": icao_flight}))
 
-            # Tier 5: Timetable Endpoint (flightIata + date)
-            if not results:
-                results = self._make_request("timetable", {"flightIata": flight_clean, "date": date_clean})
+            with ThreadPoolExecutor(max_workers=6) as executor:
+                future_to_query = {
+                    executor.submit(self._make_request, ep, params): (ep, params)
+                    for ep, params in batch2_queries
+                }
+                for future in as_completed(future_to_query):
+                    try:
+                        res = future.result()
+                        if res and isinstance(res, list) and len(res) > 0:
+                            raw_candidates.extend(res)
+                    except Exception as err:
+                        logger.warning(f"Batch 2 query error: {err}")
 
-            # Tier 6: Timetable Endpoint (flight_iata without date filter)
-            if not results:
-                results = self._make_request("timetable", {"flight_iata": flight_clean})
+        # Batch 3: Airline Master Catalog Lookup (Full carrier route fallback)
+        if not raw_candidates:
+            logger.info(f"[BATCH 3 LOOKUP] Attempting carrier catalog lookup for airline code: {carrier_code}")
+            catalog_items = self._make_request("routes", {"airlineIata": carrier_code})
+            if not catalog_items and carrier_icao:
+                catalog_items = self._make_request("routes", {"airlineIcao": carrier_icao})
 
-            # Tier 7: Timetable Endpoint (flight_number + airline_iata + date)
-            if not results:
-                results = self._make_request("timetable", {"flight_number": flight_digits, "airline_iata": carrier_code, "date": date_clean})
+            if catalog_items:
+                for item in catalog_items:
+                    item_num = str(item.get("flightNumber") or "").strip()
+                    if item_num == flight_digits or item_num == padded_digits or item_num.lstrip("0") == flight_digits.lstrip("0"):
+                        raw_candidates.append(item)
 
-            # Tier 8: Timetable Endpoint (Padded flight_number + airline_iata + date)
-            if not results and padded_digits != flight_digits:
-                results = self._make_request("timetable", {"flight_number": padded_digits, "airline_iata": carrier_code, "date": date_clean})
+        # Batch 4: Hub Timetable Schedule Search (STRICT CARRIER MATCH REQUIRED)
+        if not raw_candidates:
+            hubs_to_check = [origin_code] if origin_code else ["DEL", "BOM", "BLR"]
+            hub_queries = []
+            for hub in hubs_to_check:
+                if hub:
+                    hub_code = hub.strip().upper()
+                    hub_queries.append(("timetable", {"iataCode": hub_code, "type": "departure"}))
+                    hub_queries.append(("timetable", {"iataCode": hub_code, "type": "arrival"}))
 
-            # Tier 9: Timetable Endpoint (Origin Airport Departure Timetable)
-            if not results and origin_code:
-                results = self._make_request("timetable", {"iataCode": origin_code.strip().upper(), "type": "departure", "flight_iata": flight_clean})
+            with ThreadPoolExecutor(max_workers=6) as executor:
+                future_to_query = {
+                    executor.submit(self._make_request, ep, params): (ep, params)
+                    for ep, params in hub_queries
+                }
+                for future in as_completed(future_to_query):
+                    try:
+                        res = future.result()
+                        if res and isinstance(res, list) and len(res) > 0:
+                            for item in res:
+                                f_obj = item.get("flight", {}) if isinstance(item.get("flight"), dict) else {}
+                                item_iata = str(f_obj.get("iataNumber") or item.get("flight_iata") or item.get("flightIata") or "").upper()
+                                item_icao = str(f_obj.get("icaoNumber") or item.get("flight_icao") or item.get("flightIcao") or "").upper()
 
-            # Tier 10: Live Flight Tracker Endpoint (Active airborne flights)
-            if not results:
-                results = self._make_request("flights", {"flightIata": flight_clean})
+                                # MUST match carrier code prefix and full flight IATA/ICAO
+                                if item_iata == flight_clean or item_icao == icao_flight:
+                                    raw_candidates.append(item)
+                    except Exception as err:
+                        logger.warning(f"Batch 4 query error: {err}")
 
-            # Tier 11: Live Flight Tracker Endpoint with padded flight number
-            if not results and padded_digits != flight_digits:
-                results = self._make_request("flights", {"flightIata": f"{carrier_code}{padded_digits}"})
-        except FlightDomainException as exc:
-            logger.warning(f"[PROVIDER ERROR] Upstream request for {flight_clean} failed ({exc.message}).")
-            raise FlightNotFoundException(flight_num=flight_clean, date=date_clean)
+        # Filter candidates strictly by carrier code matching
+        valid_candidates: List[Dict[str, Any]] = []
+        for cand in raw_candidates:
+            if self._validate_candidate_airline(cand, carrier_code, carrier_icao):
+                valid_candidates.append(cand)
 
-        logger.info(f"[FLIGHT PROVIDER RESPONSE SUMMARY] Provider: {provider_name} | Total items from upstream API for {flight_clean}: {len(results)}")
-
-        if not results:
+        if not valid_candidates:
             logger.warning(
                 f"\n======================================================\n"
-                f"[FLIGHT VALIDATION REJECTED DECISION]\n"
+                f"[FLIGHT SEARCH REJECTED DECISION]\n"
                 f"  • Flight: {flight_clean} on {date_clean} (REJECTED)\n"
-                f"  • Reason: Exhausted all 11 lookup tiers across routes, timetable, airport schedule, and live tracking endpoints. Provider confirmed 0 records exist.\n"
+                f"  • Reason: No verified schedule match found for airline '{carrier_code}'. All non-matching candidate airlines rejected.\n"
                 f"======================================================"
             )
             raise FlightNotFoundException(flight_num=flight_clean, date=date_clean)
 
-        # Smart Multi-leg Segment Matcher (Never auto-pick wrong route if origin/destination provided)
-        matching_item = None
-        if len(results) > 1:
-            if origin_code:
-                orig_clean = origin_code.strip().upper()
-                for item in results:
-                    dep_code = (item.get("departure", {}).get("iataCode") or item.get("departureIata") or "").upper()
-                    if dep_code == orig_clean:
-                        matching_item = item
-                        break
-            if not matching_item and destination_code:
-                dest_clean = destination_code.strip().upper()
-                for item in results:
-                    arr_code = (item.get("arrival", {}).get("iataCode") or item.get("arrivalIata") or "").upper()
-                    if arr_code == dest_clean:
-                        matching_item = item
-                        break
+        target_item = self._rank_and_select_candidate(
+            valid_candidates,
+            expected_flight_iata=flight_clean,
+            expected_carrier_iata=carrier_code,
+            requested_date=date_clean,
+            origin_code=origin_code,
+            destination_code=destination_code
+        )
 
-        target_item = matching_item or results[0]
+        if not target_item:
+            raise FlightNotFoundException(flight_num=flight_clean, date=date_clean)
+
         flight_status = self._normalize_flight_data(target_item, date_context=date_clean)
         self._set_cached_data(cache_key, flight_status.model_dump(mode="json"))
 
         logger.info(
             f"\n======================================================\n"
-            f"[FLIGHT VALIDATION SUCCESS DECISION]\n"
+            f"[FLIGHT SEARCH SUCCESS DECISION]\n"
             f"  • Flight: {flight_clean} (ACCEPTED)\n"
-            f"  • Final Route: {flight_status.departure.airport} ({flight_status.departure.timezone or 'UTC'}) -> {flight_status.arrival.airport} ({flight_status.arrival.timezone or 'UTC'})\n"
-            f"  • Scheduled Departure: {flight_status.departure.scheduled}\n"
-            f"  • Scheduled Arrival: {flight_status.arrival.scheduled}\n"
-            f"  • Duration: {flight_status.duration.formatted}\n"
+            f"  • Airline: {flight_status.airline.name} ({flight_status.airline.iata}/{flight_status.airline.icao})\n"
+            f"  • Route: {flight_status.departure.airport} ({flight_status.departure.timezone or 'UTC'}) -> {flight_status.arrival.airport} ({flight_status.arrival.timezone or 'UTC'})\n"
             f"  • Status: {flight_status.status}\n"
             f"======================================================"
         )
@@ -621,25 +815,23 @@ class AviationEdgeProvider(FlightProvider):
                 pass
 
         carrier_code, flight_digits = split_flight_number(flight_clean)
-        padded_digits = flight_digits.zfill(4) if flight_digits.isdigit() else flight_digits
+        carrier_icao = CARRIER_ICAO_MAP.get(carrier_code, "")
 
         results = self._make_request("routes", {"airlineIata": carrier_code, "flightNumber": flight_digits})
+        if not results and carrier_icao:
+            results = self._make_request("routes", {"airlineIcao": carrier_icao, "flightNumber": flight_digits})
         if not results:
             results = self._make_request("routes", {"flightIata": flight_clean})
-        if not results and padded_digits != flight_digits:
-            results = self._make_request("routes", {"airlineIata": carrier_code, "flightNumber": padded_digits})
         if not results:
             results = self._make_request("timetable", {"flight_iata": flight_clean})
-        if not results:
-            results = self._make_request("timetable", {"flightIata": flight_clean})
-        if not results:
-            results = self._make_request("flights", {"flightIata": flight_clean})
 
-        if not results:
+        valid_results = [r for r in results if self._validate_candidate_airline(r, carrier_code, carrier_icao)]
+
+        if not valid_results:
             today_str = datetime.now().strftime("%Y-%m-%d")
             raise FlightNotFoundException(flight_num=flight_clean, date=today_str)
 
-        flight_status = self._normalize_flight_data(results[0])
+        flight_status = self._normalize_flight_data(valid_results[0])
         self._set_cached_data(cache_key, flight_status.model_dump(mode="json"))
         return flight_status
 

@@ -33,6 +33,8 @@ if database_url:
 # Import Base and models to populate target_metadata for autogenerate
 from app.database import Base
 import app.models.schema  # Ensure all model tables are registered on Base.metadata
+import app.models.journey_models  # Phase 1 Journey Detection Engine models
+import app.models.operations_models  # Phase 6 Operations & Communication Engine models
 
 target_metadata = Base.metadata
 
