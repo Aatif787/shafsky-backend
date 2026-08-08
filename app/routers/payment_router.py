@@ -4,9 +4,12 @@ REST Router for Payment & Invoicing Operations.
 
 import uuid
 from typing import Optional, List
-from fastapi import APIRouter, HTTPException, Depends, Header, status, Query
+import logging
+from fastapi import APIRouter, HTTPException, Depends, Header, status, Query, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import select
+
+logger = logging.getLogger(__name__)
 
 from app.database import get_db
 from app.models.payment import PaymentTransaction, Invoice, Refund
@@ -121,20 +124,56 @@ def get_transaction_endpoint(
         raise HTTPException(status_code=400, detail="Invalid transaction UUID format.")
 
     tx = db.scalar(select(PaymentTransaction).where(PaymentTransaction.id == tx_uuid))
-    if not tx:
-        raise HTTPException(status_code=404, detail="Transaction not found.")
+@router.post(
+    "/razorpay/webhook",
+    response_model=PaymentApiResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Official Razorpay Webhook Callback Endpoint"
+)
+async def razorpay_webhook_endpoint(
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """
+    Official Razorpay Webhook Endpoint.
+    Validates HMAC SHA256 signature, processes server-side payment confirmation (payment.captured, order.paid),
+    and updates booking status to PAID/CONFIRMED idempotently.
+    """
+    body_bytes = await request.body()
+    signature = request.headers.get("X-Razorpay-Signature") or request.headers.get("x-razorpay-signature")
 
-    return PaymentApiResponse(
-        success=True,
-        data={
-            "id": str(tx.id),
-            "transaction_ref": tx.transaction_ref,
-            "entity_type": tx.entity_type,
-            "entity_id": tx.entity_id,
-            "amount": tx.amount,
-            "currency": tx.currency,
-            "status": tx.status.value if hasattr(tx.status, "value") else str(tx.status),
-            "gateway_provider": tx.gateway_provider,
-            "created_at": tx.created_at.isoformat()
-        }
-    )
+    from app.providers.razorpay_provider import razorpay_provider
+    from app.integrations.whatsapp.service import WhatsAppBookingStateMachine
+
+    # Verify signature if configured
+    if razorpay_provider.is_configured():
+        if not razorpay_provider.verify_webhook_signature(body_bytes, signature):
+            raise HTTPException(status_code=400, detail="Invalid Razorpay webhook signature header.")
+
+    try:
+        import json
+        payload = json.loads(body_bytes.decode("utf-8"))
+    except Exception:
+        return PaymentApiResponse(success=False, error="Invalid JSON body")
+
+    event_name = payload.get("event", "unknown")
+    entity = payload.get("payload", {}).get("payment", {}).get("entity", {})
+    if not entity:
+        entity = payload.get("payload", {}).get("payment_link", {}).get("entity", {})
+
+    notes = entity.get("notes", {})
+    booking_ref = notes.get("booking_ref") or entity.get("reference_id") or payload.get("payload", {}).get("order", {}).get("entity", {}).get("receipt")
+    payment_id = entity.get("id") or f"pay_{uuid.uuid4().hex[:10]}"
+
+    logger.info(f"[Razorpay Webhook] Received event '{event_name}' for ref '{booking_ref}'")
+
+    if event_name in ["payment.captured", "payment.authorized", "order.paid", "payment_link.paid"]:
+        if booking_ref:
+            WhatsAppBookingStateMachine.handle_payment_success(db, booking_ref=booking_ref, payment_id=payment_id)
+        return PaymentApiResponse(success=True, data={"status": "PAID", "event": event_name, "booking_ref": booking_ref})
+
+    elif event_name in ["payment.failed"]:
+        logger.warning(f"[Razorpay Webhook] Payment failed for booking ref '{booking_ref}'")
+        return PaymentApiResponse(success=True, data={"status": "FAILED", "event": event_name, "booking_ref": booking_ref})
+
+    return PaymentApiResponse(success=True, data={"status": "ignored", "event": event_name})

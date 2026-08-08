@@ -188,6 +188,147 @@ class WhatsAppClient:
         """Convenience method for text messages."""
         return self.send_message(to_phone=to_phone, message_body=message_body)
 
+    def send_interactive_buttons(
+        self,
+        to_phone: str,
+        body_text: str,
+        buttons: List[Dict[str, str]],
+        header_text: Optional[str] = None,
+        footer_text: Optional[str] = "Shafsky Aviation"
+    ) -> Dict[str, Any]:
+        """
+        Sends Meta WhatsApp Interactive Reply Buttons (max 3 buttons).
+        buttons format: [{"id": "btn_1", "title": "Button 1"}, ...]
+        """
+        self._load_config()
+        clean_phone = "".join(filter(str.isdigit, str(to_phone)))
+
+        formatted_buttons = []
+        for btn in buttons[:3]:
+            formatted_buttons.append({
+                "type": "reply",
+                "reply": {
+                    "id": str(btn.get("id")),
+                    "title": str(btn.get("title"))[:20]  # Meta limit 20 chars
+                }
+            })
+
+        interactive_obj: Dict[str, Any] = {
+            "type": "button",
+            "body": {"text": body_text},
+            "action": {"buttons": formatted_buttons}
+        }
+        if header_text:
+            interactive_obj["header"] = {"type": "text", "text": header_text[:60]}
+        if footer_text:
+            interactive_obj["footer"] = {"text": footer_text[:60]}
+
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": clean_phone,
+            "type": "interactive",
+            "interactive": interactive_obj
+        }
+
+        return self._post_payload(clean_phone, payload)
+
+    def send_interactive_list(
+        self,
+        to_phone: str,
+        body_text: str,
+        button_title: str,
+        sections: List[Dict[str, Any]],
+        header_text: Optional[str] = None,
+        footer_text: Optional[str] = "Shafsky Aviation"
+    ) -> Dict[str, Any]:
+        """
+        Sends Meta WhatsApp Interactive Radio/List Menu (up to 10 rows total).
+        """
+        self._load_config()
+        clean_phone = "".join(filter(str.isdigit, str(to_phone)))
+
+        interactive_obj: Dict[str, Any] = {
+            "type": "list",
+            "body": {"text": body_text},
+            "action": {
+                "button": button_title[:20],
+                "sections": sections
+            }
+        }
+        if header_text:
+            interactive_obj["header"] = {"type": "text", "text": header_text[:60]}
+        if footer_text:
+            interactive_obj["footer"] = {"text": footer_text[:60]}
+
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": clean_phone,
+            "type": "interactive",
+            "interactive": interactive_obj
+        }
+
+        return self._post_payload(clean_phone, payload)
+
+    def _post_payload(self, clean_phone: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Internal helper for posting arbitrary payload to Graph API."""
+        if not self.is_configured():
+            logger.warning("[WhatsApp] Send skipped: WHATSAPP_ACCESS_TOKEN or WHATSAPP_PHONE_NUMBER_ID is not configured.")
+            return {
+                "success": False,
+                "error": "WhatsApp Cloud API integration is not configured in backend environment.",
+                "status": "unconfigured"
+            }
+
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "Content-Type": "application/json"
+        }
+
+        try:
+            with httpx.Client(timeout=12.0) as client:
+                response = client.post(self.base_url, headers=headers, json=payload)
+                masked_phone = f"{clean_phone[:3]}****{clean_phone[-3:]}" if len(clean_phone) > 6 else clean_phone
+
+                if response.status_code in (200, 201):
+                    data = response.json()
+                    message_id = None
+                    if "messages" in data and len(data["messages"]) > 0:
+                        message_id = data["messages"][0].get("id")
+
+                    logger.info(f"[WhatsApp] Interactive message dispatched to {masked_phone}. Message ID: {message_id}")
+                    return {
+                        "success": True,
+                        "message_id": message_id,
+                        "status": "sent",
+                        "response": data
+                    }
+
+                err_data = {}
+                try:
+                    err_data = response.json().get("error", {})
+                except Exception:
+                    pass
+
+                error_msg = err_data.get("message", response.text)
+                if self.access_token and self.access_token in error_msg:
+                    error_msg = error_msg.replace(self.access_token, "[REDACTED]")
+
+                return {
+                    "success": False,
+                    "status_code": response.status_code,
+                    "error": f"Meta API Error ({response.status_code}): {error_msg}",
+                    "status": "failed"
+                }
+
+        except Exception as err:
+            return {
+                "success": False,
+                "error": f"Network exception: {str(err)}",
+                "status": "failed"
+            }
+
 
 # Global Singleton Instance
 whatsapp_client = WhatsAppClient()

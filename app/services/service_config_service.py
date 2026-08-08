@@ -319,7 +319,7 @@ DEFAULT_SERVICE_CATALOG = [
         "id": "travel_support_hotel_booking",
         "title": "Hotel Booking",
         "category": "Travel Support",
-        "description": "VIP luxury 5-star hotel concierge booking with room upgrades and flexible check-in.",
+        "description": "VIP luxury 5-star hotel booking with room upgrades and flexible check-in.",
         "base_price": 10000.0,
         "currency": "INR",
         "is_active": True,
@@ -332,13 +332,13 @@ DEFAULT_SERVICE_CATALOG = [
         "id": "travel_support_vip_escort",
         "title": "VIP Escort",
         "category": "Travel Support",
-        "description": "Private security and personal concierge escort throughout travel itinerary.",
+        "description": "Private security and personal executive escort throughout travel itinerary.",
         "base_price": 20000.0,
         "currency": "INR",
         "is_active": True,
         "is_hidden": False,
         "sort_order": 53,
-        "features": ["Close protection", "Personal concierge", "Dedicated coordinator"],
+        "features": ["Close protection", "Personal assistant", "Dedicated coordinator"],
         "options_schema": {}
     }
 ]

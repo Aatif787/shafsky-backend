@@ -4,6 +4,7 @@ Tests Webhook Verification GET, Event Ingestion POST, Status Parsing, Outbound E
 Health Checks, and Test Dispatch Endpoints.
 """
 
+import uuid
 import pytest
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
@@ -66,7 +67,7 @@ def test_whatsapp_webhook_post_message_parsing(mock_send, monkeypatch):
                             "messages": [
                                 {
                                     "from": "919876543210",
-                                    "id": "wamid.inbound_msg_001",
+                                    "id": f"wamid.inbound_{uuid.uuid4().hex[:8]}",
                                     "timestamp": "1678900000",
                                     "text": {"body": "I need help with my booking"},
                                     "type": "text"

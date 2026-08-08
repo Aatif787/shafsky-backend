@@ -2,6 +2,7 @@
 Unit Test Suite for Meta WhatsApp Cloud API Integration Module.
 """
 
+import uuid
 import pytest
 from fastapi.testclient import TestClient
 
@@ -52,7 +53,7 @@ def test_whatsapp_incoming_event_ingestion():
                             "messages": [
                                 {
                                     "from": "919876543210",
-                                    "id": "wamid.HBgMOTE5ODc2NTQzMjEwFQIAERgSQjE2OEYwNkU1OEU4NENFQkIA",
+                                    "id": f"wamid.mod_{uuid.uuid4().hex[:8]}",
                                     "timestamp": "1678900000",
                                     "text": {"body": "Check my booking status"},
                                     "type": "text"
