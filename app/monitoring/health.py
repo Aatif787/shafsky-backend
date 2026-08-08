@@ -48,6 +48,10 @@ class HealthCheckSuite:
             "subsystems": {
                 "database": db_health,
                 "notificationService": {"status": "HEALTHY", "provider": "Resend & Meta Cloud API"},
+                "whatsapp": {
+                    "configured": bool(settings.WHATSAPP_ACCESS_TOKEN and settings.WHATSAPP_PHONE_NUMBER_ID),
+                    "api_version": settings.WHATSAPP_API_VERSION
+                },
                 "systemResources": resources
             }
         }

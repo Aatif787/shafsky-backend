@@ -100,6 +100,7 @@ def get_services_at_airport(
     journey_type: Optional[str] = Query(None, description="Filter by journey type: ARRIVAL, DEPARTURE, TRANSIT"),
     flight_type: Optional[str] = Query(None, description="Filter by flight type: DOMESTIC, INTERNATIONAL"),
     terminal: Optional[str] = Query(None, description="Filter by terminal e.g. Terminal 1 & 2, Terminal 3"),
+    include_inactive: bool = Query(False, description="Whether to include inactive/draft services"),
     db: Session = Depends(get_db),
 ):
     airport = JourneyDetectionEngine.get_airport_by_iata(db, iata_code)
@@ -109,7 +110,9 @@ def get_services_at_airport(
             detail=f"Airport with IATA code '{iata_code.upper()}' not found.",
         )
 
-    mappings = JourneyDetectionEngine.get_services_for_airport(db, iata_code, journey_type, flight_type, terminal)
+    mappings = JourneyDetectionEngine.get_services_for_airport(
+        db, iata_code, journey_type, flight_type, terminal, include_inactive=include_inactive
+    )
 
     data = []
     for m in mappings:

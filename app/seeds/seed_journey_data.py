@@ -74,6 +74,36 @@ AIRPORTS = [
         "is_supported": True,
         "is_active": True,
     },
+    {
+        "airport_name": "Dabolim International Airport",
+        "iata_code": "GOI",
+        "icao_code": "VOGO",
+        "city": "Goa",
+        "country": "India",
+        "timezone": "Asia/Kolkata",
+        "is_supported": True,
+        "is_active": True,
+    },
+    {
+        "airport_name": "Jaipur International Airport",
+        "iata_code": "JAI",
+        "icao_code": "VIJP",
+        "city": "Jaipur",
+        "country": "India",
+        "timezone": "Asia/Kolkata",
+        "is_supported": True,
+        "is_active": True,
+    },
+    {
+        "airport_name": "Sri Guru Ram Dass Jee International Airport",
+        "iata_code": "ATQ",
+        "icao_code": "VIAR",
+        "city": "Amritsar",
+        "country": "India",
+        "timezone": "Asia/Kolkata",
+        "is_supported": True,
+        "is_active": True,
+    },
 ]
 
 SERVICES = [
@@ -94,11 +124,19 @@ SERVICES = [
         "is_active": True,
     },
     {
+        "name": "Elite Plus Service",
+        "slug": "elite_plus",
+        "description": "Complete premium airport assistance with flexible booking benefits.",
+        "icon": "Award",
+        "display_order": 3,
+        "is_active": True,
+    },
+    {
         "name": "Silver Service",
         "slug": "silver",
         "description": "Premium domestic departure assistance from curbside to the boarding gate with dedicated airport support.",
         "icon": "ShieldCheck",
-        "display_order": 3,
+        "display_order": 4,
         "is_active": True,
     },
     {
@@ -1702,14 +1740,991 @@ def seed_ccu_production_packages(db: Session, ccu_airport: SupportedAirport, ser
     print("  + Created CCU Production Packages: Domestic Dep/Arr + International Dep/Arr")
 
 
+def seed_bom_production_packages(db: Session, bom_airport: SupportedAirport, service_map: dict[str, Service]):
+    """
+    For Mumbai Airport (BOM) Domestic Departure & Domestic Arrival:
+    Seeds real production packages:
+    - Domestic Departure: Platinum (₹3,850), Elite (₹4,950), Elite Plus (₹7,040)
+    - Domestic Arrival: Platinum (₹3,600), Elite (₹4,950), Elite Plus (₹7,040)
+    """
+    print("\n-- Configuring Production Packages for Mumbai (BOM) Domestic Departure & Domestic Arrival --")
+
+    # 1. Clear all existing services mapped to BOM to avoid duplicates
+    db.query(AirportService).filter_by(
+        airport_id=bom_airport.id,
+    ).delete(synchronize_session=False)
+
+    plat_svc = service_map.get("platinum")
+    elite_svc = service_map.get("elite")
+    elite_plus_svc = service_map.get("elite_plus")
+
+    # ── DOMESTIC DEPARTURE PACKAGES ──
+    # 1. Platinum Service (₹3,850)
+    if plat_svc:
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=bom_airport.id,
+            service_id=plat_svc.id,
+            journey_type="DEPARTURE",
+            flight_type="DOMESTIC",
+            short_description="Premium domestic departure assistance from the curbside area to the boarding gate.",
+            features=[
+                "Welcome at the Curbside Area",
+                "Dedicated Porter Service",
+                "Wheelchair Assistance (through the airline)",
+                "Assistance through the Separate Entry Gate",
+                "Assistance with Separate Baggage Check-in at the Airline Counter",
+                "Assistance inside the Security Hold Area (SHA)",
+                "Buggy Service to the Boarding Gate (Sharing Basis, subject to availability)",
+                "Escort to the Boarding Gate",
+            ],
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=1,
+            price=3850.00,
+            currency="INR",
+        ))
+
+    # 2. Elite Service (₹4,950)
+    if elite_svc:
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=bom_airport.id,
+            service_id=elite_svc.id,
+            journey_type="DEPARTURE",
+            flight_type="DOMESTIC",
+            short_description="Enhanced domestic departure assistance with lounge access and dedicated airport support.",
+            features=[
+                "Welcome at the Curbside Area",
+                "Dedicated Porter Service",
+                "Wheelchair Assistance (through the airline)",
+                "Assistance through the Separate Entry Gate",
+                "Assistance with Separate Check-in at the Airline Counters",
+                "Assistance inside the Security Hold Area (SHA)",
+                "Lounge Service Facility",
+                "Buggy Service to the Boarding Gate (subject to availability)",
+                "Escort to the Boarding Gate",
+            ],
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=2,
+            price=4950.00,
+            currency="INR",
+        ))
+
+    # 3. Elite Plus Service (₹7,040)
+    if elite_plus_svc:
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=bom_airport.id,
+            service_id=elite_plus_svc.id,
+            journey_type="DEPARTURE",
+            flight_type="DOMESTIC",
+            short_description="Complete premium domestic departure assistance with lounge access and flexible booking benefits.",
+            features=[
+                "Welcome at the Curbside Area",
+                "Dedicated Porter Service",
+                "Wheelchair Assistance (through the airline)",
+                "Assistance through the Separate Entry Gate",
+                "Assistance with Separate Check-in at the Airline Counters",
+                "Assistance inside the Security Hold Area (SHA)",
+                "Lounge Service Facility",
+                "Buggy Service to the Boarding Gate (subject to availability)",
+                "Escort to the Boarding Gate",
+            ],
+            additional_benefits=[
+                "Free cancellation up to 12 hours before the scheduled service time",
+                "One-time rescheduling with a minimum of 6 hours' prior notice",
+            ],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=3,
+            price=7040.00,
+            currency="INR",
+        ))
+
+    # ── DOMESTIC ARRIVAL PACKAGES ──
+    # 1. Platinum Service (₹3,600)
+    if plat_svc:
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=bom_airport.id,
+            service_id=plat_svc.id,
+            journey_type="ARRIVAL",
+            flight_type="DOMESTIC",
+            short_description="Premium domestic arrival assistance from the end of the aerobridge to the car parking area.",
+            features=[
+                "Welcome at the End of the Aerobridge",
+                "Dedicated Staff with Personalized Placard",
+                "Dedicated Porter Service at Arrivals",
+                "Buggy Service from the End of the Aerobridge (Sharing Basis, subject to availability)",
+                "Wheelchair Assistance (through the airline)",
+                "Assistance at the Baggage Belt Area",
+                "Escort to the Car Parking Area",
+            ],
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=1,
+            price=3600.00,
+            currency="INR",
+        ))
+
+    # 2. Elite Service (₹4,950)
+    if elite_svc:
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=bom_airport.id,
+            service_id=elite_svc.id,
+            journey_type="ARRIVAL",
+            flight_type="DOMESTIC",
+            short_description="Enhanced domestic arrival assistance with dedicated airport support from the aerobridge to the car parking area.",
+            features=[
+                "Welcome at the End of the Aerobridge",
+                "Dedicated Staff with Personalized Placard",
+                "Dedicated Porter Service at Arrivals",
+                "Buggy Service from the End of the Aerobridge (subject to availability)",
+                "Wheelchair Assistance (through the airline)",
+                "Assistance at the Baggage Belt Area",
+                "Escort to the Car Parking Area",
+            ],
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=2,
+            price=4950.00,
+            currency="INR",
+        ))
+
+    # 3. Elite Plus Service (₹7,040)
+    if elite_plus_svc:
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=bom_airport.id,
+            service_id=elite_plus_svc.id,
+            journey_type="ARRIVAL",
+            flight_type="DOMESTIC",
+            short_description="Complete premium domestic arrival assistance with flexible booking benefits.",
+            features=[
+                "Welcome at the End of the Aerobridge",
+                "Dedicated Staff with Personalized Placard",
+                "Dedicated Porter Service at Arrivals",
+                "Buggy Service from the End of the Aerobridge (subject to availability)",
+                "Wheelchair Assistance (through the airline)",
+                "Assistance at the Baggage Belt Area",
+                "Escort to the Car Parking Area",
+            ],
+            additional_benefits=[
+                "Free cancellation up to 12 hours before the scheduled service time",
+                "One-time rescheduling with a minimum of 6 hours' prior notice",
+            ],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=3,
+            price=7040.00,
+            currency="INR",
+        ))
+
+    # ── INTERNATIONAL DEPARTURE PACKAGES ──
+    # 1. Platinum Service (₹7,700)
+    if plat_svc:
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=bom_airport.id,
+            service_id=plat_svc.id,
+            journey_type="DEPARTURE",
+            flight_type="INTERNATIONAL",
+            short_description="Premium international departure assistance from the curbside area to the boarding gate.",
+            features=[
+                "Welcome at the Curbside Area",
+                "Dedicated Porter Service",
+                "Wheelchair Assistance (through the airline)",
+                "Assistance through the Separate Entry Gate",
+                "Assistance at the Money Exchange Counter",
+                "Assistance with Baggage Wrapping Facilities",
+                "Assistance with Separate Baggage Check-in at the Airline Counter",
+                "Assistance through Immigration",
+                "Assistance inside the Security Hold Area (SHA)",
+                "Buggy Service to the Boarding Gate (subject to availability)",
+                "Escort to the Boarding Gate",
+            ],
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=1,
+            price=7700.00,
+            currency="INR",
+        ))
+
+    # 2. Elite Service (₹9,000)
+    if elite_svc:
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=bom_airport.id,
+            service_id=elite_svc.id,
+            journey_type="DEPARTURE",
+            flight_type="INTERNATIONAL",
+            short_description="Enhanced international departure assistance with lounge access and dedicated airport support.",
+            features=[
+                "Welcome at the Curbside Area",
+                "Dedicated Porter Service",
+                "Wheelchair Assistance (through the airline)",
+                "Assistance through the Separate Entry Gate",
+                "Assistance at the Money Exchange Counter",
+                "Assistance with Baggage Wrapping Facilities",
+                "Assistance with Separate Baggage Check-in at the Airline Counter",
+                "Assistance through Immigration",
+                "Assistance inside the Security Hold Area (SHA)",
+                "Lounge Service Facility",
+                "Buggy Service to the Boarding Gate (subject to availability)",
+                "Escort to the Boarding Gate",
+            ],
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=2,
+            price=9000.00,
+            currency="INR",
+        ))
+
+    # 3. Elite Plus Service (₹13,500)
+    if elite_plus_svc:
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=bom_airport.id,
+            service_id=elite_plus_svc.id,
+            journey_type="DEPARTURE",
+            flight_type="INTERNATIONAL",
+            short_description="Complete premium international departure assistance with lounge access and flexible booking benefits.",
+            features=[
+                "Welcome at the Curbside Area",
+                "Dedicated Porter Service",
+                "Wheelchair Assistance (through the airline)",
+                "Assistance through the Separate Entry Gate",
+                "Assistance at the Money Exchange Counter",
+                "Assistance with Baggage Wrapping Facilities",
+                "Assistance with Separate Baggage Check-in at the Airline Counter",
+                "Assistance through Immigration",
+                "Assistance inside the Security Hold Area (SHA)",
+                "Lounge Service Facility",
+                "Buggy Service to the Boarding Gate (subject to availability)",
+                "Escort to the Boarding Gate",
+            ],
+            additional_benefits=[
+                "Free cancellation up to 12 hours before the scheduled service time",
+                "One-time rescheduling with a minimum of 6 hours' prior notice",
+            ],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=3,
+            price=13500.00,
+            currency="INR",
+        ))
+
+    # ── INTERNATIONAL ARRIVAL PACKAGES ──
+    # 1. Platinum Service (₹8,690)
+    if plat_svc:
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=bom_airport.id,
+            service_id=plat_svc.id,
+            journey_type="ARRIVAL",
+            flight_type="INTERNATIONAL",
+            short_description="Premium international arrival assistance from the aerobridge to the car parking area.",
+            features=[
+                "Welcome at the Aerobridge",
+                "Dedicated Staff with Personalized Placard",
+                "Dedicated Porter Service at Arrivals",
+                "Buggy Service from the End of the Aerobridge (Sharing Basis, subject to availability)",
+                "Assistance through the Immigration Counter",
+                "Assistance at the Duty Free Shop",
+                "Assistance at the Baggage Belt Area",
+                "Assistance through Customs",
+                "Escort to the Car Parking Area",
+            ],
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=1,
+            price=8690.00,
+            currency="INR",
+        ))
+
+    # 2. Elite Service (₹9,900)
+    if elite_svc:
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=bom_airport.id,
+            service_id=elite_svc.id,
+            journey_type="ARRIVAL",
+            flight_type="INTERNATIONAL",
+            short_description="Enhanced international arrival assistance with dedicated airport support from the aerobridge to the car parking area.",
+            features=[
+                "Welcome at the Aerobridge",
+                "Dedicated Staff with Personalized Placard",
+                "Dedicated Porter Service at Arrivals",
+                "Buggy Service from the End of the Aerobridge (subject to availability)",
+                "Assistance through the Immigration Counter",
+                "Assistance at the Duty Free Shop",
+                "Assistance at the Baggage Belt Area",
+                "Assistance through Customs",
+                "Escort to the Car Parking Area",
+            ],
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=2,
+            price=9900.00,
+            currency="INR",
+        ))
+
+    # 3. Elite Plus Service (₹13,500)
+    if elite_plus_svc:
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=bom_airport.id,
+            service_id=elite_plus_svc.id,
+            journey_type="ARRIVAL",
+            flight_type="INTERNATIONAL",
+            short_description="Complete premium international arrival assistance with flexible booking benefits.",
+            features=[
+                "Welcome at the Aerobridge",
+                "Dedicated Staff with Personalized Placard",
+                "Dedicated Porter Service at Arrivals",
+                "Buggy Service from the Aerobridge (subject to availability)",
+                "Assistance at the Baggage Belt Area",
+                "Assistance through the Immigration Counter",
+                "Assistance at the Duty Free Shop",
+                "Escort to the Parking Area",
+            ],
+            additional_benefits=[
+                "Free cancellation up to 12 hours before the scheduled service time",
+                "One-time rescheduling with a minimum of 6 hours' prior notice",
+            ],
+            min_booking_notice_hours=6,
+            display_priority=3,
+            price=13500.00,
+            currency="INR",
+        ))
+
+    # ── TRANSIT PACKAGES ──
+    transit_svc = service_map.get("meet_greet") or plat_svc
+
+    if transit_svc:
+        # 1. Domestic → Domestic (₹7,150)
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=bom_airport.id,
+            service_id=transit_svc.id,
+            journey_type="TRANSIT",
+            flight_type="DOMESTIC_DOMESTIC",
+            short_description="Domestic transit assistance from arrival through the connecting flight boarding gate.",
+            features=[
+                "Welcome at the Aerobridge",
+                "Dedicated Staff with Personalized Placard",
+                "Dedicated Porter Service at Arrivals",
+                "Wheelchair Assistance (through the airline)",
+                "Buggy Service from the End of the Aerobridge",
+                "Assistance inside the Security Hold Area (Transit Area)",
+                "Lounge Access for up to 2 hours (Departure only)",
+                "Buggy Service to the Boarding Gate (subject to availability)",
+                "Escort to the Boarding Gate",
+            ],
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=1,
+            price=7150.00,
+            currency="INR",
+        ))
+
+        # 2. Domestic → International (₹9,000 - DRAFT / INACTIVE)
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=bom_airport.id,
+            service_id=transit_svc.id,
+            journey_type="TRANSIT",
+            flight_type="DOMESTIC_INTERNATIONAL",
+            short_description="Domestic to international transit assistance.",
+            features=[],
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=False,  # DRAFT / INACTIVE
+            display_priority=2,
+            price=9000.00,
+            currency="INR",
+        ))
+
+        # 3. International → Domestic (₹9,000)
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=bom_airport.id,
+            service_id=transit_svc.id,
+            journey_type="TRANSIT",
+            flight_type="INTERNATIONAL_DOMESTIC",
+            short_description="International-to-domestic transit assistance from arrival through the connecting domestic boarding gate.",
+            features=[
+                "Welcome at the Aerobridge",
+                "Dedicated Staff with Personalized Placard",
+                "Dedicated Porter Service at Arrivals",
+                "Buggy Service from the End of the Aerobridge",
+                "Wheelchair Assistance (through the airline)",
+                "Guidance to the Immigration Counter",
+                "Assistance at the Baggage Belt Area",
+                "Assistance with Separate Check-in at the Airline Counters",
+                "Assistance inside the Security Hold Area (SHA)",
+                "Lounge Access for up to 2 hours (Departure only)",
+                "Buggy Service to the Boarding Gate (subject to availability)",
+                "Escort to the Boarding Gate",
+            ],
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=3,
+            price=9000.00,
+            currency="INR",
+        ))
+
+        # 4. International → International (₹10,000)
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=bom_airport.id,
+            service_id=transit_svc.id,
+            journey_type="TRANSIT",
+            flight_type="INTERNATIONAL_INTERNATIONAL",
+            short_description="International transit assistance from the arriving flight through the airport transit process to the next connecting flight.",
+            features=[
+                "Warm welcome at the Aerobridge or Bus Gate by a porter",
+                "Dedicated porter assistance from the Aerobridge on arrival to the boarding gate of the next connecting flight",
+                "Guidance through the airport and airline transit process",
+                "Facilitation through security according to the passenger's class of travel",
+                "Adani Lounge access with snacks, food, and non-alcoholic beverages",
+                "Golf cart transfer to the lounge or boarding gate, subject to the boarding gate location",
+            ],
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=4,
+            price=10000.00,
+            currency="INR",
+        ))
+
+    db.flush()
+    print("  + Created BOM Production Packages: Domestic & International Departure & Arrival + Transit")
+
+
+def seed_goi_production_packages(db: Session, goi_airport: SupportedAirport, service_map: dict[str, Service]):
+    """
+    For Goa Dabolim Airport (GOI):
+    Seeds production packages:
+    - Domestic Departure: Silver Service (₹2,500), Gold Service (₹4,000)
+    - Domestic Arrival: Silver Service (₹2,500)
+    - International Departure: Silver Service (₹2,000)
+    - International Arrival: Silver Service (₹2,000)
+    """
+    print("\n-- Configuring Production Packages for Goa Dabolim Airport (GOI) --")
+
+    # 1. Clear all existing services mapped to GOI to avoid duplicates
+    db.query(AirportService).filter_by(
+        airport_id=goi_airport.id,
+    ).delete(synchronize_session=False)
+
+    silver_svc = service_map.get("silver")
+    gold_svc = service_map.get("gold")
+
+    # ── 1. DOMESTIC DEPARTURE PACKAGES ──
+    # Silver Service (₹2,500)
+    if silver_svc:
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=goi_airport.id,
+            service_id=silver_svc.id,
+            journey_type="DEPARTURE",
+            flight_type="DOMESTIC",
+            short_description="Domestic departure assistance from the departure curbside to the boarding gate.",
+            features=[
+                "Welcome at the Departure Curbside / Car Drop Area",
+                "Dedicated Porter Service",
+                "Wheelchair Assistance (through the airline)",
+                "Assistance at the Domestic Departure Area",
+                "Assistance with Separate Baggage Check-in at the Airline Counter",
+                "Assistance inside the Security Hold Area (SHA)",
+                "Escort to the Boarding Gate",
+            ],
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=1,
+            price=2500.00,
+            currency="INR",
+        ))
+
+    # Gold Service (₹4,000)
+    if gold_svc:
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=goi_airport.id,
+            service_id=gold_svc.id,
+            journey_type="DEPARTURE",
+            flight_type="DOMESTIC",
+            short_description="Enhanced domestic departure assistance with lounge service and dedicated airport support.",
+            features=[
+                "Welcome at the Departure Curbside / Car Drop Area",
+                "Dedicated Porter Service",
+                "Wheelchair Assistance (through the airline)",
+                "Assistance at the Domestic Departure Area",
+                "Assistance with Separate Baggage Check-in at the Airline Counter",
+                "Assistance inside the Security Hold Area (SHA)",
+                "Lounge Service Facility",
+                "Escort to the Boarding Gate",
+            ],
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=2,
+            price=4000.00,
+            currency="INR",
+        ))
+
+    # ── 2. DOMESTIC ARRIVAL PACKAGES ──
+    # Silver Service (₹2,500)
+    if silver_svc:
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=goi_airport.id,
+            service_id=silver_svc.id,
+            journey_type="ARRIVAL",
+            flight_type="DOMESTIC",
+            short_description="Domestic arrival assistance from the end of the aerobridge to the car parking area.",
+            features=[
+                "Welcome at the End of the Aerobridge",
+                "Dedicated Staff with Personalized Placard",
+                "Dedicated Porter Service at Arrivals",
+                "Wheelchair Assistance (through the airline)",
+                "Assistance at the Baggage Belt Area",
+                "Escort to the Car Parking Area",
+            ],
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=1,
+            price=2500.00,
+            currency="INR",
+        ))
+
+    # ── 3. INTERNATIONAL DEPARTURE PACKAGES ──
+    # Silver Service (₹2,000)
+    if silver_svc:
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=goi_airport.id,
+            service_id=silver_svc.id,
+            journey_type="DEPARTURE",
+            flight_type="INTERNATIONAL",
+            short_description="International departure assistance from the curbside area to the boarding gate.",
+            features=[
+                "Welcome at the Curbside Area / Car Drop Area",
+                "Dedicated Porter Service",
+                "Wheelchair Assistance (through the airline)",
+                "Assistance at the Money Exchange Counter",
+                "Assistance with Baggage Wrapping Facilities",
+                "Assistance with Separate Baggage Check-in at the Airline Counter",
+                "Assistance through Immigration",
+                "Assistance inside the Security Hold Area (SHA)",
+                "Escort to the Boarding Gate",
+            ],
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=1,
+            price=2000.00,
+            currency="INR",
+        ))
+
+    # ── 4. INTERNATIONAL ARRIVAL PACKAGES ──
+    # Silver Service (₹2,000)
+    if silver_svc:
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=goi_airport.id,
+            service_id=silver_svc.id,
+            journey_type="ARRIVAL",
+            flight_type="INTERNATIONAL",
+            short_description="International arrival assistance from post-customs to the car parking area.",
+            features=[
+                "Welcome after Customs Clearance",
+                "Dedicated Porter Service (up to 3 bags per passenger)",
+                "Assistance at the Baggage Belt Area",
+                "Coordination with the Receiving Party",
+                "Escort to the Car Parking Area",
+            ],
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=1,
+            price=2000.00,
+            currency="INR",
+        ))
+
+    db.flush()
+    print("  + Created GOI Production Packages: Domestic Dep (Silver INR 2,500, Gold INR 4,000), Domestic Arr (Silver INR 2,500), Intl Dep (Silver INR 2,000), Intl Arr (Silver INR 2,000)")
+
+
+def seed_jai_production_packages(db: Session, jai_airport: SupportedAirport, service_map: dict[str, Service]):
+    """
+    For Jaipur International Airport (JAI):
+    Seeds production packages:
+    - Domestic Departure: Platinum Service (₹2,420), Elite Service (₹4,400)
+    - Domestic Arrival: Platinum Service (₹2,420), Elite Service (₹4,400)
+    """
+    print("\n-- Configuring Production Packages for Jaipur International Airport (JAI) --")
+
+    # 1. Clear all existing services mapped to JAI to avoid duplicates
+    db.query(AirportService).filter_by(
+        airport_id=jai_airport.id,
+    ).delete(synchronize_session=False)
+
+    plat_svc = service_map.get("platinum")
+    elite_svc = service_map.get("elite")
+
+    # ── 1. DOMESTIC DEPARTURE PACKAGES ──
+    # Platinum Service (₹2,420)
+    if plat_svc:
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=jai_airport.id,
+            service_id=plat_svc.id,
+            journey_type="DEPARTURE",
+            flight_type="DOMESTIC",
+            short_description="Premium domestic departure assistance from the curbside area to the boarding gate.",
+            features=[
+                "Welcome at the Curbside Area",
+                "Dedicated Porter Service",
+                "Wheelchair Assistance (through the airline)",
+                "Assistance through the Separate Entry Gate",
+                "Assistance with Baggage Wrapping Facilities",
+                "Assistance with Separate Baggage Check-in at the Airline Counter",
+                "Assistance inside the Security Hold Area (SHA)",
+                "Escort to the Boarding Gate",
+            ],
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=1,
+            price=2420.00,
+            currency="INR",
+        ))
+
+    # Elite Service (₹4,400)
+    if elite_svc:
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=jai_airport.id,
+            service_id=elite_svc.id,
+            journey_type="DEPARTURE",
+            flight_type="DOMESTIC",
+            short_description="Complete premium domestic departure assistance with lounge service and flexible booking benefits.",
+            features=[
+                "Welcome at the Curbside Area",
+                "Dedicated Porter Service",
+                "Wheelchair Assistance (through the airline)",
+                "Assistance through the Separate Entry Gate",
+                "Assistance with Baggage Wrapping Facilities",
+                "Assistance at the Separate Check-in Process at the Counters",
+                "Assistance inside the Security Hold Area (SHA)",
+                "Lounge Service Facility",
+                "Escort to the Boarding Gate",
+            ],
+            additional_benefits=[
+                "Cancellation benefits up to 12 hours before the scheduled service time",
+                "Minimum 6 hours' prior notice required for rescheduling",
+            ],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=2,
+            price=4400.00,
+            currency="INR",
+        ))
+
+    # ── 2. DOMESTIC ARRIVAL PACKAGES ──
+    # Platinum Service (₹2,420)
+    if plat_svc:
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=jai_airport.id,
+            service_id=plat_svc.id,
+            journey_type="ARRIVAL",
+            flight_type="DOMESTIC",
+            short_description="Premium domestic arrival assistance from the aerobridge to the car parking area.",
+            features=[
+                "Welcome at the Aerobridge",
+                "Dedicated Staff with Personalized Placard",
+                "Dedicated Porter Service at Arrivals",
+                "Wheelchair Assistance (through the airline)",
+                "Assistance at the Baggage Belt Area",
+                "Escort to the Car Parking Area",
+            ],
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=1,
+            price=2420.00,
+            currency="INR",
+        ))
+
+    # Elite Service (₹4,400)
+    if elite_svc:
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=jai_airport.id,
+            service_id=elite_svc.id,
+            journey_type="ARRIVAL",
+            flight_type="DOMESTIC",
+            short_description="Premium domestic arrival assistance with dedicated airport support from the aerobridge to the car parking area.",
+            features=[
+                "Welcome at the Aerobridge",
+                "Dedicated Staff with Personalized Placard",
+                "Dedicated Porter Service at Arrivals",
+                "Wheelchair Assistance (through the airline)",
+                "Assistance at the Baggage Belt Area",
+                "Escort to the Car Parking Area",
+            ],
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=2,
+            price=4400.00,
+            currency="INR",
+        ))
+
+    # ── 3. INTERNATIONAL DEPARTURE PACKAGES ──
+    # 1. Platinum Service (₹3,300)
+    if plat_svc:
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=jai_airport.id,
+            service_id=plat_svc.id,
+            journey_type="DEPARTURE",
+            flight_type="INTERNATIONAL",
+            short_description="Premium international departure assistance from the curbside area to the boarding gate.",
+            features=[
+                "Welcome at the Curbside Area",
+                "Dedicated Porter Service",
+                "Wheelchair Assistance (through the airline)",
+                "Assistance through the Separate Entry Gate",
+                "Assistance at the Money Exchange Counter",
+                "Assistance with Baggage Wrapping Facilities",
+                "Assistance with Separate Baggage Check-in at the Airline Counter",
+                "Assistance through Immigration",
+                "Assistance inside the Security Hold Area (SHA)",
+                "Escort to the Boarding Gate",
+            ],
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=1,
+            price=3300.00,
+            currency="INR",
+        ))
+
+    # 2. Elite Service (₹4,950)
+    if elite_svc:
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=jai_airport.id,
+            service_id=elite_svc.id,
+            journey_type="DEPARTURE",
+            flight_type="INTERNATIONAL",
+            short_description="Complete premium international departure assistance with lounge access and flexible booking benefits.",
+            features=[
+                "Welcome at the Curbside Area",
+                "Dedicated Porter Service",
+                "Wheelchair Assistance (through the airline)",
+                "Assistance through the Separate Entry Gate",
+                "Assistance at the Money Exchange Counter",
+                "Assistance with Baggage Wrapping Facilities",
+                "Assistance with Separate Baggage Check-in at the Airline Counter",
+                "Assistance through Immigration",
+                "Assistance inside the Security Hold Area (SHA)",
+                "Lounge Service Facility (up to 2 hours)",
+                "Escort to the Boarding Gate",
+            ],
+            additional_benefits=[
+                "Cancellation benefits up to 12 hours before the scheduled service time",
+                "Minimum 6 hours' prior notice required for rescheduling",
+            ],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=2,
+            price=4950.00,
+            currency="INR",
+        ))
+
+    # ── 4. INTERNATIONAL ARRIVAL PACKAGES ──
+    # 1. Platinum Service (₹2,750)
+    if plat_svc:
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=jai_airport.id,
+            service_id=plat_svc.id,
+            journey_type="ARRIVAL",
+            flight_type="INTERNATIONAL",
+            short_description="Premium international arrival assistance from post-immigration through customs to the car parking area.",
+            features=[
+                "Welcome after Immigration",
+                "Assistance at the Duty Free Shop",
+                "Assistance at the Baggage Belt Area",
+                "Assistance after Customs",
+                "Coordination with the Receiving Person",
+                "Escort to the Car Parking Area",
+            ],
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=1,
+            price=2750.00,
+            currency="INR",
+        ))
+
+    db.flush()
+    print("  + Created JAI Production Packages: Domestic & International Departure & Arrival")
+
+
+def seed_atq_production_packages(db: Session, atq_airport: SupportedAirport, service_map: dict[str, Service]):
+    """
+    For Amritsar Airport (ATQ):
+    Seeds production packages (Price ₹2,500 across all categories):
+    - Domestic Departure: ₹2,500
+    - Domestic Arrival: ₹2,500
+    - International Departure: ₹2,500
+    - International Arrival: ₹2,500
+    """
+    print("\n-- Configuring Production Packages for Amritsar Airport (ATQ) --")
+
+    # 1. Clear all existing services mapped to ATQ to avoid duplicates
+    db.query(AirportService).filter_by(
+        airport_id=atq_airport.id,
+    ).delete(synchronize_session=False)
+
+    meet_svc = service_map.get("meet_greet") or service_map.get("platinum")
+
+    if meet_svc:
+        # 1. Domestic Departure (₹2,500)
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=atq_airport.id,
+            service_id=meet_svc.id,
+            journey_type="DEPARTURE",
+            flight_type="DOMESTIC",
+            short_description="Domestic departure assistance from the curbside area to the boarding gate.",
+            features=[
+                "Welcome Guest from Curbside Area",
+                "Porter Service with Dedicated Staff",
+                "Wheelchair Service Available (Through Airlines)",
+                "Assistance from Separate Entry Gate",
+                "Assistance to Baggage Wrapping Facilities",
+                "Assistance at Separate Check-in Process at Counters",
+                "Assistance in Security Hold Area (SHA)",
+                "Lounge Service Facility Available (Charges Applicable)",
+                "Assistance to the Boarding Gate",
+            ],
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=1,
+            price=2500.00,
+            currency="INR",
+        ))
+
+        # 2. Domestic Arrival (₹2,500)
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=atq_airport.id,
+            service_id=meet_svc.id,
+            journey_type="ARRIVAL",
+            flight_type="DOMESTIC",
+            short_description="Domestic arrival assistance from the aerobridge to the car parking area.",
+            features=[
+                "Welcome Guest from Aerobridge",
+                "Dedicated Staff with Placard",
+                "Porter Service with Dedicated Staff at Arrivals",
+                "Wheelchair Service Available (Through Airlines)",
+                "Assistance in Baggage Belt Area",
+                "Assistance to the Car Parking Area",
+            ],
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=1,
+            price=2500.00,
+            currency="INR",
+        ))
+
+        # 3. International Departure (₹2,000)
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=atq_airport.id,
+            service_id=meet_svc.id,
+            journey_type="DEPARTURE",
+            flight_type="INTERNATIONAL",
+            short_description="International departure assistance from the curbside area to the boarding gate.",
+            features=[
+                "Welcome Guest from Curbside Area",
+                "Porter Service with Dedicated Staff",
+                "Wheelchair Service Available (Through Airlines)",
+                "Assistance from Separate Entry Gate",
+                "Assistance to Baggage Wrapping Facilities",
+                "Assistance at Separate Check-in Process at Counters",
+                "Assistance in Security Hold Area (SHA)",
+                "Lounge Service Facility Available (Charges Applicable)",
+                "Assistance to the Boarding Gate",
+            ],
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=1,
+            price=2000.00,
+            currency="INR",
+        ))
+
+        # 4. International Arrival (₹2,500)
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=atq_airport.id,
+            service_id=meet_svc.id,
+            journey_type="ARRIVAL",
+            flight_type="INTERNATIONAL",
+            short_description="International arrival assistance from post-immigration to the parking area.",
+            features=[
+                "Welcome Guest from Post Immigration",
+                "Porter Service with Dedicated Staff at Post Immigration Area",
+                "Assistance in Baggage Belt Area",
+                "Assistance in Customs",
+                "Coordination with Receiving Party",
+                "Assistance to the Parking Area",
+            ],
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=1,
+            price=2500.00,
+            currency="INR",
+        ))
+
+    db.flush()
+    print("  + Created ATQ Production Packages: Domestic & International Departure & Arrival (INR 2,500)")
+
+
 def seed_other_airport_services(db: Session, airport_map: dict[str, SupportedAirport], service_map: dict[str, Service]):
-    """Seed default services for other airports (DEL, BOM)."""
+    """Seed default services for other airports."""
     for code, airport in airport_map.items():
-        if code == "AMD":
+        if code in ("AMD", "BOM", "GOI", "JAI", "ATQ"):
             continue  # Handled separately
 
         for slug, svc in service_map.items():
-            if slug in ("platinum", "elite", "silver"):
+            if slug in ("platinum", "elite", "silver", "elite_plus"):
                 continue
             for j_type in JOURNEY_TYPES:
                 if code == "HYD":
@@ -1769,6 +2784,18 @@ def run_seed():
         if "AMD" in airport_map:
             seed_amd_production_packages(db, airport_map["AMD"], service_map)
 
+        if "BOM" in airport_map:
+            seed_bom_production_packages(db, airport_map["BOM"], service_map)
+
+        if "GOI" in airport_map:
+            seed_goi_production_packages(db, airport_map["GOI"], service_map)
+
+        if "JAI" in airport_map:
+            seed_jai_production_packages(db, airport_map["JAI"], service_map)
+
+        if "ATQ" in airport_map:
+            seed_atq_production_packages(db, airport_map["ATQ"], service_map)
+
         if "HYD" in airport_map:
             seed_hyd_production_packages(db, airport_map["HYD"], service_map)
 
@@ -1795,3 +2822,4 @@ def run_seed():
 
 if __name__ == "__main__":
     run_seed()
+

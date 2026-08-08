@@ -91,7 +91,7 @@ from app.routers import payment_router
 from app.routers import journey_router
 from app.routers import operations_router
 from app.ai import router as ai_router
-from app.whatsapp import router as whatsapp_router
+from app.integrations.whatsapp.router import router as whatsapp_router
 
 # Include Routers
 app.include_router(auth_router.router)
@@ -110,7 +110,7 @@ app.include_router(config_router.router)
 app.include_router(ticketing_router.router)
 app.include_router(payment_router.router)
 app.include_router(ai_router.router)
-app.include_router(whatsapp_router.router)
+app.include_router(whatsapp_router)
 app.include_router(journey_router.router)
 app.include_router(operations_router.router)
 

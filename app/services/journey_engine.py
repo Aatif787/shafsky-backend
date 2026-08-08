@@ -98,9 +98,10 @@ class JourneyDetectionEngine:
         journey_type: Optional[str] = None,
         flight_type: Optional[str] = None,
         terminal: Optional[str] = None,
+        include_inactive: bool = False,
     ) -> List[AirportService]:
         """
-        Loads all active AirportService mappings for an airport, filtered by journey_type, flight_type, and terminal if specified.
+        Loads AirportService mappings for an airport, filtered by journey_type, flight_type, and terminal if specified.
         """
         airport = cls.get_airport_by_iata(db, airport_iata)
         if not airport:
@@ -109,11 +110,10 @@ class JourneyDetectionEngine:
         stmt = (
             select(AirportService)
             .options(joinedload(AirportService.service))
-            .where(
-                AirportService.airport_id == airport.id,
-                AirportService.is_available == True,
-            )
+            .where(AirportService.airport_id == airport.id)
         )
+        if not include_inactive:
+            stmt = stmt.where(AirportService.is_available == True)
 
         if journey_type:
             normalized_type = journey_type.strip().upper()
