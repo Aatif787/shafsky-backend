@@ -508,9 +508,20 @@ class ServiceConfigService:
         return sc
 
     @classmethod
-    def get_airport_configuration(cls, airport_code: str) -> Dict[str, Any]:
+    def get_airport_configuration(cls, airport_code: str, db: Optional[Session] = None) -> Dict[str, Any]:
         """Return database & catalog driven configuration for specific airport hub."""
         code = (airport_code or "DEL").upper().strip()
+
+        if db:
+            db_airport = db.scalar(select(AirportManagement).where(AirportManagement.code == code))
+            if db_airport and db_airport.services_config and isinstance(db_airport.services_config, dict):
+                cfg = dict(db_airport.services_config)
+                cfg["code"] = db_airport.code
+                cfg["name"] = db_airport.name
+                cfg["city"] = db_airport.city
+                cfg["country"] = db_airport.country
+                cfg["operatingHours"] = db_airport.operating_hours or "24/7"
+                return cfg
 
         AIRPORT_HUB_CONFIGS: Dict[str, Dict[str, Any]] = {
             "DEL": {
@@ -684,6 +695,124 @@ class ServiceConfigService:
                 {"id": "fast_track", "title": "Fast-Track Clearance", "description": "Priority queue clearance.", "price": 1899.0, "currency": "INR", "estTime": "1 min", "icon": "Ticket", "badge": "Express", "isAvailable": True},
                 {"id": "porter", "title": "Porter Assistance", "description": "Luggage porter service.", "price": 999.0, "currency": "INR", "estTime": "Instant", "icon": "Package", "badge": "Luggage", "isAvailable": True}
             ]
+        }
+
+    @classmethod
+    def resolve_catalog_services(
+        cls,
+        db: Session,
+        airport_code: str,
+        journey_type: str = "arrival",
+        flight_type: Optional[str] = None,
+        terminal: Optional[str] = None,
+        origin_code: Optional[str] = None,
+        dest_code: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Unified Authoritative Master Catalog Resolution Engine.
+        
+        Single Source of Truth: Reads directly from master AirportManagement & Service Catalog.
+        Never invents synthetic packages or parallel service definitions.
+        """
+        code = (airport_code or "DEL").strip().upper()
+        j_type = (journey_type or "arrival").strip().lower()
+
+        db_airport = db.scalar(
+            select(AirportManagement).where(AirportManagement.code == code)
+        )
+
+        is_covered = True
+        if db_airport and not db_airport.is_active:
+            is_covered = False
+        elif not db_airport and code not in ["DEL", "BOM", "DXB", "HYD", "AMD", "BLR", "CCU", "MAA"]:
+            is_covered = False
+
+        if not is_covered:
+            return {
+                "covered": False,
+                "success": False,
+                "airport": {
+                    "id": str(db_airport.id) if db_airport else None,
+                    "code": code,
+                    "name": db_airport.name if db_airport else f"{code} Airport"
+                },
+                "journey_type": j_type,
+                "journeyType": j_type,
+                "flight_type": flight_type or "domestic",
+                "flightType": flight_type or "domestic",
+                "terminal": terminal,
+                "catalogSource": "existing-airport-catalog",
+                "packages": [],
+                "individual_services": [],
+                "individualServices": [],
+                "error": f"Services currently unavailable at airport {code}."
+            }
+
+        master_config = cls.get_airport_configuration(code, db=db)
+
+        # Determine domestic/international flightType dynamically from airport country metadata
+        def _norm_country(c_val: Optional[str], code_val: str) -> str:
+            if not c_val:
+                return "india" if code_val.upper() in ["DEL", "BOM", "HYD", "AMD", "BLR", "CCU", "MAA", "LKO"] else "international"
+            c_low = c_val.lower().strip()
+            if c_low in ["ind", "india", "in"]:
+                return "india"
+            if c_low in ["uae", "united arab emirates", "dubai"]:
+                return "uae"
+            return c_low
+
+        resolved_flight_type = flight_type
+        if not resolved_flight_type:
+            if origin_code and dest_code:
+                orig_ap = db.scalar(select(AirportManagement).where(AirportManagement.code == origin_code.upper()))
+                dest_ap = db.scalar(select(AirportManagement).where(AirportManagement.code == dest_code.upper()))
+
+                orig_country = _norm_country(orig_ap.country if orig_ap else None, origin_code)
+                dest_country = _norm_country(dest_ap.country if dest_ap else None, dest_code)
+
+                if orig_country == dest_country:
+                    resolved_flight_type = "domestic"
+                else:
+                    resolved_flight_type = "international"
+            else:
+                resolved_flight_type = "international" if code == "DXB" else "domestic"
+
+        packages = master_config.get("packages", [])
+        services = master_config.get("individualServices", [])
+
+        active_services = [s for s in services if s.get("isAvailable", True)]
+        active_packages = packages
+
+        if terminal:
+            term_clean = str(terminal).strip().upper()
+            term_filtered = [
+                s for s in active_services
+                if not s.get("terminal") or str(s.get("terminal")).upper() == term_clean or term_clean in str(s.get("terminal")).upper()
+            ]
+            if term_filtered:
+                active_services = term_filtered
+
+        return {
+            "covered": True,
+            "success": True,
+            "airport": {
+                "id": str(db_airport.id) if db_airport else code,
+                "code": code,
+                "name": db_airport.name if db_airport else master_config.get("name", f"{code} Airport"),
+                "city": db_airport.city if db_airport else master_config.get("city", code),
+                "country": db_airport.country if db_airport else master_config.get("country", "India")
+            },
+            "journey_type": j_type,
+            "journeyType": j_type,
+            "flight_type": resolved_flight_type,
+            "flightType": resolved_flight_type,
+            "terminal": terminal or ("T1_T2" if code in ["BOM", "DEL"] else "T3"),
+            "catalogSource": "existing-airport-catalog",
+            "currency": master_config.get("currency", "INR"),
+            "operatingHours": master_config.get("operatingHours", "24/7"),
+            "packages": active_packages,
+            "individual_services": active_services,
+            "individualServices": active_services
         }
 
     @classmethod

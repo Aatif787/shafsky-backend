@@ -34,29 +34,26 @@ router = APIRouter(prefix="/api/airport", tags=["Airport Meet & Assist"])
     "/services",
     status_code=status.HTTP_200_OK,
     summary="Get Airport Services Catalog",
-    description="Returns dynamic database and catalog-driven packages, individual services, pricing, and currency for a specified airport and journey type."
+    description="Returns dynamic database and master catalog-driven packages, individual services, pricing, and currency for a specified airport, journey type, and flight type."
 )
 def get_airport_services_catalog_endpoint(
     airport: str = Query(..., description="IATA airport code, e.g. BOM"),
-    service_type: Optional[str] = Query(None, alias="journey_type", description="Service/journey type: arrival, departure, transit")
+    service_type: Optional[str] = Query(None, alias="journey_type", description="Service/journey type: arrival, departure, transit"),
+    flight_type: Optional[str] = Query(None, description="Flight type: domestic, international"),
+    origin: Optional[str] = Query(None, description="Origin airport IATA code"),
+    destination: Optional[str] = Query(None, description="Destination airport IATA code"),
+    terminal: Optional[str] = Query(None, description="Terminal name or code"),
+    db: Session = Depends(get_db)
 ):
-    code = (airport or "DEL").strip().upper()
-    j_type = (service_type or "arrival").strip().lower()
-
-    config = ServiceConfigService.get_airport_configuration(code)
-    
-    return {
-        "success": True,
-        "is_covered": True,
-        "airport_code": config["code"],
-        "airport_name": config["name"],
-        "city": config["city"],
-        "country": config["country"],
-        "currency": config.get("currency", "INR"),
-        "journey_type": j_type,
-        "packages": config.get("packages", []),
-        "individual_services": config.get("individualServices", []),
-    }
+    return ServiceConfigService.resolve_catalog_services(
+        db=db,
+        airport_code=airport,
+        journey_type=service_type or "arrival",
+        flight_type=flight_type,
+        terminal=terminal,
+        origin_code=origin,
+        dest_code=destination
+    )
 
 
 @router.post(
