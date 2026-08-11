@@ -296,6 +296,50 @@ class ServicesConfig(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
+class ServicePackage(Base):
+    """DB Model representing airport-specific VIP Meet & Assist packages."""
+    __tablename__ = "service_packages"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)  # e.g. "essential", "premium", "vip"
+    airport_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("airports.id", ondelete="CASCADE"), nullable=True)
+    airport_code: Mapped[str] = mapped_column(String, index=True, nullable=False)  # e.g. "BOM"
+    service_type: Mapped[str] = mapped_column(String, index=True, nullable=False, default="ARRIVAL")  # ARRIVAL, DEPARTURE, TRANSIT
+    title: Mapped[str] = mapped_column(String, nullable=False)
+    tagline: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    base_price: Mapped[float] = mapped_column(Numeric(10, 2), default=0.0, nullable=False)
+    currency: Mapped[str] = mapped_column(String, default="INR", nullable=False)
+    recommended_badge: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class PackageIncludedService(Base):
+    """DB Relation Model mapping Package ID -> Included Service ID (Prevents double charging)."""
+    __tablename__ = "package_included_services"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    package_id: Mapped[str] = mapped_column(String, ForeignKey("service_packages.id", ondelete="CASCADE"), nullable=False)
+    service_id: Mapped[str] = mapped_column(String, ForeignKey("services_config.id", ondelete="CASCADE"), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
+class AirportServiceAvailability(Base):
+    """DB Model controlling service availability, pricing overrides, and notice window rules per airport + journey type."""
+    __tablename__ = "airport_service_availabilities"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    airport_code: Mapped[str] = mapped_column(String, index=True, nullable=False)
+    service_id: Mapped[str] = mapped_column(String, ForeignKey("services_config.id", ondelete="CASCADE"), nullable=False)
+    service_type: Mapped[str] = mapped_column(String, index=True, nullable=False, default="ARRIVAL")  # ARRIVAL, DEPARTURE, TRANSIT
+    override_price: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
+    currency: Mapped[str] = mapped_column(String, default="INR", nullable=False)
+    is_available: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    restriction_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    min_notice_hours: Mapped[int] = mapped_column(Integer, default=6, nullable=False)
+
+
 class Coupon(Base):
     __tablename__ = "coupons"
 
