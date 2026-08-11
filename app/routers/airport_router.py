@@ -141,6 +141,31 @@ def validate_authoritative_booking_endpoint(
 
 
 @router.post(
+    "/bookings/draft",
+    status_code=status.HTTP_200_OK,
+    summary="Save / Update Booking Draft with Passenger Details",
+    description="Validates passenger fields (name, email, phone, guest count) and booking context, recalculates database total, and persists or updates booking draft record."
+)
+@router.post(
+    "/draft",
+    status_code=status.HTTP_200_OK,
+    summary="Save / Update Booking Draft (Alias)",
+    description="Alias endpoint for saving or updating a booking draft."
+)
+@router.post(
+    "/save-draft",
+    status_code=status.HTTP_200_OK,
+    summary="Save / Update Booking Draft (Alias 2)",
+    description="Alias endpoint for saving or updating a booking draft."
+)
+def save_booking_draft_endpoint(
+    payload: Dict[str, Any] = Body(...),
+    db: Session = Depends(get_db)
+):
+    return ServiceConfigService.save_booking_draft(db, payload)
+
+
+@router.post(
     "/bookings",
     response_model=AirportBookingResponse,
     status_code=status.HTTP_201_CREATED,

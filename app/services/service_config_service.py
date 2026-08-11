@@ -1,8 +1,15 @@
+import re
+import random
+import string
+import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from sqlalchemy import select, or_
-from app.models.schema import ServicesConfig, AirportManagement
+from app.models.schema import ServicesConfig, AirportManagement, Booking, BookingStatus
+
+logger = logging.getLogger("shafsky.services.service_config")
+EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
 
 DEFAULT_SERVICE_CATALOG = [
     # 1. Airport Assistance
@@ -848,4 +855,164 @@ class ServiceConfigService:
             "total": total,
             "currency": currency
         }
+
+    @classmethod
+    def save_booking_draft(cls, db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Authoritative Passenger Details Validation & Booking-Draft Persistence Service.
+        
+        1. Revalidates required name, email format, phone format, and guest count.
+        2. Revalidates journey context, service airport, package ID, and service IDs.
+        3. Revalidates booking availability and minimum lead time rules from DB.
+        4. Updates existing draft record if booking_ref is provided; otherwise creates new draft.
+        5. Recalculates authoritative DB pricing (never trusts frontend total/prices).
+        6. Masks sensitive logs to preserve customer data privacy.
+        """
+        field_errors = []
+
+        full_name = (payload.get("full_name") or payload.get("fullName") or payload.get("passenger_name") or "").strip()
+        email = (payload.get("email") or payload.get("passenger_email") or "").strip()
+        phone = (payload.get("phone") or payload.get("passenger_phone") or "").strip()
+        nationality = (payload.get("nationality") or "").strip()
+        special_requests = payload.get("special_requests") or payload.get("specialRequests") or ""
+        booking_ref = (payload.get("booking_ref") or payload.get("bookingRef") or payload.get("booking_reference") or "").strip()
+
+        # 1. Field Validation
+        if not full_name or len(full_name) < 2:
+            field_errors.append({"field": "full_name", "message": "Please enter a valid lead passenger name."})
+
+        if not email or not EMAIL_REGEX.match(email):
+            field_errors.append({"field": "email", "message": "Please enter a valid email address."})
+
+        clean_phone = re.sub(r"[^\d+]", "", phone)
+        if not phone or len(clean_phone) < 7:
+            field_errors.append({"field": "phone", "message": "Please enter a valid phone number (minimum 7 digits)."})
+
+        try:
+            guest_count = int(payload.get("guest_count") or payload.get("guestCount") or 1)
+            if guest_count < 1:
+                field_errors.append({"field": "guest_count", "message": "Passenger count must be at least 1."})
+        except Exception:
+            field_errors.append({"field": "guest_count", "message": "Invalid passenger count."})
+            guest_count = 1
+
+        if field_errors:
+            return {
+                "valid": False,
+                "errors": field_errors
+            }
+
+        # 2. Revalidate Service Airport, Availability, Package & Price from Database Authority
+        auth_val = cls.validate_authoritative_booking(db, payload)
+        if not auth_val.get("valid"):
+            return {
+                "valid": False,
+                "errors": [{"field": "services", "message": err} for err in auth_val.get("errors", [])]
+            }
+
+        # 3. Lookup existing draft by booking_ref if provided, or generate new reference
+        existing_booking = None
+        if booking_ref:
+            existing_booking = db.scalar(select(Booking).where(Booking.booking_ref == booking_ref))
+
+        if not existing_booking:
+            date_stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+            rand_suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
+            ref_code = f"SHK-{date_stamp}-{rand_suffix}"
+
+            new_booking = Booking(
+                booking_ref=ref_code,
+                passenger_name=full_name,
+                passenger_email=email,
+                passenger_phone=phone,
+                service_category="Airport Assistance",
+                flight_num=auth_val["bookingContext"]["flightNumber"],
+                origin_code=auth_val["bookingContext"]["airportCode"] if auth_val["bookingContext"]["journeyType"] == "departure" else "DEL",
+                dest_code=auth_val["bookingContext"]["airportCode"] if auth_val["bookingContext"]["journeyType"] == "arrival" else "BOM",
+                service_type=auth_val["bookingContext"]["journeyType"],
+                selected_services={
+                    "package": auth_val.get("selectedPackage"),
+                    "additional_services": auth_val.get("selectedServices"),
+                    "overlapping_ignored": auth_val.get("overlappingServicesIgnored"),
+                    "guest_count": guest_count,
+                    "nationality": nationality,
+                    "special_requests": special_requests
+                },
+                service_options={
+                    "airport_code": auth_val["bookingContext"]["airportCode"],
+                    "airport_name": auth_val["bookingContext"]["airportName"],
+                    "service_date": auth_val["bookingContext"]["serviceDate"],
+                    "service_time": auth_val["bookingContext"]["serviceTime"],
+                },
+                metadata_json={
+                    "status": "DRAFT",
+                    "subtotal": auth_val.get("subtotal"),
+                    "taxes": auth_val.get("taxes"),
+                    "total": auth_val.get("total"),
+                    "currency": auth_val.get("currency", "INR")
+                },
+                total_amount=auth_val.get("total", 0.0),
+                currency=auth_val.get("currency", "INR"),
+                status=BookingStatus.DRAFT
+            )
+            db.add(new_booking)
+            db.commit()
+            db.refresh(new_booking)
+
+            logger.info(f"[Booking Draft Created] ref={new_booking.booking_ref}, airport={auth_val['bookingContext']['airportCode']}, status=DRAFT")
+
+            return {
+                "valid": True,
+                "booking_reference": new_booking.booking_ref,
+                "status": "DRAFT",
+                "booking_context": auth_val["bookingContext"],
+                "selected_package": auth_val.get("selectedPackage"),
+                "selected_services": auth_val.get("selectedServices"),
+                "subtotal": auth_val.get("subtotal"),
+                "taxes": auth_val.get("taxes"),
+                "total": auth_val.get("total"),
+                "currency": auth_val.get("currency", "INR")
+            }
+        else:
+            existing_booking.passenger_name = full_name
+            existing_booking.passenger_email = email
+            existing_booking.passenger_phone = phone
+            existing_booking.flight_num = auth_val["bookingContext"]["flightNumber"]
+            existing_booking.service_type = auth_val["bookingContext"]["journeyType"]
+            existing_booking.selected_services = {
+                "package": auth_val.get("selectedPackage"),
+                "additional_services": auth_val.get("selectedServices"),
+                "overlapping_ignored": auth_val.get("overlappingServicesIgnored"),
+                "guest_count": guest_count,
+                "nationality": nationality,
+                "special_requests": special_requests
+            }
+            existing_booking.service_options = {
+                "airport_code": auth_val["bookingContext"]["airportCode"],
+                "airport_name": auth_val["bookingContext"]["airportName"],
+                "service_date": auth_val["bookingContext"]["serviceDate"],
+                "service_time": auth_val["bookingContext"]["serviceTime"],
+            }
+            existing_booking.total_amount = auth_val.get("total", 0.0)
+            existing_booking.currency = auth_val.get("currency", "INR")
+            existing_booking.status = BookingStatus.DRAFT
+            existing_booking.updated_at = datetime.now(timezone.utc)
+
+            db.commit()
+            db.refresh(existing_booking)
+
+            logger.info(f"[Booking Draft Updated] ref={existing_booking.booking_ref}, airport={auth_val['bookingContext']['airportCode']}, status=DRAFT")
+
+            return {
+                "valid": True,
+                "booking_reference": existing_booking.booking_ref,
+                "status": "DRAFT",
+                "booking_context": auth_val["bookingContext"],
+                "selected_package": auth_val.get("selectedPackage"),
+                "selected_services": auth_val.get("selectedServices"),
+                "subtotal": auth_val.get("subtotal"),
+                "taxes": auth_val.get("taxes"),
+                "total": auth_val.get("total"),
+                "currency": auth_val.get("currency", "INR")
+            }
 
