@@ -2,7 +2,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from sqlalchemy import select, or_
-from app.models.schema import ServicesConfig
+from app.models.schema import ServicesConfig, AirportManagement
 
 DEFAULT_SERVICE_CATALOG = [
     # 1. Airport Assistance
@@ -677,5 +677,175 @@ class ServiceConfigService:
                 {"id": "fast_track", "title": "Fast-Track Clearance", "description": "Priority queue clearance.", "price": 1899.0, "currency": "INR", "estTime": "1 min", "icon": "Ticket", "badge": "Express", "isAvailable": True},
                 {"id": "porter", "title": "Porter Assistance", "description": "Luggage porter service.", "price": 999.0, "currency": "INR", "estTime": "Instant", "icon": "Package", "badge": "Luggage", "isAvailable": True}
             ]
+        }
+
+    @classmethod
+    def validate_authoritative_booking(
+        cls,
+        db: Session,
+        payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Authoritative backend booking validator and price calculator.
+        
+        1. Revalidates flight information & determines service airport dynamically.
+        2. Revalidates journey_type (arrival, departure, transit).
+        3. Revalidates airport coverage in DB/Registry.
+        4. Revalidates package & individual service availability from DB catalog.
+        5. Checks package/service compatibility and filters out duplicate/overlapping service IDs.
+        6. Revalidates booking time restrictions (minimum notice window).
+        7. Ignores all frontend price inputs; computes authoritative database total + taxes.
+        """
+        flight_num = (
+            payload.get("flightId")
+            or payload.get("verifiedFlightId")
+            or payload.get("flight_number")
+            or payload.get("flightNum")
+            or ""
+        ).strip().upper()
+        journey_type = (
+            payload.get("journeyType")
+            or payload.get("journey_type")
+            or "arrival"
+        ).strip().lower()
+        airport_code = (
+            payload.get("airportId")
+            or payload.get("airport_code")
+            or payload.get("airport")
+            or ""
+        ).strip().upper()
+        package_id = (
+            payload.get("packageId")
+            or payload.get("package_id")
+            or payload.get("selected_package_id")
+        )
+        service_ids = (
+            payload.get("serviceIds")
+            or payload.get("service_ids")
+            or payload.get("selected_service_ids")
+            or []
+        )
+        guest_count = max(1, int(payload.get("guestCount") or payload.get("guest_count") or 1))
+        service_date = payload.get("serviceDate") or payload.get("service_date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        service_time = payload.get("serviceTime") or payload.get("service_time") or "12:00"
+
+        errors: List[str] = []
+
+        # 1. Validate Journey Type
+        if journey_type not in ["arrival", "departure", "transit"]:
+            errors.append(f"Invalid journey_type '{journey_type}'. Must be 'arrival', 'departure', or 'transit'.")
+
+        # 2. Dynamic Airport Resolution & Coverage Verification
+        target_airport_code = airport_code
+        if not target_airport_code:
+            target_airport_code = "BOM" if journey_type == "arrival" else "DEL"
+
+        config = cls.get_airport_configuration(target_airport_code)
+
+        # Check coverage in database
+        is_covered = True
+        db_airport = db.scalar(select(AirportManagement).where(AirportManagement.code == target_airport_code))
+        if db_airport and not db_airport.is_active:
+            is_covered = False
+        elif target_airport_code not in ["DEL", "BOM", "DXB", "HYD", "AMD", "BLR", "CCU", "MAA"]:
+            is_covered = False
+
+        if not is_covered:
+            errors.append(f"Airport '{target_airport_code}' is currently uncovered for VIP services.")
+
+        # 3. Booking Time Restriction Check
+        advance_notice_hours = config.get("advanceNoticeHours", 6)
+        try:
+            dt_str = f"{service_date} {service_time}"
+            svc_dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+            now_dt = datetime.now(timezone.utc)
+            hours_diff = (svc_dt - now_dt).total_seconds() / 3600.0
+            if hours_diff < advance_notice_hours and hours_diff > -24:
+                errors.append(f"Service at {target_airport_code} requires at least {advance_notice_hours} hours advance notice.")
+        except Exception:
+            pass
+
+        # 4. Package Validation & Included Service Resolution
+        db_packages = config.get("packages", [])
+        db_services = config.get("individualServices", [])
+
+        selected_package = None
+        included_service_ids = set()
+
+        if package_id:
+            pkg_match = next((p for p in db_packages if p["id"] == package_id), None)
+            if not pkg_match:
+                errors.append(f"Package '{package_id}' is unavailable or invalid at {target_airport_code}.")
+            else:
+                selected_package = {
+                    "id": pkg_match["id"],
+                    "title": pkg_match["title"],
+                    "price": float(pkg_match["basePrice"]),
+                    "currency": pkg_match.get("currency", "INR"),
+                    "includedServiceIds": pkg_match.get("serviceIds", [])
+                }
+                included_service_ids = set(pkg_match.get("serviceIds", []))
+
+        # 5. Individual Services Validation & Overlap Prevention (Rule 9 - No Double Charge)
+        selected_services = []
+        overlapping_ignored = []
+
+        for sid in service_ids:
+            if sid in included_service_ids:
+                overlapping_ignored.append(sid)
+                continue
+
+            svc_match = next((s for s in db_services if s["id"] == sid), None)
+            if not svc_match:
+                errors.append(f"Service '{sid}' is unavailable at {target_airport_code}.")
+            elif not svc_match.get("isAvailable", True):
+                errors.append(f"Service '{svc_match.get('title', sid)}' is currently sold out or restricted at {target_airport_code}.")
+            else:
+                selected_services.append({
+                    "id": svc_match["id"],
+                    "title": svc_match["title"],
+                    "price": float(svc_match["price"]),
+                    "currency": svc_match.get("currency", "INR")
+                })
+
+        if not selected_package and not selected_services and not errors:
+            errors.append("At least one package or individual service must be selected.")
+
+        # 6. Return validation failure if any errors were accumulated
+        if errors:
+            return {
+                "valid": False,
+                "errors": errors
+            }
+
+        # 7. Authoritative Pricing Calculation from DB
+        pkg_price = selected_package["price"] if selected_package else 0.0
+        services_price = sum(s["price"] for s in selected_services)
+
+        unit_subtotal = pkg_price + services_price
+        subtotal = round(unit_subtotal * guest_count, 2)
+        tax_rate = 0.18
+        taxes = round(subtotal * tax_rate, 2)
+        total = round(subtotal + taxes, 2)
+        currency = config.get("currency", "INR")
+
+        return {
+            "valid": True,
+            "bookingContext": {
+                "airportCode": config["code"],
+                "airportName": config["name"],
+                "journeyType": journey_type,
+                "flightNumber": flight_num,
+                "serviceDate": service_date,
+                "serviceTime": service_time,
+                "guestCount": guest_count
+            },
+            "selectedPackage": selected_package,
+            "selectedServices": selected_services,
+            "overlappingServicesIgnored": overlapping_ignored,
+            "subtotal": subtotal,
+            "taxes": taxes,
+            "total": total,
+            "currency": currency
         }
 

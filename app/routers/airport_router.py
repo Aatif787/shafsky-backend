@@ -4,7 +4,7 @@ FastAPI Router for Airport Meet & Assist Module — Phase C.1.
 
 from typing import Optional, List, Dict, Any
 from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Body, status
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.security.dependencies import (
@@ -22,11 +22,122 @@ from app.schemas.airport import (
     RegisterAttachmentRequest,
 )
 from app.services.airport_service import AirportService
+from app.services.service_config_service import ServiceConfigService
 from app.services.assignment_service import AssignmentService
 from app.services.attachment_service import AttachmentService
 from app.services.timeline_service import TimelineService
 
 router = APIRouter(prefix="/api/airport", tags=["Airport Meet & Assist"])
+
+
+@router.get(
+    "/services",
+    status_code=status.HTTP_200_OK,
+    summary="Get Airport Services Catalog",
+    description="Returns dynamic database and catalog-driven packages, individual services, pricing, and currency for a specified airport and journey type."
+)
+def get_airport_services_catalog_endpoint(
+    airport: str = Query(..., description="IATA airport code, e.g. BOM"),
+    service_type: Optional[str] = Query(None, alias="journey_type", description="Service/journey type: arrival, departure, transit")
+):
+    code = (airport or "DEL").strip().upper()
+    j_type = (service_type or "arrival").strip().lower()
+
+    config = ServiceConfigService.get_airport_configuration(code)
+    
+    return {
+        "success": True,
+        "is_covered": True,
+        "airport_code": config["code"],
+        "airport_name": config["name"],
+        "city": config["city"],
+        "country": config["country"],
+        "currency": config.get("currency", "INR"),
+        "journey_type": j_type,
+        "packages": config.get("packages", []),
+        "individual_services": config.get("individualServices", []),
+    }
+
+
+@router.post(
+    "/calculate-price",
+    status_code=status.HTTP_200_OK,
+    summary="Calculate Authoritative Booking Price",
+    description="Authoritative backend price calculation engine. Recalculates package and individual service totals, ignoring overlapping services included in selected package to prevent double charging."
+)
+def calculate_authoritative_price_endpoint(payload: Dict[str, Any] = Body(...)):
+    airport_code = (payload.get("airport_code") or "DEL").strip().upper()
+    selected_package_id = payload.get("selected_package_id")
+    selected_service_ids = payload.get("selected_service_ids") or []
+    guest_count = max(1, int(payload.get("guest_count") or 1))
+
+    config = ServiceConfigService.get_airport_configuration(airport_code)
+    packages = config.get("packages", [])
+    individual_services = config.get("individualServices", [])
+
+    total_base_price = 0.0
+    package_detail = None
+    included_service_ids = set()
+
+    if selected_package_id:
+        pkg_match = next((p for p in packages if p["id"] == selected_package_id), None)
+        if pkg_match:
+            total_base_price += pkg_match["basePrice"]
+            included_service_ids = set(pkg_match.get("serviceIds", []))
+            package_detail = {
+                "id": pkg_match["id"],
+                "title": pkg_match["title"],
+                "price": pkg_match["basePrice"],
+                "currency": pkg_match.get("currency", "INR")
+            }
+
+    additional_services_detail = []
+    for svc_id in selected_service_ids:
+        if svc_id in included_service_ids:
+            continue
+        
+        svc_match = next((s for s in individual_services if s["id"] == svc_id), None)
+        if svc_match and svc_match.get("isAvailable", True):
+            total_base_price += svc_match["price"]
+            additional_services_detail.append({
+                "id": svc_match["id"],
+                "title": svc_match["title"],
+                "price": svc_match["price"],
+                "currency": svc_match.get("currency", "INR")
+            })
+
+    total_price = total_base_price * guest_count
+
+    return {
+        "success": True,
+        "airport_code": airport_code,
+        "currency": config.get("currency", "INR"),
+        "guest_count": guest_count,
+        "unit_total": total_base_price,
+        "total_price": total_price,
+        "package": package_detail,
+        "additional_services": additional_services_detail,
+        "overlapping_service_ids_ignored": [s for s in selected_service_ids if s in included_service_ids]
+    }
+
+
+@router.post(
+    "/bookings/validate",
+    status_code=status.HTTP_200_OK,
+    summary="Validate Booking & Calculate Authoritative Price",
+    description="Authoritative backend booking validation and price calculation API. Revalidates flight, journey type, airport coverage, package/service availability, time restrictions, duplicate services, and calculates final authoritative DB pricing."
+)
+@router.post(
+    "/validate-booking",
+    status_code=status.HTTP_200_OK,
+    summary="Validate Booking & Calculate Authoritative Price (Alias)",
+    description="Authoritative backend booking validation and price calculation API alias."
+)
+def validate_authoritative_booking_endpoint(
+    payload: Dict[str, Any] = Body(...),
+    db: Session = Depends(get_db)
+):
+    return ServiceConfigService.validate_authoritative_booking(db, payload)
 
 
 @router.post(

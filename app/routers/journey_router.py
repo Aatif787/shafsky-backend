@@ -10,11 +10,12 @@ Public endpoints (no authentication required for browsing):
 - POST /api/journey/check-booking-window  — Validate booking window for a service
 """
 
-from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from typing import Optional, Dict, Any
+from fastapi import APIRouter, Depends, HTTPException, Query, Body, status
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.services.journey_engine import JourneyDetectionEngine
+from app.services.service_config_service import ServiceConfigService
 from app.schemas.journey_schemas import (
     SupportedAirportResponse,
     SupportedAirportListResponse,
@@ -190,24 +191,30 @@ def check_booking_window(
 
 @router.post(
     "/validate-booking",
-    response_model=BookingValidationResponse,
     status_code=status.HTTP_200_OK,
     summary="Validate Booking & Generate Pre-Payment Breakdown",
     description=(
         "Performs complete pre-payment booking validation: verifies airport support, service availability, "
-        "lead time notice constraints, calculates dynamic price breakdown from DB, and generates a temporary reference code."
+        "lead time notice constraints, calculates dynamic price breakdown from DB, and generates authoritative validation response."
     ),
 )
 def validate_booking(
-    data: BookingValidationRequest,
+    payload: Dict[str, Any] = Body(...),
     db: Session = Depends(get_db),
 ):
-    return JourneyDetectionEngine.validate_booking(
-        db=db,
-        airport_code=data.airport_code,
-        journey_type=data.journey_type,
-        service_date=data.service_date,
-        service_time=data.service_time,
-        selected_service_slugs=data.selected_service_slugs,
-        guest_count=data.guest_count,
-    )
+    if "selected_service_slugs" in payload and "airport_code" in payload:
+        try:
+            req = BookingValidationRequest(**payload)
+            return JourneyDetectionEngine.validate_booking(
+                db=db,
+                airport_code=req.airport_code,
+                journey_type=req.journey_type,
+                service_date=req.service_date,
+                service_time=req.service_time,
+                selected_service_slugs=req.selected_service_slugs,
+                guest_count=req.guest_count,
+            )
+        except Exception:
+            pass
+
+    return ServiceConfigService.validate_authoritative_booking(db, payload)
