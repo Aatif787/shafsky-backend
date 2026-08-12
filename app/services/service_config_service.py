@@ -535,34 +535,34 @@ class ServiceConfigService:
                 "advanceNoticeHours": 6,
                 "packages": [
                     {
-                        "id": "essential",
-                        "title": "Essential Escort",
-                        "tagline": "Standard terminal guidance & luggage porterage",
-                        "basePrice": 3499.0,
+                        "id": "silver",
+                        "title": "Silver Escort",
+                        "tagline": "Standard Aerobridge Escort & Buggy Transit",
+                        "basePrice": 4500.0,
                         "currency": "INR",
                         "recommendedBadge": "Best Value",
-                        "features": ["Personal terminal host", "Porter for 2 bags", "Fast-track security line"],
-                        "serviceIds": ["meet_greet", "baggage"]
+                        "features": ["Aerobridge exit welcome with placard", "Dedicated porter for up to 3 bags", "Priority queue assistance"],
+                        "serviceIds": ["meet_greet", "porter"]
                     },
                     {
-                        "id": "premium",
-                        "title": "Premium VIP Sanctuary",
-                        "tagline": "Full aerobridge greeting, lounge pass & priority immigration",
-                        "basePrice": 6999.0,
+                        "id": "gold",
+                        "title": "Gold VIP Sanctuary",
+                        "tagline": "Fast Track Immigration & Lounge Access",
+                        "basePrice": 8500.0,
                         "currency": "INR",
                         "recommendedBadge": "Most Popular",
-                        "features": ["Aerobridge placard greeting", "Dedicated porterage", "Priority immigration lane", "VIP lounge access"],
-                        "serviceIds": ["meet_greet", "fast_track", "lounge", "baggage"]
+                        "features": ["Personal Guest Relations Officer", "Fast-track security & immigration bypass", "3-Hour VIP Lounge Sanctuary pass", "Unlimited baggage porter support"],
+                        "serviceIds": ["meet_greet", "fast_track", "lounge", "porter"]
                     },
                     {
-                        "id": "vip",
-                        "title": "VIP Executive Tarmac",
-                        "tagline": "Private luxury tarmac transfer & dedicated diplomat escort",
-                        "basePrice": 12999.0,
+                        "id": "elite",
+                        "title": "Elite Presidential",
+                        "tagline": "Airside Maybach Tarmac & Diplomatic Gate",
+                        "basePrice": 18000.0,
                         "currency": "INR",
                         "recommendedBadge": "Flagship Luxury",
-                        "features": ["Private luxury tarmac car transfer", "Diplomatic fast-track clearance", "Private lounge suite", "Dedicated host & team"],
-                        "serviceIds": ["meet_greet", "fast_track", "lounge", "buggy", "baggage", "transport"]
+                        "features": ["Direct tarmac limousine transfer", "Private VIP lounge suite reservation", "Diplomatic customs clearance desk", "Curbside executive chauffeur handoff"],
+                        "serviceIds": ["meet_greet", "fast_track", "lounge", "buggy", "porter", "transport"]
                     }
                 ],
                 "individualServices": [
@@ -586,24 +586,34 @@ class ServiceConfigService:
                 "advanceNoticeHours": 6,
                 "packages": [
                     {
-                        "id": "essential",
-                        "title": "Essential Escort",
-                        "tagline": "Terminal host & luggage assistance",
-                        "basePrice": 3499.0,
+                        "id": "platinum",
+                        "title": "Platinum Service",
+                        "tagline": "Premium domestic arrival & departure assistance",
+                        "basePrice": 3850.0,
                         "currency": "INR",
                         "recommendedBadge": "Best Value",
-                        "features": ["Personal terminal host", "Porter for 2 bags"],
-                        "serviceIds": ["meet_greet", "baggage"]
+                        "features": ["Welcome at Curbside Area / Aerobridge", "Dedicated Staff with Personalized Placard", "Dedicated Porter Service", "Assistance through Separate Entry Gate"],
+                        "serviceIds": ["meet_greet", "porter"]
                     },
                     {
-                        "id": "premium",
-                        "title": "Premium VIP Sanctuary",
-                        "tagline": "Aerobridge welcome, lounge pass & priority fast-track",
-                        "basePrice": 6999.0,
+                        "id": "elite",
+                        "title": "Elite Service",
+                        "tagline": "Enhanced domestic arrival & departure assistance",
+                        "basePrice": 4950.0,
                         "currency": "INR",
                         "recommendedBadge": "Most Popular",
-                        "features": ["Aerobridge placard greeting", "Dedicated porterage", "Priority immigration lane", "Adani VIP lounge access"],
-                        "serviceIds": ["meet_greet", "fast_track", "lounge", "baggage"]
+                        "features": ["Welcome at Curbside Area / Aerobridge", "Dedicated Staff with Personalized Placard", "Dedicated Porter Service", "Lounge Access Pass", "Electric Buggy Ride"],
+                        "serviceIds": ["meet_greet", "lounge", "buggy", "porter"]
+                    },
+                    {
+                        "id": "elite_plus",
+                        "title": "Elite Plus Service",
+                        "tagline": "Complete premium domestic departure & arrival assistance",
+                        "basePrice": 7040.0,
+                        "currency": "INR",
+                        "recommendedBadge": "Flagship Luxury",
+                        "features": ["Welcome at Curbside Area / Aerobridge", "Dedicated Staff with Personalized Placard", "Dedicated Porter Service", "Lounge Access Pass", "Priority Queue Access"],
+                        "serviceIds": ["meet_greet", "fast_track", "lounge", "buggy", "porter"]
                     }
                 ],
                 "individualServices": [
@@ -620,36 +630,46 @@ class ServiceConfigService:
                 "country": "United Arab Emirates",
                 "city": "Dubai",
                 "timezone": "Asia/Dubai",
-                "currency": "USD",
+                "currency": "INR",
                 "operatingHours": "24/7",
                 "advanceNoticeHours": 4,
                 "packages": [
                     {
-                        "id": "essential",
-                        "title": "Marhaba Essential",
-                        "tagline": "Personal gate escort & fast-track clearance",
-                        "basePrice": 99.0,
-                        "currency": "USD",
-                        "recommendedBadge": "Popular",
+                        "id": "silver",
+                        "title": "Ahlan Standard Escort",
+                        "tagline": "Gate Greeting & Buggy Transit",
+                        "basePrice": 15000.0,
+                        "currency": "INR",
+                        "recommendedBadge": "Best Value",
                         "features": ["Aerobridge greeting", "Marhaba fast-track clearance", "Porter for luggage"],
-                        "serviceIds": ["meet_greet", "fast_track", "baggage"]
+                        "serviceIds": ["meet_greet", "fast_track", "porter"]
                     },
                     {
-                        "id": "vip",
-                        "title": "Ahlan VIP Suite",
-                        "tagline": "Ahlan VIP lounge suite & dedicated buggy transfer",
-                        "basePrice": 249.0,
-                        "currency": "USD",
-                        "recommendedBadge": "Flagship Luxury",
+                        "id": "gold",
+                        "title": "Ahlan Premium Lounge",
+                        "tagline": "VIP Lounge Access & Priority Customs",
+                        "basePrice": 26800.0,
+                        "currency": "INR",
+                        "recommendedBadge": "Most Popular",
                         "features": ["Personal Ahlan ambassador", "Private Ahlan lounge suite", "Buggy transport", "Diplomatic fast-track"],
-                        "serviceIds": ["meet_greet", "fast_track", "lounge", "buggy", "baggage"]
+                        "serviceIds": ["meet_greet", "fast_track", "lounge", "buggy", "porter"]
+                    },
+                    {
+                        "id": "majlis",
+                        "title": "Al Majlis Private VIP Terminal",
+                        "tagline": "Separate VIP Terminal & Private Limousine Tarmac",
+                        "basePrice": 62500.0,
+                        "currency": "INR",
+                        "recommendedBadge": "Flagship Luxury",
+                        "features": ["Private Al Majlis VIP terminal entrance", "Separate customs & immigration desk", "Luxury tarmac car transfer to aircraft", "Private suite dining & butler service"],
+                        "serviceIds": ["meet_greet", "fast_track", "lounge", "buggy", "porter", "transport"]
                     }
                 ],
                 "individualServices": [
-                    {"id": "meet_greet", "title": "Meet & Greet Ahlan", "description": "Gate greeting with personalized sign.", "price": 75.0, "currency": "USD", "estTime": "30 sec", "icon": "Users", "badge": "Flagship", "isAvailable": True},
-                    {"id": "lounge", "title": "Ahlan Lounge Suite", "description": "Luxury Dubai lounge access.", "price": 60.0, "currency": "USD", "estTime": "1 min", "icon": "Hotel", "badge": "Sanctuary", "isAvailable": True},
-                    {"id": "fast_track", "title": "DXB Fast-Track Clearance", "description": "Priority passport control.", "price": 50.0, "currency": "USD", "estTime": "1 min", "icon": "Ticket", "badge": "Express", "isAvailable": True},
-                    {"id": "buggy", "title": "Terminal Buggy Escort", "description": "Electric cart transfer across Terminal 3.", "price": 40.0, "currency": "USD", "estTime": "Instant", "icon": "Car", "badge": "Airside", "isAvailable": True}
+                    {"id": "meet_greet", "title": "Meet & Greet Ahlan", "description": "Gate greeting with personalized sign.", "price": 4500.0, "currency": "INR", "estTime": "30 sec", "icon": "Users", "badge": "Flagship", "isAvailable": True},
+                    {"id": "lounge", "title": "Ahlan Lounge Suite", "description": "Luxury Dubai lounge access.", "price": 3800.0, "currency": "INR", "estTime": "1 min", "icon": "Hotel", "badge": "Sanctuary", "isAvailable": True},
+                    {"id": "fast_track", "title": "DXB Fast-Track Clearance", "description": "Priority passport control.", "price": 3200.0, "currency": "INR", "estTime": "1 min", "icon": "Ticket", "badge": "Express", "isAvailable": True},
+                    {"id": "buggy", "title": "Terminal Buggy Escort", "description": "Electric cart transfer across Terminal 3.", "price": 2500.0, "currency": "INR", "estTime": "Instant", "icon": "Car", "badge": "Airside", "isAvailable": True}
                 ]
             }
         }
@@ -657,36 +677,46 @@ class ServiceConfigService:
         if code in AIRPORT_HUB_CONFIGS:
             return AIRPORT_HUB_CONFIGS[code]
 
-        # Default fallback config for any other international airport
+        # Default fallback config for any other airport (e.g. HYD, AMD, BLR, GOI, JAI, etc.)
         return {
             "code": code,
             "name": f"{code} International Airport",
-            "country": "International",
+            "country": "India",
             "city": code,
-            "timezone": "UTC",
+            "timezone": "Asia/Kolkata",
             "currency": "INR",
             "operatingHours": "24/7",
             "advanceNoticeHours": 6,
             "packages": [
                 {
-                    "id": "essential",
-                    "title": "Essential Escort",
-                    "tagline": "Personal terminal host & luggage porter",
-                    "basePrice": 3499.0,
+                    "id": "silver",
+                    "title": "Silver Escort",
+                    "tagline": "Standard aerobridge escort & baggage support",
+                    "basePrice": 4500.0,
                     "currency": "INR",
                     "recommendedBadge": "Best Value",
-                    "features": ["Personal terminal host", "Luggage assistance"],
-                    "serviceIds": ["meet_greet", "baggage"]
+                    "features": ["Welcome at aerobridge with placard", "Dedicated porter for up to 3 bags", "Priority queue assistance"],
+                    "serviceIds": ["meet_greet", "porter"]
                 },
                 {
-                    "id": "premium",
-                    "title": "Premium VIP Escort",
-                    "tagline": "Gate welcome, priority clearance & lounge pass",
-                    "basePrice": 6999.0,
+                    "id": "gold",
+                    "title": "Gold VIP Sanctuary",
+                    "tagline": "Fast track security, immigration & lounge access",
+                    "basePrice": 8500.0,
                     "currency": "INR",
                     "recommendedBadge": "Most Popular",
-                    "features": ["Aerobridge placard greeting", "Dedicated porterage", "Priority clearance", "Lounge access"],
-                    "serviceIds": ["meet_greet", "fast_track", "lounge", "baggage"]
+                    "features": ["Personal Guest Relations Officer", "Fast-track security & immigration bypass", "3-Hour VIP Lounge Sanctuary pass", "Unlimited baggage porter support"],
+                    "serviceIds": ["meet_greet", "fast_track", "lounge", "porter"]
+                },
+                {
+                    "id": "elite",
+                    "title": "Elite Presidential",
+                    "tagline": "Airside tarmac transfer & diplomatic gate",
+                    "basePrice": 18000.0,
+                    "currency": "INR",
+                    "recommendedBadge": "Flagship Luxury",
+                    "features": ["Direct tarmac transfer", "Private VIP lounge suite reservation", "Diplomatic customs clearance desk", "Curbside executive chauffeur handoff"],
+                    "serviceIds": ["meet_greet", "fast_track", "lounge", "buggy", "porter", "transport"]
                 }
             ],
             "individualServices": [

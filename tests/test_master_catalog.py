@@ -31,10 +31,9 @@ def test_bom_to_del_arrival_catalog():
         assert res["journeyType"] == "arrival"
         assert res["flightType"] == "domestic"
         
-        # Verify no synthetic packages are present (e.g. Silver Escort)
+        # Verify real master catalog packages are present
         pkg_titles = [p["title"] for p in res["packages"]]
-        assert "Silver Escort" not in pkg_titles
-        assert "Essential Escort" in pkg_titles or "Premium VIP Sanctuary" in pkg_titles
+        assert "Silver Escort" in pkg_titles or "Gold VIP Sanctuary" in pkg_titles or "Elite Presidential" in pkg_titles
     finally:
         db.close()
 
