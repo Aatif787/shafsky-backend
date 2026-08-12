@@ -10,7 +10,7 @@ Responsibilities:
 """
 
 from typing import Optional, List
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import select
 
@@ -44,7 +44,7 @@ class JourneyDetectionEngine:
         """Returns all active airports."""
         stmt = (
             select(SupportedAirport)
-            .where(SupportedAirport.is_active == True)
+            .where(SupportedAirport.is_active.is_(True))
             .order_by(SupportedAirport.airport_name)
         )
         return list(db.execute(stmt).scalars().all())
@@ -85,7 +85,7 @@ class JourneyDetectionEngine:
         """Returns all globally active services."""
         stmt = (
             select(Service)
-            .where(Service.is_active == True)
+            .where(Service.is_active.is_(True))
             .order_by(Service.display_order)
         )
         return list(db.execute(stmt).scalars().all())
@@ -113,7 +113,7 @@ class JourneyDetectionEngine:
             .where(AirportService.airport_id == airport.id)
         )
         if not include_inactive:
-            stmt = stmt.where(AirportService.is_available == True)
+            stmt = stmt.where(AirportService.is_available.is_(True))
 
         if journey_type:
             normalized_type = journey_type.strip().upper()
@@ -228,13 +228,8 @@ class JourneyDetectionEngine:
         elif normalized_type == "ARRIVAL":
             primary_airport = arr_airport
         elif normalized_type == "TRANSIT":
-            # For transit, check both airports — prefer the one that is supported
-            if dep_airport and dep_airport.is_supported and dep_airport.is_active:
-                primary_airport = dep_airport
-            elif arr_airport and arr_airport.is_supported and arr_airport.is_active:
-                primary_airport = arr_airport
-            else:
-                primary_airport = dep_airport or arr_airport
+            transit_code = requested_service_slug if (requested_service_slug and len(requested_service_slug) == 3) else None
+            primary_airport = cls.get_airport_by_iata(db, transit_code) if transit_code else (arr_airport or dep_airport)
         else:
             primary_airport = arr_airport or dep_airport
 
@@ -277,7 +272,7 @@ class JourneyDetectionEngine:
             select(AirportService.terminal)
             .where(
                 AirportService.airport_id == primary_airport.id,
-                AirportService.is_available == True,
+                AirportService.is_available.is_(True),
                 AirportService.terminal.isnot(None),
             )
         )
@@ -439,7 +434,7 @@ class JourneyDetectionEngine:
                 AirportService.airport_id == airport.id,
                 Service.slug == service_slug,
                 AirportService.journey_type == normalized_type,
-                AirportService.is_available == True,
+                AirportService.is_available.is_(True),
             )
         )
         aps = db.execute(stmt).scalar_one_or_none()

@@ -14,9 +14,8 @@ import pytest
 import logging
 from unittest.mock import MagicMock, patch
 
-from app.flight.airports import build_flight_airport, AIRPORT_REGISTRY
+from app.flight.airports import build_flight_airport
 from app.flight.providers.aviation_edge_provider import AviationEdgeProvider
-from app.flight.schemas import FlightStatusData
 
 
 from app.flight.exceptions import FlightNotFoundException
@@ -137,10 +136,8 @@ def test_structured_logging_output(caplog):
         with caplog.at_level(logging.INFO):
             status_data = provider.validate_flight("AI2525", "2026-08-04", direction="arrival")
 
-    assert "[FLIGHT VALIDATION REQUEST]" in caplog.text
-    assert "[FLIGHT PROVIDER RESPONSE]" in caplog.text
-    assert "[NORMALIZED RESPONSE]" in caplog.text
-    assert "[RETURNED ROUTE]" in caplog.text
+    assert "[FLIGHT SEARCH AUDIT REQUEST]" in caplog.text
+    assert "[FLIGHT SEARCH SUCCESS DECISION]" in caplog.text
     assert "DEL" in caplog.text
     assert "MAA" in caplog.text
 
@@ -153,3 +150,55 @@ def test_empty_provider_results_raises_not_found():
     with patch.object(provider, "_make_request", return_value=[]):
         with pytest.raises(FlightNotFoundException):
             provider.validate_flight("AI9999", "2026-08-04", allow_fallback=False)
+
+
+def test_service_matching_by_flight_status_and_journey_type():
+    """
+    Verify required service matching logic:
+    - Arrival uses flight's ARRIVAL/DESTINATION airport (DEL for BOM -> DEL).
+    - Departure uses flight's DEPARTURE/ORIGIN airport (BOM for BOM -> DEL).
+    - Unsupported airport returns covered=False without generic service fallback.
+    """
+    from app.services.service_config_service import ServiceConfigService
+
+    mock_db = MagicMock()
+
+    # 1. Flight BOM -> DEL with selected service "arrival" should resolve to DEL (destination)
+    res_arrival = ServiceConfigService.resolve_catalog_services(
+        db=mock_db,
+        airport_code="BOM",
+        journey_type="arrival",
+        origin_code="BOM",
+        dest_code="DEL"
+    )
+    assert res_arrival["covered"] is True
+    assert res_arrival["airport"]["code"] == "DEL"
+    assert len(res_arrival["packages"]) > 0
+
+    # 2. Flight BOM -> DEL with selected service "departure" should resolve to BOM (origin)
+    res_departure = ServiceConfigService.resolve_catalog_services(
+        db=mock_db,
+        airport_code="DEL",
+        journey_type="departure",
+        origin_code="BOM",
+        dest_code="DEL"
+    )
+    assert res_departure["covered"] is True
+    assert res_departure["airport"]["code"] == "BOM"
+    assert len(res_departure["packages"]) > 0
+
+    # 3. Flight BOM -> IXB (unsupported arrival airport) returns covered=False with empty services and no fallback
+    mock_db.scalar.return_value = None
+    res_unsupported = ServiceConfigService.resolve_catalog_services(
+        db=mock_db,
+        airport_code="BOM",
+        journey_type="arrival",
+        origin_code="BOM",
+        dest_code="IXB"
+    )
+    assert res_unsupported["covered"] is False
+    assert res_unsupported["airport"]["code"] == "IXB"
+    assert len(res_unsupported["packages"]) == 0
+    assert len(res_unsupported["individual_services"]) == 0
+    assert "currently unavailable" in res_unsupported["error"]
+

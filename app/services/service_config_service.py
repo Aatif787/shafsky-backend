@@ -5,7 +5,7 @@ import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
-from sqlalchemy import select, or_
+from sqlalchemy import select
 from app.models.schema import ServicesConfig, AirportManagement, Booking, BookingStatus
 
 logger = logging.getLogger("shafsky.services.service_config")
@@ -677,55 +677,8 @@ class ServiceConfigService:
         if code in AIRPORT_HUB_CONFIGS:
             return AIRPORT_HUB_CONFIGS[code]
 
-        # Default fallback config for any other airport (e.g. HYD, AMD, BLR, GOI, JAI, etc.)
-        return {
-            "code": code,
-            "name": f"{code} International Airport",
-            "country": "India",
-            "city": code,
-            "timezone": "Asia/Kolkata",
-            "currency": "INR",
-            "operatingHours": "24/7",
-            "advanceNoticeHours": 6,
-            "packages": [
-                {
-                    "id": "silver",
-                    "title": "Silver Escort",
-                    "tagline": "Standard aerobridge escort & baggage support",
-                    "basePrice": 4500.0,
-                    "currency": "INR",
-                    "recommendedBadge": "Best Value",
-                    "features": ["Welcome at aerobridge with placard", "Dedicated porter for up to 3 bags", "Priority queue assistance"],
-                    "serviceIds": ["meet_greet", "porter"]
-                },
-                {
-                    "id": "gold",
-                    "title": "Gold VIP Sanctuary",
-                    "tagline": "Fast track security, immigration & lounge access",
-                    "basePrice": 8500.0,
-                    "currency": "INR",
-                    "recommendedBadge": "Most Popular",
-                    "features": ["Personal Guest Relations Officer", "Fast-track security & immigration bypass", "3-Hour VIP Lounge Sanctuary pass", "Unlimited baggage porter support"],
-                    "serviceIds": ["meet_greet", "fast_track", "lounge", "porter"]
-                },
-                {
-                    "id": "elite",
-                    "title": "Elite Presidential",
-                    "tagline": "Airside tarmac transfer & diplomatic gate",
-                    "basePrice": 18000.0,
-                    "currency": "INR",
-                    "recommendedBadge": "Flagship Luxury",
-                    "features": ["Direct tarmac transfer", "Private VIP lounge suite reservation", "Diplomatic customs clearance desk", "Curbside executive chauffeur handoff"],
-                    "serviceIds": ["meet_greet", "fast_track", "lounge", "buggy", "porter", "transport"]
-                }
-            ],
-            "individualServices": [
-                {"id": "meet_greet", "title": "Meet & Greet Escort", "description": "Personal gate welcome & host escort.", "price": 2499.0, "currency": "INR", "estTime": "30 sec", "icon": "Users", "badge": "Flagship", "isAvailable": True},
-                {"id": "lounge", "title": "VIP Lounge Access", "description": "Lounge access with buffet & refreshments.", "price": 1999.0, "currency": "INR", "estTime": "1 min", "icon": "Hotel", "badge": "Sanctuary", "isAvailable": True},
-                {"id": "fast_track", "title": "Fast-Track Clearance", "description": "Priority queue clearance.", "price": 1899.0, "currency": "INR", "estTime": "1 min", "icon": "Ticket", "badge": "Express", "isAvailable": True},
-                {"id": "porter", "title": "Porter Assistance", "description": "Luggage porter service.", "price": 999.0, "currency": "INR", "estTime": "Instant", "icon": "Package", "badge": "Luggage", "isAvailable": True}
-            ]
-        }
+        # No default fallback config for unsupported airports
+        return {}
 
     @classmethod
     def resolve_catalog_services(
@@ -744,17 +697,30 @@ class ServiceConfigService:
         Single Source of Truth: Reads directly from master AirportManagement & Service Catalog.
         Never invents synthetic packages or parallel service definitions.
         """
-        code = (airport_code or "DEL").strip().upper()
         j_type = (journey_type or "arrival").strip().lower()
+
+        # Pick correct airport based on selected service type and flight status details
+        code = (airport_code or "").strip().upper()
+        if j_type == "arrival" and dest_code:
+            code = dest_code.strip().upper()
+        elif j_type == "departure" and origin_code:
+            code = origin_code.strip().upper()
+
+        if not code:
+            code = "DEL"
 
         db_airport = db.scalar(
             select(AirportManagement).where(AirportManagement.code == code)
         )
 
+        master_config = cls.get_airport_configuration(code, db=db)
+
         is_covered = True
         if db_airport and not db_airport.is_active:
             is_covered = False
-        elif not db_airport and code not in ["DEL", "BOM", "DXB", "HYD", "AMD", "BLR", "CCU", "MAA"]:
+        elif not db_airport and not master_config:
+            is_covered = False
+        elif not master_config.get("packages") and not master_config.get("individualServices"):
             is_covered = False
 
         if not is_covered:
@@ -777,8 +743,6 @@ class ServiceConfigService:
                 "individualServices": [],
                 "error": f"Services currently unavailable at airport {code}."
             }
-
-        master_config = cls.get_airport_configuration(code, db=db)
 
         # Determine domestic/international flightType dynamically from airport country metadata
         def _norm_country(c_val: Optional[str], code_val: str) -> str:
@@ -902,18 +866,28 @@ class ServiceConfigService:
             errors.append(f"Invalid journey_type '{journey_type}'. Must be 'arrival', 'departure', or 'transit'.")
 
         # 2. Dynamic Airport Resolution & Coverage Verification
-        target_airport_code = airport_code
-        if not target_airport_code:
-            target_airport_code = "BOM" if journey_type == "arrival" else "DEL"
+        origin_val = str(payload.get("origin") or payload.get("origin_code") or "").strip().upper()
+        dest_val = str(payload.get("destination") or payload.get("dest_code") or payload.get("destination_code") or "").strip().upper()
+        transit_val = str(payload.get("transit") or payload.get("transit_code") or "").strip().upper()
 
-        config = cls.get_airport_configuration(target_airport_code)
+        target_airport_code = airport_code
+        if journey_type == "arrival" and dest_val:
+            target_airport_code = dest_val
+        elif journey_type == "departure" and origin_val:
+            target_airport_code = origin_val
+        elif journey_type == "transit" and transit_val:
+            target_airport_code = transit_val
+
+        config = cls.get_airport_configuration(target_airport_code, db=db)
 
         # Check coverage in database
         is_covered = True
         db_airport = db.scalar(select(AirportManagement).where(AirportManagement.code == target_airport_code))
         if db_airport and not db_airport.is_active:
             is_covered = False
-        elif target_airport_code not in ["DEL", "BOM", "DXB", "HYD", "AMD", "BLR", "CCU", "MAA"]:
+        elif not db_airport and not config:
+            is_covered = False
+        elif not config.get("packages") and not config.get("individualServices"):
             is_covered = False
 
         if not is_covered:
