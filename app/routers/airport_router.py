@@ -62,13 +62,21 @@ def get_airport_services_catalog_endpoint(
     summary="Calculate Authoritative Booking Price",
     description="Authoritative backend price calculation engine. Recalculates package and individual service totals, ignoring overlapping services included in selected package to prevent double charging."
 )
-def calculate_authoritative_price_endpoint(payload: Dict[str, Any] = Body(...)):
+def calculate_authoritative_price_endpoint(payload: Dict[str, Any] = Body(...), db: Session = Depends(get_db)):
     airport_code = (payload.get("airport_code") or "DEL").strip().upper()
     selected_package_id = payload.get("selected_package_id")
     selected_service_ids = payload.get("selected_service_ids") or []
     guest_count = max(1, int(payload.get("guest_count") or 1))
 
-    config = ServiceConfigService.get_airport_configuration(airport_code)
+    if airport_code == "GAU":
+        config = ServiceConfigService.get_airport_configuration(
+            airport_code,
+            db=db,
+            journey_type=payload.get("journey_type") or payload.get("service_type"),
+            flight_type=payload.get("flight_type"),
+        )
+    else:
+        config = ServiceConfigService.get_airport_configuration(airport_code)
     packages = config.get("packages", [])
     individual_services = config.get("individualServices", [])
 
@@ -134,7 +142,17 @@ def validate_authoritative_booking_endpoint(
     payload: Dict[str, Any] = Body(...),
     db: Session = Depends(get_db)
 ):
-    return ServiceConfigService.validate_authoritative_booking(db, payload)
+    # Legacy booking validation endpoint is deprecated in favor of the stepwise
+    # `/flow/*` booking flow. Return 410 Gone to avoid duplicate booking flows
+    # while providing guidance to clients.
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail={
+            "error": "Deprecated",
+            "message": "This endpoint is deprecated. Use the stepwise booking flow under /api/airport/flow/* (init, flight-info, select-service, customer-details).",
+            "migration_docs": "/docs#tag/Airport+Meet+%26+Assist"
+        }
+    )
 
 
 @router.post(
@@ -159,7 +177,15 @@ def save_booking_draft_endpoint(
     payload: Dict[str, Any] = Body(...),
     db: Session = Depends(get_db)
 ):
-    return ServiceConfigService.save_booking_draft(db, payload)
+    # Deprecated: save/update booking draft via legacy endpoints is removed.
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail={
+            "error": "Deprecated",
+            "message": "Draft booking endpoints are deprecated. Please use the new /api/airport/flow/* endpoints and server-side draft management will be handled by the new flow.",
+            "migration_docs": "/docs#tag/Airport+Meet+%26+Assist"
+        }
+    )
 
 
 @router.post(
@@ -169,26 +195,189 @@ def save_booking_draft_endpoint(
     summary="Create Airport Booking",
     description="Creates an Airport Meet & Assist booking, validates flight details, auto-initializes Workflow Instance, and records Timeline activity."
 )
-def create_airport_booking_endpoint(
-    data: AirportBookingCreate,
+@router.post(
+    "/flow/init",
+    status_code=status.HTTP_200_OK,
+    summary="Initialize Airport Service Booking Flow",
+    description="Step 1: Select airport. Returns allowed service types for the airport."
+)
+def flow_init_endpoint(
+    airport_code: str = Body(..., embed=True, description="IATA airport code e.g. DEL"),
+    db: Session = Depends(get_db)
+):
+    code = (airport_code or "").strip().upper()
+    if not code or len(code) != 3:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid airport code")
+
+    config = ServiceConfigService.get_airport_configuration(code)
+    if not config:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Airport not supported")
+
+    allowed = ["ARRIVAL", "DEPARTURE", "TRANSIT"]
+    return {"success": True, "airport_code": code, "allowed_service_types": allowed, "airport": config.get("airport")}
+
+
+@router.post(
+    "/flow/flight-info",
+    status_code=status.HTTP_200_OK,
+    summary="Fetch Flight Information For Selected Airport and Service Type",
+    description="Step 2-4: Accepts airport, service type, flight number and date; validates and returns flight info scoped to the selected airport."
+)
+def flow_flight_info_endpoint(
+    payload: Dict[str, Any] = Body(...),
+    db: Session = Depends(get_db)
+):
+    airport = (payload.get("airport_code") or "").strip().upper()
+    service_type = (payload.get("service_type") or "").strip().upper()
+    flight_number = (payload.get("flight_number") or "").strip().upper()
+    date_str = payload.get("date")
+
+    if not airport or len(airport) != 3:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or missing airport_code")
+    if service_type not in {"ARRIVAL", "DEPARTURE", "TRANSIT"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid service_type")
+    if not flight_number:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="flight_number is required")
+    if not date_str:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="date is required")
+
+    # Minimal scoped flight info: ensure the selected airport remains authoritative
+    flight_info = {
+        "flight_number": flight_number,
+        "scheduled_date": date_str,
+        "service_type": service_type,
+        "selected_airport": airport,
+        "status": "PENDING_VERIFICATION"
+    }
+
+    services = ServiceConfigService.resolve_catalog_services(
+        db=db,
+        airport_code=airport,
+        journey_type=service_type.lower(),
+        flight_type=None
+    )
+
+    return {"success": True, "flight_info": flight_info, "available_services": services}
+
+
+@router.post(
+    "/flow/select-service",
+    status_code=status.HTTP_200_OK,
+    summary="Select Airport Service for Booking",
+    description="Step 6: Select a single airport service available for the chosen airport and service type."
+)
+def flow_select_service_endpoint(
+    payload: Dict[str, Any] = Body(...),
     db: Session = Depends(get_db),
     current_user = Depends(get_required_user)
 ):
+    airport = (payload.get("airport_code") or "").strip().upper()
+    service_type = (payload.get("service_type") or "").strip().upper()
+    selected_service_id = payload.get("selected_service_id")
+
+    if not selected_service_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="selected_service_id required")
+
+    services = ServiceConfigService.resolve_catalog_services(db=db, airport_code=airport, journey_type=service_type.lower())
+    valid_ids = set()
+    for p in services.get("packages", []) or []:
+        valid_ids.add(p.get("id"))
+    for s in services.get("individualServices", []) or []:
+        valid_ids.add(s.get("id"))
+
+    if selected_service_id not in valid_ids:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Selected service is not available for the chosen airport/service type")
+
+    return {"success": True, "selected_service_id": selected_service_id}
+
+
+@router.post(
+    "/flow/customer-details",
+    status_code=status.HTTP_200_OK,
+    summary="Collect Customer Details and Create Booking",
+    description="Step 7/8: Accept minimal customer details, flight and service selection, then create the booking and return booking reference and payment info."
+)
+def flow_customer_details_endpoint(
+    payload: Dict[str, Any] = Body(...),
+    db: Session = Depends(get_db),
+    current_user = Depends(get_required_user)
+):
+    airport = (payload.get("airport_code") or "").strip().upper()
+    service_type = (payload.get("service_type") or "").strip().upper()
+    flight_number = (payload.get("flight_number") or "").strip().upper()
+    date_str = payload.get("date")
+    selected_service_id = payload.get("selected_service_id")
+    customer = payload.get("customer") or {}
+
+    if not all([airport, service_type, flight_number, date_str, selected_service_id]):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing required booking context")
+
+    if not (customer.get("name") and (customer.get("email") or customer.get("phone"))):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Customer name and email/phone required")
+
+    passengers = [{
+        "full_name": customer.get("name"),
+        "contact_email": customer.get("email"),
+        "contact_phone": customer.get("phone"),
+        "is_primary": True
+    }]
+
+    airline = None
+    if "-" in flight_number:
+        airline = flight_number.split("-")[0]
+    else:
+        airline = flight_number[:2]
+
+    from datetime import datetime
+    try:
+        scheduled_time = datetime.fromisoformat(date_str)
+    except Exception:
+        scheduled_time = datetime.fromisoformat(f"{date_str}T00:00:00+00:00") if "T" not in date_str else datetime.fromisoformat(date_str)
+
+    if service_type == "ARRIVAL":
+        arrival_airport = airport
+        departure_airport = payload.get("origin") or "UNK"
+    elif service_type == "DEPARTURE":
+        departure_airport = airport
+        arrival_airport = payload.get("destination") or "UNK"
+    else:
+        departure_airport = payload.get("origin") or airport
+        arrival_airport = payload.get("destination") or airport
+
+    flight_detail = {
+        "airline": airline or "UNKNOWN",
+        "flight_number": flight_number,
+        "departure_airport": departure_airport,
+        "arrival_airport": arrival_airport,
+        "terminal": payload.get("terminal"),
+        "scheduled_time": scheduled_time,
+        "flight_type": service_type
+    }
+
     customer_id = current_user.get("sub") or current_user.get("email") or "CUSTOMER"
     try:
         booking = AirportService.create_booking(
             db,
             customer_id=customer_id,
-            service_package=data.service_package,
-            passengers_data=[p.model_dump() for p in data.passengers],
-            flight_detail_data=data.flight_detail.model_dump(),
-            addons_data=[a.model_dump() for a in data.addons],
-            special_instructions=data.special_instructions,
+            service_package=selected_service_id,
+            passengers_data=passengers,
+            flight_detail_data=flight_detail,
+            addons_data=None,
+            special_instructions=payload.get("special_instructions"),
             actor_id=customer_id
         )
-        return booking
     except ValueError as err:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(err)) from err
+
+    return {
+        "success": True,
+        "booking_id": str(booking.id),
+        "booking_reference": booking.booking_reference,
+        "total_price": float(booking.total_price),
+        "currency": booking.currency,
+        "payment_required": True,
+        "payment_url": f"/payments/checkout?booking_ref={booking.booking_reference}&entity=airport"
+    }
 
 
 @router.get(

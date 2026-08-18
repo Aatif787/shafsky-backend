@@ -204,7 +204,7 @@ def get_history_endpoint(
     instance_id: UUID,
     limit: int = Query(50, ge=1, le=100, description="Max items per page"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
-    sort: str = Query("asc", regex="^(asc|desc)$", description="Sort order by timestamp"),
+    sort: str = Query("asc", pattern="^(asc|desc)$", description="Sort order by timestamp"),
     db: Session = Depends(get_db)
 ):
     """Retrieve paginated workflow execution history."""
@@ -239,7 +239,7 @@ def get_audit_endpoint(
     event_type: Optional[str] = Query(None, description="Optional filter by event_type"),
     limit: int = Query(50, ge=1, le=100, description="Max items per page"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
-    sort: str = Query("asc", regex="^(asc|desc)$", description="Sort order by creation timestamp"),
+    sort: str = Query("asc", pattern="^(asc|desc)$", description="Sort order by creation timestamp"),
     db: Session = Depends(get_db)
 ):
     """Retrieve paginated workflow audit log records."""

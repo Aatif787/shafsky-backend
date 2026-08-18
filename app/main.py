@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import engine, Base, get_db
+from sqlalchemy import text
 import app.models.schema  # Ensure models are loaded
 import app.models.shared_domain  # Phase B.5 Shared Domain models
 import app.models.airport  # Phase C.1 Airport Meet & Assist models
@@ -35,6 +36,7 @@ from app.disaster_recovery import dr_router
 # Validate Secrets on Startup
 validate_secrets_on_startup()
 
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version="2.0.0",
@@ -42,6 +44,25 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc"
 )
+
+
+@app.on_event("startup")
+async def startup_checks():
+    """Run lightweight startup checks: DB connectivity and basic readiness.
+
+    Fail fast if DB is unreachable in non-development environments.
+    """
+    env = getattr(settings, "ENVIRONMENT", "development").lower()
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception as err:
+        structured_logger.critical("Database connectivity check failed on startup", extra={"error": str(err)})
+        # In production/staging, fail fast
+        if env not in ["development", "dev", "testing", "test"]:
+            raise RuntimeError(f"Database connectivity check failed: {err}")
+        else:
+            structured_logger.warning("Continuing startup in development despite DB connectivity check failure.")
 
 from app.middleware.idempotency import IdempotencyMiddleware
 
@@ -53,17 +74,10 @@ app.add_middleware(IdempotencyMiddleware)
 # CORS Middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:5174",
-        "http://127.0.0.1:5174",
-    ],
-    allow_origin_regex=r"https?://.*",
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_origins=getattr(settings, "ALLOWED_ORIGINS", []),
+    # Do NOT use a permissive origin regex in production; origin list is configurable via ALLOWED_ORIGINS
+    allow_credentials=getattr(settings, "CORS_ALLOW_CREDENTIALS", False),
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -155,5 +169,9 @@ async def observability_dashboard(db: Session = Depends(get_db)):
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8001"))
-    uvicorn.run("app.main:app", host="0.0.0.0", port=port, reload=True)
+    env = getattr(settings, "ENVIRONMENT", "development").lower()
+    # Only enable auto-reload in development/test environments. Bind host is configurable.
+    reload_flag = env in ["development", "dev", "testing", "test"]
+    host = os.getenv("BIND_HOST", "127.0.0.1")
+    uvicorn.run("app.main:app", host=host, port=port, reload=reload_flag)
 

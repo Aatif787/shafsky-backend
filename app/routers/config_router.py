@@ -23,9 +23,12 @@ router = APIRouter(tags=["System Configuration & Feature Flags"])
 
 @router.get("/api/config/airports/{code}", response_model=AdminApiResponse)
 @router.get("/api/airports/{code}/config", response_model=AdminApiResponse)
-async def get_airport_hub_configuration(code: str):
+async def get_airport_hub_configuration(code: str, db: Session = Depends(get_db)):
     """Return database & catalog-driven packages, services, and rules for specified airport hub."""
-    config_data = ServiceConfigService.get_airport_configuration(code)
+    if (code or "").strip().upper() == "GAU":
+        config_data = ServiceConfigService.get_airport_configuration(code, db=db)
+    else:
+        config_data = ServiceConfigService.get_airport_configuration(code)
     return AdminApiResponse(success=True, data=config_data)
 
 # ─── FEATURE FLAGS ─────────────────────────────────────────────────────────────

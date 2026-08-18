@@ -9,5 +9,12 @@ def get_security_headers() -> dict:
         "Cross-Origin-Resource-Policy": "same-origin",
         "Referrer-Policy": "strict-origin-when-cross-origin",
         "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
-        "Content-Security-Policy": "default-src 'self'; worker-src 'self' blob: data:; img-src 'self' data: https: blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';"
+        # Prefer nonces or strict hashing for inline scripts/styles in production.
+        "Content-Security-Policy": (
+            "default-src 'self'; "
+            "worker-src 'self' blob: data:; "
+            "img-src 'self' data: https: blob:; "
+            "script-src 'self'; "
+            "style-src 'self';"
+        )
     }

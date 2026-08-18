@@ -114,12 +114,20 @@ CARRIER_NAME_MAP: Dict[str, str] = {
 }
 
 
+_IN_MEMORY_CACHE: Dict[str, Tuple[float, Any]] = {}
+
+
 def get_redis_client():
     """Returns optional Redis client for caching if available."""
     try:
         import redis
         if getattr(settings, "REDIS_URL", None):
-            return redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+            return redis.Redis.from_url(
+                settings.REDIS_URL,
+                decode_responses=True,
+                socket_connect_timeout=0.2,
+                socket_timeout=0.2
+            )
     except Exception:
         pass
     return None
@@ -158,12 +166,15 @@ def validate_date_string(date_str: str) -> str:
     if not date_str or not isinstance(date_str, str):
         raise InvalidFlightDateException(str(date_str), "Date cannot be empty.")
 
-    cleaned_date = date_str.strip()[:10]
+    cleaned = str(date_str).strip()[:10]
     try:
-        dt = datetime.strptime(cleaned_date, "%Y-%m-%d")
+        dt = datetime.strptime(cleaned, "%Y-%m-%d")
         return dt.strftime("%Y-%m-%d")
     except ValueError:
-        raise InvalidFlightDateException(date_str, "Date must be valid and formatted as YYYY-MM-DD.")
+        raise InvalidFlightDateException(
+            date_str,
+            f"Invalid date format '{date_str}'. Expected ISO format 'YYYY-MM-DD'."
+        )
 
 
 def split_flight_number(flight_clean: str) -> Tuple[str, str]:
@@ -203,30 +214,47 @@ class AviationEdgeProvider(FlightProvider):
         self.timeout = float(getattr(settings, "AVIATION_EDGE_TIMEOUT", 4.0))
         self.max_retries = int(getattr(settings, "AVIATION_EDGE_MAX_RETRIES", 2))
 
+    def _get_redis(self):
+        """Returns Redis client for caching."""
+        return get_redis_client()
+
     def _get_cached_data(self, key: str) -> Optional[Dict[str, Any]]:
-        """Retrieve cached JSON payload if available."""
-        client = get_redis_client()
+        """Retrieve cached JSON payload from memory or Redis if available."""
+        now = time.time()
+        if key in _IN_MEMORY_CACHE:
+            expire_at, val = _IN_MEMORY_CACHE[key]
+            if now < expire_at:
+                logger.info(f"[IN-MEMORY CACHE HIT] Key: {key}")
+                return val
+            else:
+                _IN_MEMORY_CACHE.pop(key, None)
+
+        client = self._get_redis()
         if not client:
             return None
         try:
             cached_val = client.get(key)
             if cached_val:
-                logger.info(f"[CACHE HIT] Key: {key}")
-                return json.loads(cached_val)
+                parsed = json.loads(cached_val)
+                _IN_MEMORY_CACHE[key] = (now + self.DEFAULT_CACHE_TTL, parsed)
+                logger.info(f"[REDIS CACHE HIT] Key: {key}")
+                return parsed
         except Exception as err:
-            logger.warning(f"Redis get failed for key {key}: {err}")
+            logger.debug(f"Redis get failed for key {key}: {err}")
         return None
 
     def _set_cached_data(self, key: str, data: Any, ttl: int = DEFAULT_CACHE_TTL):
-        """Store payload in Redis cache if available."""
-        client = get_redis_client()
+        """Store payload in in-memory and Redis cache if available."""
+        now = time.time()
+        _IN_MEMORY_CACHE[key] = (now + ttl, data)
+        client = self._get_redis()
         if not client:
             return
         try:
             client.set(key, json.dumps(data), ex=ttl)
             logger.info(f"[CACHE STORE] Key: {key} (TTL: {ttl}s)")
         except Exception as err:
-            logger.warning(f"Redis set failed for key {key}: {err}")
+            logger.debug(f"Redis set failed for key {key}: {err}")
 
     def _make_request(self, endpoint: str, params: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
@@ -293,6 +321,9 @@ class AviationEdgeProvider(FlightProvider):
 
             if attempt < self.max_retries:
                 time.sleep(0.2)
+
+        if last_exception:
+            raise last_exception
 
         return []
 

@@ -9,6 +9,7 @@ legacy token decoding.
 import jwt
 import hashlib
 import secrets
+import logging
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, Tuple
 from fastapi import HTTPException
@@ -105,14 +106,18 @@ class SecurityJWT:
                 continue
 
         # 2. Backward Compatibility: Legacy HS256 key candidate fallback
+        # This fallback is intentionally opt-in via configuration.
         if payload is None:
+            allow_legacy = getattr(settings, "ALLOW_HS256_LEGACY_FALLBACK", False)
             legacy_secret = getattr(settings, "JWT_SECRET", None)
-            if legacy_secret:
+            if allow_legacy and legacy_secret:
+                logger = logging.getLogger("shafsky.security.jwt")
+                logger.warning("Using legacy HS256 fallback to decode JWT - this should be disabled in production.")
                 try:
                     payload = jwt.decode(
                         token,
                         legacy_secret,
-                        algorithms=["HS256", "RS256"],
+                        algorithms=["HS256"],
                         options={"verify_aud": False}
                     )
                     if payload:
@@ -120,6 +125,7 @@ class SecurityJWT:
                 except jwt.ExpiredSignatureError:
                     raise HTTPException(status_code=401, detail="Token has expired.")
                 except Exception:
+                    # If fallback fails, continue to final error
                     pass
 
         # 3. Expiration Check if signature verification failed

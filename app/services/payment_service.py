@@ -5,10 +5,13 @@ refund handling, timeline tracking, and audit logging.
 """
 
 import uuid
+import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from sqlalchemy import select
+
+logger = logging.getLogger(__name__)
 
 from app.models.payment import PaymentTransaction, Invoice, Refund, PaymentStatus, InvoiceStatus, PaymentMethod
 from app.schemas.payment import PaymentInitiateRequest, RefundRequest, WebhookPayload
@@ -31,9 +34,23 @@ class PaymentService:
         provider = provider or MockPaymentProvider()
         ref = f"PAY-{uuid.uuid4().hex[:8].upper()}"
 
+        # Server-controlled Authoritative Amount Lookup from Database
+        authoritative_amount = payload.amount
+        if str(payload.entity_type).upper() == "BOOKING" and payload.entity_id:
+            from app.models.schema import Booking
+            from sqlalchemy import or_
+            try:
+                entity_uuid = uuid.UUID(str(payload.entity_id))
+                booking = db.scalar(select(Booking).where(or_(Booking.id == entity_uuid, Booking.booking_ref == str(payload.entity_id))))
+            except ValueError:
+                booking = db.scalar(select(Booking).where(Booking.booking_ref == str(payload.entity_id)))
+
+            if booking and booking.total_amount is not None:
+                authoritative_amount = float(booking.total_amount)
+
         # Register intent with payment provider
         intent = provider.create_payment_intent(
-            amount=payload.amount,
+            amount=authoritative_amount,
             currency=payload.currency,
             reference_id=ref,
             metadata=payload.metadata or {}
@@ -44,7 +61,7 @@ class PaymentService:
             entity_type=payload.entity_type.strip().upper(),
             entity_id=str(payload.entity_id),
             customer_id=payload.customer_id,
-            amount=payload.amount,
+            amount=authoritative_amount,
             currency=payload.currency,
             payment_method=payload.payment_method,
             status=PaymentStatus.PENDING,
@@ -91,21 +108,31 @@ class PaymentService:
         payload: WebhookPayload,
         provider: Optional[PaymentProvider] = None
     ) -> PaymentTransaction:
-        """Handles incoming payment gateway webhooks and updates transaction state."""
+        """Handles incoming payment gateway webhooks with strict idempotency and state machine protection."""
         provider = provider or MockPaymentProvider()
-        
+
         transaction = db.scalar(
             select(PaymentTransaction).where(PaymentTransaction.transaction_ref == payload.transaction_ref)
         )
         if not transaction:
             raise ValueError(f"Transaction with reference '{payload.transaction_ref}' not found.")
 
+        # 1. Rule 14: Webhook Idempotency Check
+        if transaction.status == PaymentStatus.SUCCESSFUL:
+            logger.info("Idempotent webhook delivery received for transaction %s; skipping duplicate processing.", payload.transaction_ref)
+            return transaction
+
+        # 2. Rule 15: Payment State Machine Transition Protection
+        if transaction.status in [PaymentStatus.FAILED, PaymentStatus.REFUNDED]:
+            if payload.event_type in ["payment.succeeded", "PAYMENT_SUCCESS"]:
+                raise ValueError(f"Invalid payment state transition from '{transaction.status.value}' to 'SUCCESSFUL'.")
+
         # Update status based on event
         if payload.event_type in ["payment.succeeded", "PAYMENT_SUCCESS"]:
             transaction.status = PaymentStatus.SUCCESSFUL
             transaction.gateway_payment_id = payload.gateway_payment_id
-            
-            # Auto-generate Invoice
+
+            # Auto-generate Invoice (Idempotent)
             cls.generate_invoice(
                 db,
                 transaction=transaction,
@@ -139,9 +166,13 @@ class PaymentService:
         customer_name: str,
         customer_email: str
     ) -> Invoice:
-        """Generates a tax invoice for a transaction."""
+        """Generates a tax invoice for a transaction with duplicate prevention."""
+        existing_invoice = db.scalar(select(Invoice).where(Invoice.transaction_id == transaction.id))
+        if existing_invoice:
+            return existing_invoice
+
         invoice_num = f"INV-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
-        
+
         tax_rate = 0.18  # 18% GST/Tax standard
         subtotal = round(transaction.amount / (1 + tax_rate), 2)
         tax_amt = round(transaction.amount - subtotal, 2)

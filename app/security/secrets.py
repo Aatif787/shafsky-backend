@@ -22,6 +22,13 @@ def validate_secrets_on_startup():
         ("DATABASE_URL", str(settings.DATABASE_URL)),
     ]
 
+    # Add known critical secrets to the list
+    critical_secrets.extend([
+        ("JWT_PRIVATE_KEY", str(settings.JWT_PRIVATE_KEY)),
+        ("JWT_PUBLIC_KEY", str(settings.JWT_PUBLIC_KEY)),
+        ("JWT_REFRESH_SECRET", str(settings.JWT_REFRESH_SECRET)),
+    ])
+
     missing = []
     for name, value in critical_secrets:
         if not value or value.strip() == "" or "change-this" in value.lower() or "secret" == value.lower():
@@ -50,4 +57,14 @@ def validate_secrets_on_startup():
         else:
             logger.warning(f"Development mode warning: {error_msg}")
     else:
+        # Additional checks: Disallow legacy HS256 fallback in production
+        allow_legacy = getattr(settings, "ALLOW_HS256_LEGACY_FALLBACK", False)
+        if allow_legacy and env not in ["development", "dev", "test", "testing"]:
+            raise ValueError("ALLOW_HS256_LEGACY_FALLBACK must be disabled in non-development environments.")
+
+        # Ensure algorithm defaults to RS256 unless explicit override for testing
+        alg = getattr(settings, "JWT_ALGORITHM", "RS256")
+        if alg.upper() != "RS256" and env not in ["development", "dev", "test", "testing"]:
+            raise ValueError("JWT_ALGORITHM must be RS256 in production environments.")
+
         logger.info(f"Startup secrets and RSA key infrastructure (Key ID: {active_kid}) validation passed successfully.")

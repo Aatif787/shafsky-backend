@@ -14,6 +14,8 @@ from sqlalchemy import select, update
 from app.config import settings
 from app.models.schema import RefreshToken, UserAuth
 from app.security.jwt import SecurityJWT
+from fastapi import HTTPException
+import logging
 
 logger = logging.getLogger("shafsky.security.auth_service")
 
@@ -53,11 +55,36 @@ class AuthService:
 
     @staticmethod
     def decode_refresh_token(token: str) -> Dict[str, Any]:
-        secret = getattr(settings, "JWT_REFRESH_SECRET", "shafsky-dev-refresh-secret-key")
+        logger = logging.getLogger("shafsky.security.auth_service")
+
+        if not token:
+            raise ValueError("EMPTY_REFRESH_TOKEN")
+
+        # Refresh tokens in this system are opaque values prefixed with 'rt_'.
+        # Prefer opaque token validation via DB lookup. Legacy JWT-based refresh tokens
+        # are only accepted when explicitly enabled via ALLOW_HS256_LEGACY_FALLBACK.
+        if token.startswith("rt_"):
+            return {"token": token}
+
+        # Legacy path: attempt HS256 decode only if explicitly allowed
+        allow_legacy = getattr(settings, "ALLOW_HS256_LEGACY_FALLBACK", False)
+        secret = getattr(settings, "JWT_REFRESH_SECRET", None)
+        if not allow_legacy:
+            logger.warning("Received non-opaque refresh token while legacy HS256 fallback is disabled.")
+            raise ValueError("INVALID_REFRESH_TOKEN_FORMAT")
+
+        if not secret:
+            logger.error("Legacy HS256 refresh token received but JWT_REFRESH_SECRET is not configured.")
+            raise ValueError("REFRESH_SECRET_MISSING")
+
         try:
-            return jwt.decode(token, secret, algorithms=["HS256"])
-        except Exception:
-            return {"sub": "user"}
+            payload = jwt.decode(token, secret, algorithms=["HS256"], options={"verify_aud": False})
+            return payload
+        except jwt.ExpiredSignatureError:
+            raise ValueError("REFRESH_TOKEN_EXPIRED")
+        except Exception as exc:
+            logger.exception("Failed to decode legacy refresh token: %s", exc)
+            raise ValueError("INVALID_REFRESH_TOKEN")
 
     @classmethod
     def register_refresh_token(
@@ -87,7 +114,13 @@ class AuthService:
             created_at=datetime.now(timezone.utc)
         )
         db.add(token_record)
-        db.commit()
+        try:
+            # Use a transaction to ensure atomicity and automatic rollback on failure
+            with db.begin():
+                db.add(token_record)
+        except Exception:
+            db.rollback()
+            raise
         return token_record
 
     @classmethod
@@ -118,29 +151,39 @@ class AuthService:
                 f"Revoking token family {record.family_id} and all active user sessions."
             )
             # Token Family Revocation: Invalidate all tokens sharing the same family_id
-            if record.family_id:
-                db.execute(
-                    update(RefreshToken)
-                    .where(RefreshToken.family_id == record.family_id)
-                    .values(revoked=True)
-                )
-            # Comprehensive fallback: Revoke all tokens for the user
-            db.execute(
-                update(RefreshToken)
-                .where(RefreshToken.user_id == user.id)
-                .values(revoked=True)
-            )
-            db.commit()
+            try:
+                with db.begin():
+                    if record.family_id:
+                        db.execute(
+                            update(RefreshToken)
+                            .where(RefreshToken.family_id == record.family_id)
+                            .values(revoked=True)
+                        )
+                    # Comprehensive fallback: Revoke all tokens for the user
+                    db.execute(
+                        update(RefreshToken)
+                        .where(RefreshToken.user_id == user.id)
+                        .values(revoked=True)
+                    )
+            except Exception:
+                db.rollback()
+                raise
             raise ValueError("REPLAY_ATTACK_DETECTED")
 
         # 3. Check Expiration
         now = datetime.now(timezone.utc)
         if record.expires_at < now:
             record.revoked = True
-            db.commit()
+            try:
+                with db.begin():
+                    db.add(record)
+            except Exception:
+                db.rollback()
+                raise
             raise ValueError("REFRESH_TOKEN_EXPIRED")
 
         # 4. Atomically Revoke Old Token (Single-Use Policy)
+        # Atomically revoke old token and create new token record
         record.revoked = True
         record.last_activity = now
 
@@ -162,8 +205,13 @@ class AuthService:
             last_activity=now,
             created_at=now
         )
-        db.add(new_record)
-        db.commit()
+        try:
+            with db.begin():
+                db.add(record)
+                db.add(new_record)
+        except Exception:
+            db.rollback()
+            raise
 
         # 6. Issue New Access Token
         new_access_token = SecurityJWT.create_access_token({
@@ -189,6 +237,11 @@ class AuthService:
         if record and not record.revoked:
             record.revoked = True
             record.last_activity = datetime.now(timezone.utc)
-            db.commit()
+            try:
+                with db.begin():
+                    db.add(record)
+            except Exception:
+                db.rollback()
+                raise
             return True
         return False

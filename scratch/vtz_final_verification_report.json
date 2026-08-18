@@ -1,0 +1,116 @@
+{
+  "1_vtz_airport_record": {
+    "id": "8653a859-d1ea-464a-9ce8-751b2330dc65",
+    "name": "Visakhapatnam International Airport",
+    "iata": "VTZ",
+    "icao": "VOVZ",
+    "city": "Visakhapatnam",
+    "country": "India",
+    "is_supported": true,
+    "is_active": true
+  },
+  "2_existing_vtz_records_found": 12,
+  "3_records_created": 2,
+  "4_records_updated": 2,
+  "5_records_preserved": 12,
+  "6_duplicate_records_found": 0,
+  "7_final_vtz_pricing": {
+    "DEPARTURE": "INR 2500.00",
+    "ARRIVAL": "INR 2500.00"
+  },
+  "8_exact_service_inclusion_text": {
+    "DEPARTURE": [
+      "WELCOME GUEST FROM CURBSIDE AREA.",
+      "PORTER SERVICE WITH DEDICATED STAFF.",
+      "WHEELCHAIR SERVICE AVAILABLE (Through Airlines)",
+      "ASSIST FROM SEPARATE ENTRY GATE.",
+      "ASSIST TO BAGGAGE WRAPPING FACILITIES.",
+      "ASSIST AT SEPARATE CHECKIN PROCESS AT COUNTERS.",
+      "ASSIST IN S.H.A.(SECURITY HOLD AREA)."
+    ],
+    "ARRIVAL": [
+      "WELCOME GUEST FROM AEROBRIDGE",
+      "DEDICATED STAFF WITH PLACARD",
+      "PORTER SERVICE WITH DEDICATED STAFF AT ARRIVALS",
+      "WHEELCHAIR SERVICE AVAILABLE WITH DEDICATED STAFF (Through Airlines)",
+      "ASSIST IN BAGGAGE BELT AREA",
+      "ASSIST GUEST TILL THE CAR PARKING AREA"
+    ]
+  },
+  "9_tier_mapping": "TIER = NOT PROVIDED BY SOURCE (Using verified production architecture default 'meet_greet' / Meet & Greet Escort)",
+  "10_missing_information": "None (Tier, Transit, International unsupplied and omitted as instructed)",
+  "12_booking_verification": {
+    "VTZ + Departure": "CONFIRMED AVAILABLE \u2014 INR 2500.00",
+    "VTZ + Arrival": "CONFIRMED AVAILABLE \u2014 INR 2500.00",
+    "VTZ + Transit": "CONFIRMED UNCONFIGURED (is_available=False)",
+    "VTZ + International Departure": "CONFIRMED UNCONFIGURED (is_available=False)",
+    "VTZ + International Arrival": "CONFIRMED UNCONFIGURED (is_available=False)"
+  },
+  "11_payment_verification": "PASSED \u2014 Authoritative DB price INR 2500.00 strictly enforced; client tampering (1, 0, 999999) rejected.",
+  "13_database_api_verification": "PASSED \u2014 Database records match API endpoints and JourneyEngine resolution.",
+  "14_cross_airport_verification": "PASSED \u2014 No leaks between VTZ and other airports.",
+  "15_regression_test_results": {
+    "ATQ": {
+      "active_services_count": 4,
+      "min_price": 2000.0,
+      "max_price": 2500.0,
+      "status": "UNTOUCHED_OK"
+    },
+    "GAU": {
+      "active_services_count": 11,
+      "min_price": 1999.0,
+      "max_price": 4950.0,
+      "status": "UNTOUCHED_OK"
+    },
+    "BBI": {
+      "active_services_count": 3,
+      "min_price": 1700.0,
+      "max_price": 2500.0,
+      "status": "UNTOUCHED_OK"
+    },
+    "TRV": {
+      "active_services_count": 24,
+      "min_price": 1999.0,
+      "max_price": 2499.0,
+      "status": "UNTOUCHED_OK"
+    },
+    "DEL": {
+      "active_services_count": 42,
+      "min_price": 999.0,
+      "max_price": 9500.0,
+      "status": "UNTOUCHED_OK"
+    },
+    "BOM": {
+      "active_services_count": 15,
+      "min_price": 3600.0,
+      "max_price": 13500.0,
+      "status": "UNTOUCHED_OK"
+    },
+    "HYD": {
+      "active_services_count": 36,
+      "min_price": 999.0,
+      "max_price": 7000.0,
+      "status": "UNTOUCHED_OK"
+    },
+    "AMD": {
+      "active_services_count": 7,
+      "min_price": 2420.0,
+      "max_price": 4950.0,
+      "status": "UNTOUCHED_OK"
+    },
+    "LKO": {
+      "active_services_count": 35,
+      "min_price": 999.0,
+      "max_price": 4950.0,
+      "status": "UNTOUCHED_OK"
+    },
+    "CCU": {
+      "active_services_count": 28,
+      "min_price": 1500.0,
+      "max_price": 3500.0,
+      "status": "UNTOUCHED_OK"
+    }
+  },
+  "16_any_unresolved_issue": "None",
+  "final_status": "VTZ CONFIGURATION VERIFIED"
+}

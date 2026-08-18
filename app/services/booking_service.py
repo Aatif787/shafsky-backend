@@ -14,6 +14,81 @@ from app.booking.exceptions import ConcurrencyException
 from app.booking.service_validator import ServiceValidator
 
 class BookingService:
+    @classmethod
+    def calculate_authoritative_price(
+        cls,
+        db: Session,
+        airport_code: str,
+        service_tier_or_slug: str,
+        journey_type: str = "DEPARTURE",
+        flight_type: str = "DOMESTIC",
+        pax_count: int = 1
+    ) -> float:
+        from app.models.journey_models import SupportedAirport, Service, AirportService
+
+        code_clean = (airport_code or "DEL").strip().upper()
+        slug_clean = (service_tier_or_slug or "silver").strip().lower()
+        j_type_clean = (journey_type or "DEPARTURE").strip().upper()
+        f_type_clean = (flight_type or "DOMESTIC").strip().upper()
+
+        # 1. Lookup Airport
+        airport = db.scalar(
+            select(SupportedAirport).where(SupportedAirport.iata_code == code_clean)
+        )
+        if not airport:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Airport '{code_clean}' is not registered or supported in the database."
+            )
+
+        # 2. Lookup Service by slug or matching tier name
+        service = db.scalar(
+            select(Service).where(or_(Service.slug == slug_clean, Service.name.ilike(f"%{slug_clean}%")))
+        )
+
+        # 3. Lookup AirportService relationship in DB
+        stmt = select(AirportService).where(
+            AirportService.airport_id == airport.id,
+            AirportService.is_available == True
+        )
+        if service:
+            stmt = stmt.where(AirportService.service_id == service.id)
+
+        mappings = list(db.scalars(stmt).all())
+
+        if not mappings and service:
+            # Check if any available mapping exists for this service_id at this airport
+            mappings = list(db.scalars(
+                select(AirportService).where(
+                    AirportService.airport_id == airport.id,
+                    AirportService.is_available == True,
+                    AirportService.service_id == service.id
+                )
+            ).all())
+
+        if not mappings:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Service tier '{slug_clean}' is not available at airport '{code_clean}'."
+            )
+
+        # Filter by journey_type and flight_type for exact match
+        exact_match = None
+        for m in mappings:
+            if m.journey_type == j_type_clean and m.flight_type == f_type_clean and m.is_available:
+                exact_match = m
+                break
+
+        if not exact_match:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Service package '{slug_clean}' is not available at airport '{code_clean}' for {j_type_clean} {f_type_clean}."
+            )
+
+        unit_price = float(exact_match.price)
+        total = round(unit_price * max(1, pax_count), 2)
+        return total
+
     @staticmethod
     def generate_booking_ref() -> str:
         date_str = datetime.now(timezone.utc).strftime("%Y%m%d")
@@ -82,7 +157,41 @@ class BookingService:
             if profile:
                 valid_profile_id = profile.id
 
-        # 5. Generate unique booking reference with retry on concurrency collision
+        # 5. Calculate server-side authoritative price from Database (Ignore untrusted client price)
+        pax_count = 1
+        if metadata_json and "pax_adults" in metadata_json:
+            try:
+                pax_count = max(1, int(metadata_json.get("pax_adults", 1)))
+            except (ValueError, TypeError):
+                pax_count = 1
+
+        # Determine service airport (check origin_code in supported_airports, else dest_code)
+        from app.models.journey_models import SupportedAirport
+        target_airport = "DEL"
+        journey_type = "DEPARTURE"
+
+        if payload.origin_code and db.scalar(select(SupportedAirport).where(SupportedAirport.iata_code == payload.origin_code.upper())):
+            target_airport = payload.origin_code.upper()
+            journey_type = "DEPARTURE"
+        elif payload.dest_code and db.scalar(select(SupportedAirport).where(SupportedAirport.iata_code == payload.dest_code.upper())):
+            target_airport = payload.dest_code.upper()
+            journey_type = "ARRIVAL"
+        else:
+            target_airport = payload.origin_code or payload.dest_code or "DEL"
+            journey_type = "DEPARTURE"
+
+        target_service = payload.service_type or "silver"
+
+        authoritative_price = cls.calculate_authoritative_price(
+            db=db,
+            airport_code=target_airport,
+            service_tier_or_slug=target_service,
+            journey_type=journey_type,
+            flight_type="DOMESTIC",
+            pax_count=pax_count
+        )
+
+        # 6. Generate unique booking reference with retry on concurrency collision
         max_attempts = 5
         for attempt in range(max_attempts):
             booking_ref = cls.generate_booking_ref()
@@ -106,7 +215,7 @@ class BookingService:
                 selected_services=selected_services,
                 service_options=service_options,
                 metadata_json=metadata_json,
-                total_amount=payload.total_amount,
+                total_amount=authoritative_price,
                 currency=payload.currency or "INR",
                 status=BookingStatus.PENDING,
                 version=1,

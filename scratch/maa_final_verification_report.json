@@ -1,0 +1,142 @@
+{
+  "1_maa_airport_record": {
+    "id": "e9a17dab-d3e0-4aab-b4f1-e66b26565ecc",
+    "name": "Chennai International Airport",
+    "iata": "MAA",
+    "icao": "VOMM",
+    "city": "Chennai",
+    "country": "India",
+    "is_supported": true,
+    "is_active": true
+  },
+  "2_existing_maa_records_found": 28,
+  "3_records_created": 4,
+  "4_records_updated": 4,
+  "5_records_preserved": 28,
+  "6_duplicate_records_found": 0,
+  "7_final_maa_pricing": {
+    "DOMESTIC_DEPARTURE_SILVER": "INR 2500.00",
+    "DOMESTIC_ARRIVAL_SILVER": "INR 2500.00",
+    "INTERNATIONAL_ARRIVAL_SILVER": "INR 3500.00",
+    "INTERNATIONAL_DEPARTURE_SILVER": "INR 4500.00"
+  },
+  "8_exact_service_inclusion_text": {
+    "DOMESTIC_DEPARTURE": [
+      "WELCOME GUEST FROM CURBSIDE AREA.",
+      "PORTER SERVICE WITH DEDICATED STAFF.",
+      "WHEELCHAIR SERVICE AVAILABLE (Through Airlines).",
+      "ASSIST FROM ENTRY GATE.",
+      "ASSIST IN CHECKIN PROCESS AT COUNTERS.",
+      "ASSIST IN S.H.A.(SECURITY HOLD AREA).",
+      "ASSIST GUEST TILL THE BOARDING GATE."
+    ],
+    "DOMESTIC_ARRIVAL": [
+      "WELCOME GUEST FROM AEROBRIDGE .",
+      "BAGGAGE ASSISTANCE FOR HAND BAGGAGE.",
+      "ASSISTANCE AT BAGGAGE BELT AREA.",
+      "COORDINATION WITH RECEIVING PERSON.",
+      "DROP OFF TILL CAR PARKING."
+    ],
+    "INTERNATIONAL_ARRIVAL": [
+      "WELCOME GUEST FROM POST CUSTOM.",
+      "ASSISTANCE AT BAGGAGE BELT AREA.",
+      "COORDINATION WITH RECEIVING PERSON.",
+      "DROP OFF TILL CAR PARKING."
+    ],
+    "INTERNATIONAL_DEPARTURE": [
+      "WELCOME GUEST FROM CURB SIDE.",
+      "PORTER SERVICE WITH DEDICATED STAFF",
+      "WHEELCHAIR SERVICE AVAILABLE (Through Airlines)",
+      "ASSIST FROM ENTRY GATE",
+      "ASSIST IN BAGGAGE CHECK-IN AT AIRLINE COUNTER",
+      "GUIDANCE FOR IMMIGRATION COUNTERS",
+      "ASSIST IN S.H.A.(SECURITY HOLD AREA)",
+      "ASSIST GUEST UPTO BOARDING GATE"
+    ]
+  },
+  "9_tier_mapping": "TIER = Silver (Preserved 100% exactly as specified)",
+  "10_missing_unconfigured_tiers": "Gold, Elite, Platinum, Transit (Unsupplied by source and verified inactive)",
+  "12_booking_verification": {
+    "MAA + Domestic Departure + Silver": "CONFIRMED AVAILABLE \u2014 INR 2500.00",
+    "MAA + Domestic Arrival + Silver": "CONFIRMED AVAILABLE \u2014 INR 2500.00",
+    "MAA + International Arrival + Silver": "CONFIRMED AVAILABLE \u2014 INR 3500.00",
+    "MAA + International Departure + Silver": "CONFIRMED AVAILABLE \u2014 INR 4500.00",
+    "MAA + Domestic Departure + Gold": "CONFIRMED UNCONFIGURED (is_available=False)",
+    "MAA + Domestic Departure + Elite": "CONFIRMED UNCONFIGURED (is_available=False)",
+    "MAA + Domestic Departure + Platinum": "CONFIRMED UNCONFIGURED (is_available=False)",
+    "MAA + Transit": "CONFIRMED UNCONFIGURED (is_available=False)"
+  },
+  "11_payment_verification": "PASSED \u2014 Authoritative DB prices (INR 2500 / 3500 / 4500) strictly enforced; client tampering (1, 0, 999999) rejected.",
+  "13_database_api_verification": "PASSED \u2014 Database records match API endpoints and JourneyEngine resolution.",
+  "14_cross_airport_verification": "PASSED \u2014 No leaks between MAA and other airports.",
+  "15_regression_test_results": {
+    "ATQ": {
+      "active_services_count": 4,
+      "min_price": 2000.0,
+      "max_price": 2500.0,
+      "status": "UNTOUCHED_OK"
+    },
+    "GAU": {
+      "active_services_count": 11,
+      "min_price": 1999.0,
+      "max_price": 4950.0,
+      "status": "UNTOUCHED_OK"
+    },
+    "BBI": {
+      "active_services_count": 3,
+      "min_price": 1700.0,
+      "max_price": 2500.0,
+      "status": "UNTOUCHED_OK"
+    },
+    "TRV": {
+      "active_services_count": 24,
+      "min_price": 1999.0,
+      "max_price": 2499.0,
+      "status": "UNTOUCHED_OK"
+    },
+    "VTZ": {
+      "active_services_count": 2,
+      "min_price": 2500.0,
+      "max_price": 2500.0,
+      "status": "UNTOUCHED_OK"
+    },
+    "DEL": {
+      "active_services_count": 42,
+      "min_price": 999.0,
+      "max_price": 9500.0,
+      "status": "UNTOUCHED_OK"
+    },
+    "BOM": {
+      "active_services_count": 15,
+      "min_price": 3600.0,
+      "max_price": 13500.0,
+      "status": "UNTOUCHED_OK"
+    },
+    "HYD": {
+      "active_services_count": 24,
+      "min_price": 999.0,
+      "max_price": 7000.0,
+      "status": "UNTOUCHED_OK"
+    },
+    "AMD": {
+      "active_services_count": 7,
+      "min_price": 2420.0,
+      "max_price": 4950.0,
+      "status": "UNTOUCHED_OK"
+    },
+    "LKO": {
+      "active_services_count": 35,
+      "min_price": 999.0,
+      "max_price": 4950.0,
+      "status": "UNTOUCHED_OK"
+    },
+    "CCU": {
+      "active_services_count": 28,
+      "min_price": 1500.0,
+      "max_price": 3500.0,
+      "status": "UNTOUCHED_OK"
+    }
+  },
+  "16_any_unresolved_issue": "None",
+  "final_status": "MAA CONFIGURATION VERIFIED"
+}

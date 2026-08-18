@@ -1,0 +1,410 @@
+Run started:2026-08-16 14:45:33.170226+00:00
+
+Test results:
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: shafsky-backend-main\app\core\redis.py:112:8
+111	            _redis_client.close()
+112	        except Exception:
+113	            pass
+114	    _redis_client = None
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: shafsky-backend-main\app\flight\providers\aviation_edge_provider.py:123:4
+122	            return redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+123	    except Exception:
+124	        pass
+125	    return None
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: shafsky-backend-main\app\flight\providers\aviation_edge_provider.py:313:16
+312	                    return dt.replace(tzinfo=local_tz).astimezone(timezone.utc)
+313	                except Exception:
+314	                    pass
+315	            return dt.replace(tzinfo=timezone.utc)
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: shafsky-backend-main\app\flight\providers\aviation_edge_provider.py:325:24
+324	                            return dt.replace(tzinfo=local_tz).astimezone(timezone.utc)
+325	                        except Exception:
+326	                            pass
+327	                    return dt.replace(tzinfo=timezone.utc)
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: shafsky-backend-main\app\flight\providers\aviation_edge_provider.py:328:16
+327	                    return dt.replace(tzinfo=timezone.utc)
+328	                except Exception:
+329	                    pass
+330	        return None
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: shafsky-backend-main\app\flight\providers\aviation_edge_provider.py:562:16
+561	                    date_prefix = dt.strftime("%Y-%m-%d")
+562	                except Exception:
+563	                    pass
+564	            arr_sched = f"{date_prefix}T{a_time}"
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: shafsky-backend-main\app\flight\providers\aviation_edge_provider.py:661:12
+660	                return flight_status
+661	            except Exception:
+662	                pass
+663	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: shafsky-backend-main\app\flight\providers\aviation_edge_provider.py:814:12
+813	                return FlightStatusData.model_validate(cached)
+814	            except Exception:
+815	                pass
+816	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: shafsky-backend-main\app\flight\providers\aviation_edge_provider.py:855:12
+854	                return [FlightStatusData.model_validate(item) for item in cached]
+855	            except Exception:
+856	                pass
+857	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: shafsky-backend-main\app\flight\providers\aviation_edge_provider.py:887:12
+886	                return FlightTelemetry.model_validate(cached)
+887	            except Exception:
+888	                pass
+889	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: shafsky-backend-main\app\integrations\whatsapp\client.py:149:16
+148	                    err_data = response.json().get("error", {})
+149	                except Exception:
+150	                    pass
+151	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: shafsky-backend-main\app\integrations\whatsapp\client.py:311:16
+310	                    err_data = response.json().get("error", {})
+311	                except Exception:
+312	                    pass
+313	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: shafsky-backend-main\app\integrations\whatsapp\service.py:633:12
+632	                break
+633	            except Exception:
+634	                pass
+635	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: shafsky-backend-main\app\legacy\migration_router.py:1222:4
+1221	            db.commit()
+1222	    except Exception:
+1223	        pass
+1224	    return _ApiOk(data={"id": body.id})
+
+--------------------------------------------------
+>> Issue: [B104:hardcoded_bind_all_interfaces] Possible binding to all interfaces.
+   Severity: Medium   Confidence: Medium
+   CWE: CWE-605 (https://cwe.mitre.org/data/definitions/605.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b104_hardcoded_bind_all_interfaces.html
+   Location: shafsky-backend-main\app\main.py:171:37
+170	    port = int(os.getenv("PORT", "8001"))
+171	    uvicorn.run("app.main:app", host="0.0.0.0", port=port, reload=True)
+172	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: shafsky-backend-main\app\models\whatsapp_models.py:17:0
+16	    Base.metadata.create_all(bind=engine)
+17	except Exception as _e:
+18	    pass
+19	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: shafsky-backend-main\app\models\whatsapp_models.py:142:0
+141	    Base.metadata.create_all(bind=engine)
+142	except Exception:
+143	    pass
+
+--------------------------------------------------
+>> Issue: [B106:hardcoded_password_funcarg] Possible hardcoded password: 'ShafskyUserPasswordHash2026'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b106_hardcoded_password_funcarg.html
+   Location: shafsky-backend-main\app\routers\auth_router.py:390:15
+389	            email=email,
+390	            password_hash="ShafskyUserPasswordHash2026",
+391	            role=Role.CUSTOMER,
+392	            is_verified=True,
+393	        )
+394	        db.add(user)
+395	        db.commit()
+396	        db.refresh(user)
+397	        u_uuid = user.id
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: shafsky-backend-main\app\routers\booking_router.py:32:8
+31	            profile_id = uuid.UUID(user_context.get("userId"))
+32	        except Exception:
+33	            pass
+34	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: shafsky-backend-main\app\routers\config_router.py:236:4
+235	            return AdminApiResponse(success=True, data=res)
+236	    except Exception:
+237	        pass
+238	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: shafsky-backend-main\app\routers\journey_router.py:217:8
+216	            )
+217	        except Exception:
+218	            pass
+219	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: shafsky-backend-main\app\routers\notification_router.py:95:8
+94	            user_id_str = decoded.get("user_id")
+95	        except Exception:
+96	            pass
+97	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: shafsky-backend-main\app\routers\notification_router.py:168:8
+167	            user_id_str = decoded.get("user_id")
+168	        except Exception:
+169	            pass
+170	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: shafsky-backend-main\app\routers\ticketing_router.py:87:8
+86	                cust_id = uuid.UUID(uid)
+87	        except Exception:
+88	            pass
+89	
+
+--------------------------------------------------
+>> Issue: [B324:hashlib] Use of weak MD5 hash for security. Consider usedforsecurity=False
+   Severity: High   Confidence: High
+   CWE: CWE-327 (https://cwe.mitre.org/data/definitions/327.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b324_hashlib.html
+   Location: shafsky-backend-main\app\security\device_tracking.py:51:38
+50	            fp_str = f"{ip}:{user_agent}"
+51	            client_device_id = f"dev_{hashlib.md5(fp_str.encode()).hexdigest()[:12]}"
+52	
+
+--------------------------------------------------
+>> Issue: [B112:try_except_continue] Try, Except, Continue detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b112_try_except_continue.html
+   Location: shafsky-backend-main\app\security\jwt.py:105:12
+104	                continue
+105	            except Exception:
+106	                continue
+107	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: shafsky-backend-main\app\security\jwt.py:127:16
+126	                    raise HTTPException(status_code=401, detail="Token has expired.")
+127	                except Exception:
+128	                    # If fallback fails, continue to final error
+129	                    pass
+130	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: shafsky-backend-main\app\security\jwt.py:138:12
+137	                    raise HTTPException(status_code=401, detail="Token has expired.")
+138	            except Exception:
+139	                pass
+140	            raise HTTPException(status_code=401, detail="Could not validate credentials.")
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: shafsky-backend-main\app\security\keys.py:66:4
+65	            return _clean_key_input(decoded)
+66	    except Exception:
+67	        pass
+68	
+
+--------------------------------------------------
+>> Issue: [B106:hardcoded_password_funcarg] Possible hardcoded password: 'ShafskyAdminHashedPassword2026'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b106_hardcoded_password_funcarg.html
+   Location: shafsky-backend-main\app\services\admin_service.py:106:19
+105	                email=email,
+106	                password_hash="ShafskyAdminHashedPassword2026",
+107	                role=role,
+108	                is_verified=True,
+109	                created_at=datetime.now(timezone.utc),
+110	                updated_at=datetime.now(timezone.utc)
+111	            )
+112	            db.add(user)
+113	            db.commit()
+114	            db.refresh(user)
+115	        return user
+
+--------------------------------------------------
+>> Issue: [B106:hardcoded_password_funcarg] Possible hardcoded password: 'ShafskyCustomerPlaceholderHash2026'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b106_hardcoded_password_funcarg.html
+   Location: shafsky-backend-main\app\services\crm_service.py:75:24
+74	                email=payload.email,
+75	                password_hash="ShafskyCustomerPlaceholderHash2026",
+76	                role=Role.CUSTOMER,
+77	                is_verified=True,
+78	                created_at=datetime.now(timezone.utc),
+79	                updated_at=datetime.now(timezone.utc)
+80	            )
+81	            db.add(user_auth)
+82	            db.commit()
+83	
+84	        # Create profile record
+
+--------------------------------------------------
+>> Issue: [B311:blacklist] Standard pseudo-random generators are not suitable for security/cryptographic purposes.
+   Severity: Low   Confidence: High
+   CWE: CWE-330 (https://cwe.mitre.org/data/definitions/330.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b311-random
+   Location: shafsky-backend-main\app\services\journey_engine.py:503:30
+502	        date_stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+503	        rand_suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
+504	        ref_code = f"SHK-{date_stamp}-{rand_suffix}"
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: shafsky-backend-main\app\services\service_config_service.py:934:8
+933	                errors.append(f"Service at {target_airport_code} requires at least {advance_notice_hours} hours advance notice.")
+934	        except Exception:
+935	            pass
+936	
+
+--------------------------------------------------
+>> Issue: [B311:blacklist] Standard pseudo-random generators are not suitable for security/cryptographic purposes.
+   Severity: Low   Confidence: High
+   CWE: CWE-330 (https://cwe.mitre.org/data/definitions/330.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b311-random
+   Location: shafsky-backend-main\app\services\service_config_service.py:1082:34
+1081	            date_stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+1082	            rand_suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
+1083	            ref_code = f"SHK-{date_stamp}-{rand_suffix}"
+
+--------------------------------------------------
+
+Code scanned:
+	Total lines of code: 24001
+	Total lines skipped (#nosec): 0
+	Total potential issues skipped due to specifically being disabled (e.g., #nosec BXXX): 0
+
+Run metrics:
+	Total issues (by severity):
+		Undefined: 0
+		Low: 32
+		Medium: 1
+		High: 1
+	Total issues (by confidence):
+		Undefined: 0
+		Low: 0
+		Medium: 4
+		High: 30
+Files skipped (0):

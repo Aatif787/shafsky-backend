@@ -1,4 +1,6 @@
 import hashlib
+import hmac
+from app.config import settings
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 from fastapi import Request
@@ -46,9 +48,16 @@ class DeviceTracking:
 
         client_device_id = request.headers.get("X-Device-ID")
         if not client_device_id:
-            # Deterministic fingerprint if header missing
+            # Deterministic, HMAC-protected fingerprint if header missing
             fp_str = f"{ip}:{user_agent}"
-            client_device_id = f"dev_{hashlib.md5(fp_str.encode()).hexdigest()[:12]}"
+            # Use a server-side secret to HMAC the fingerprint for deterministic but cryptographically strong IDs
+            secret = getattr(settings, "DEVICE_ID_HMAC_SECRET", None) or getattr(settings, "JWT_REFRESH_SECRET", None) or ""
+            try:
+                digest = hmac.new(secret.encode("utf-8"), fp_str.encode("utf-8"), hashlib.sha256).hexdigest()
+                client_device_id = f"dev_{digest[:24]}"
+            except Exception:
+                # Fallback: non-cryptographic but unique identifier
+                client_device_id = f"dev_{hashlib.sha256(fp_str.encode()).hexdigest()[:24]}"
 
         parsed = cls.parse_user_agent(user_agent)
         return {

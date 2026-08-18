@@ -5,18 +5,23 @@ Revises: b1a2c3d4e5f6
 Create Date: 2026-07-31 18:00:00.000000
 
 """
-from alembic import op
+# pylint: disable=no-member,invalid-name
+from typing import Sequence, Union
+
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
+from alembic import op
+
 # revision identifiers, used by Alembic.
-revision = 'c5d6e7f8g9h0'
-down_revision = 'b1a2c3d4e5f6'
-branch_labels = None
-depends_on = None
+revision: str = 'c5d6e7f8g9h0'
+down_revision: Union[str, Sequence[str], None] = 'b1a2c3d4e5f6'
+branch_labels: Union[str, Sequence[str], None] = None
+depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    """Upgrade schema by adding shared domain services tables."""
     # 1. Assignments
     op.create_table(
         'assignments',
@@ -29,8 +34,8 @@ def upgrade() -> None:
         sa.Column('status', sa.String(), nullable=False, server_default='ASSIGNED'),
         sa.Column('notes', sa.Text(), nullable=True),
         sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
-        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()')),
+        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()')),
     )
     op.create_index('ix_assignments_entity', 'assignments', ['entity_type', 'entity_id'])
     op.create_index('ix_assignments_staff_status', 'assignments', ['staff_id', 'status'])
@@ -39,14 +44,19 @@ def upgrade() -> None:
     op.create_table(
         'assignment_history',
         sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True),
-        sa.Column('assignment_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('assignments.id', ondelete='CASCADE'), nullable=False),
+        sa.Column(
+            'assignment_id',
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey('assignments.id', ondelete='CASCADE'),
+            nullable=False,
+        ),
         sa.Column('action', sa.String(), nullable=False),
         sa.Column('from_status', sa.String(), nullable=True),
         sa.Column('to_status', sa.String(), nullable=False),
         sa.Column('actor_id', sa.String(), nullable=True),
         sa.Column('reason', sa.Text(), nullable=True),
         sa.Column('metadata_json', postgresql.JSON(), server_default='{}'),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()')),
     )
     op.create_index('ix_assignment_history_assignment', 'assignment_history', ['assignment_id'])
 
@@ -63,10 +73,19 @@ def upgrade() -> None:
         sa.Column('actor_role', sa.String(), nullable=True),
         sa.Column('reference_type', sa.String(), nullable=True),
         sa.Column('reference_id', sa.String(), nullable=True),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now(), index=True),
+        sa.Column(
+            'created_at',
+            sa.DateTime(timezone=True),
+            server_default=sa.text('now()'),
+            index=True,
+        ),
     )
     op.create_index('ix_timeline_entity', 'timeline_entries', ['entity_type', 'entity_id'])
-    op.create_index('ix_timeline_entity_ts', 'timeline_entries', ['entity_type', 'entity_id', 'created_at'])
+    op.create_index(
+        'ix_timeline_entity_ts',
+        'timeline_entries',
+        ['entity_type', 'entity_id', 'created_at'],
+    )
 
     # 4. Notes
     op.create_table(
@@ -81,8 +100,13 @@ def upgrade() -> None:
         sa.Column('is_deleted', sa.Boolean(), server_default='false'),
         sa.Column('deleted_by', sa.String(), nullable=True),
         sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now(), index=True),
-        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column(
+            'created_at',
+            sa.DateTime(timezone=True),
+            server_default=sa.text('now()'),
+            index=True,
+        ),
+        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()')),
     )
     op.create_index('ix_notes_entity', 'notes', ['entity_type', 'entity_id'])
     op.create_index('ix_notes_visibility', 'notes', ['entity_type', 'entity_id', 'visibility'])
@@ -91,11 +115,16 @@ def upgrade() -> None:
     op.create_table(
         'note_revisions',
         sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True),
-        sa.Column('note_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('notes.id', ondelete='CASCADE'), nullable=False),
+        sa.Column(
+            'note_id',
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey('notes.id', ondelete='CASCADE'),
+            nullable=False,
+        ),
         sa.Column('content_snapshot', sa.Text(), nullable=False),
         sa.Column('edited_by', sa.String(), nullable=True),
         sa.Column('revision_number', sa.Integer(), server_default='1'),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()')),
     )
     op.create_index('ix_note_revisions_note', 'note_revisions', ['note_id'])
 
@@ -115,7 +144,12 @@ def upgrade() -> None:
         sa.Column('is_deleted', sa.Boolean(), server_default='false'),
         sa.Column('deleted_by', sa.String(), nullable=True),
         sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now(), index=True),
+        sa.Column(
+            'created_at',
+            sa.DateTime(timezone=True),
+            server_default=sa.text('now()'),
+            index=True,
+        ),
     )
     op.create_index('ix_attachments_entity', 'attachments', ['entity_type', 'entity_id'])
     op.create_index('ix_attachments_category', 'attachments', ['entity_type', 'category'])
@@ -130,20 +164,30 @@ def upgrade() -> None:
         sa.Column('resolution_time_minutes', sa.Integer(), nullable=False, server_default='480'),
         sa.Column('escalation_rules', postgresql.JSON(), server_default='{}'),
         sa.Column('is_active', sa.Boolean(), server_default='true'),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
-        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()')),
+        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()')),
     )
-    op.create_index('ix_sla_def_service_priority', 'sla_definitions', ['service_type', 'priority'], unique=True)
+    op.create_index(
+        'ix_sla_def_service_priority',
+        'sla_definitions',
+        ['service_type', 'priority'],
+        unique=True,
+    )
 
     # 8. SLA Instances
     op.create_table(
         'sla_instances',
         sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True),
-        sa.Column('sla_definition_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('sla_definitions.id', ondelete='CASCADE'), nullable=False),
+        sa.Column(
+            'sla_definition_id',
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey('sla_definitions.id', ondelete='CASCADE'),
+            nullable=False,
+        ),
         sa.Column('entity_type', sa.String(), nullable=False, index=True),
         sa.Column('entity_id', sa.String(), nullable=False, index=True),
         sa.Column('status', sa.String(), nullable=False, server_default='ACTIVE'),
-        sa.Column('started_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column('started_at', sa.DateTime(timezone=True), server_default=sa.text('now()')),
         sa.Column('deadline_at', sa.DateTime(timezone=True), nullable=False),
         sa.Column('responded_at', sa.DateTime(timezone=True), nullable=True),
         sa.Column('resolved_at', sa.DateTime(timezone=True), nullable=True),
@@ -154,7 +198,7 @@ def upgrade() -> None:
         sa.Column('escalated_by', sa.String(), nullable=True),
         sa.Column('escalation_reason', sa.Text(), nullable=True),
         sa.Column('metadata_json', postgresql.JSON(), server_default='{}'),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()')),
     )
     op.create_index('ix_sla_inst_entity', 'sla_instances', ['entity_type', 'entity_id'])
     op.create_index('ix_sla_inst_status', 'sla_instances', ['status'])
@@ -162,6 +206,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Downgrade schema by dropping shared domain services tables."""
     op.drop_table('sla_instances')
     op.drop_table('sla_definitions')
     op.drop_table('attachments')

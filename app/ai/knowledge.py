@@ -13,12 +13,26 @@ COMPANY_KNOWLEDGE: Dict[str, Any] = {
         "hotline": "+91 1800-SHAFSKY"
     },
     "supported_airports": [
+        {"iata": "AMD", "city": "Ahmedabad", "name": "Sardar Vallabhbhai Patel International Airport"},
+        {"iata": "ATQ", "city": "Amritsar", "name": "Sri Guru Ram Dass Jee International Airport"},
+        {"iata": "BLR", "city": "Bengaluru", "name": "Kempegowda International Airport"},
+        {"iata": "BBI", "city": "Bhubaneswar", "name": "Biju Patnaik International Airport"},
+        {"iata": "MAA", "city": "Chennai", "name": "Chennai International Airport"},
+        {"iata": "COK", "city": "Cochin", "name": "Cochin International Airport"},
+        {"iata": "GOI", "city": "Goa Dabolim", "name": "Dabolim International Airport"},
+        {"iata": "IXC", "city": "Chandigarh", "name": "Chandigarh International Airport"},
+        {"iata": "GOX", "city": "Goa Mopa", "name": "Manohar International Airport"},
+        {"iata": "GAU", "city": "Guwahati", "name": "Lokpriya Gopinath Bordoloi International Airport"},
+        {"iata": "HYD", "city": "Hyderabad", "name": "Rajiv Gandhi International Airport"},
+        {"iata": "JAI", "city": "Jaipur", "name": "Jaipur International Airport"},
+        {"iata": "CCU", "city": "Kolkata", "name": "Netaji Subhas Chandra Bose International Airport"},
+        {"iata": "LKO", "city": "Lucknow", "name": "Chaudhary Charan Singh International Airport"},
+        {"iata": "IXE", "city": "Mangaluru", "name": "Mangaluru International Airport"},
         {"iata": "BOM", "city": "Mumbai", "name": "Chhatrapati Shivaji Maharaj International Airport"},
         {"iata": "DEL", "city": "New Delhi", "name": "Indira Gandhi International Airport"},
-        {"iata": "DXB", "city": "Dubai", "name": "Dubai International Airport"},
-        {"iata": "LHR", "city": "London", "name": "Heathrow Airport"},
-        {"iata": "JFK", "city": "New York", "name": "John F. Kennedy International Airport"},
-        {"iata": "SIN", "city": "Singapore", "name": "Changi Airport"}
+        {"iata": "IXR", "city": "Ranchi", "name": "Birsa Munda Airport"},
+        {"iata": "TRV", "city": "Thiruvananthapuram", "name": "Trivandrum International Airport"},
+        {"iata": "VTZ", "city": "Visakhapatnam", "name": "Visakhapatnam International Airport"},
     ],
     "services": {
         "MEET_GREET": {

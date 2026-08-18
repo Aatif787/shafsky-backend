@@ -259,12 +259,12 @@ class JourneyDetectionEngine:
         elif dep_airport and arrival_code:
             arr_code_clean = arrival_code.strip().upper()
             if arr_code_clean != dep_airport.iata_code:
-                indian_airports = {"DEL", "BOM", "BLR", "HYD", "CCU", "MAA", "AMD", "GOI", "COK", "PNQ", "JAI", "ATQ", "LKO"}
+                indian_airports = {"DEL", "BOM", "BLR", "HYD", "CCU", "MAA", "AMD", "GOI", "GOX", "COK", "JAI", "ATQ", "LKO", "BBI", "IXC", "GAU", "IXE", "IXR", "TRV", "VTZ"}
                 flight_type = "DOMESTIC" if arr_code_clean in indian_airports else "INTERNATIONAL"
         elif arr_airport and departure_code:
             dep_code_clean = departure_code.strip().upper()
             if dep_code_clean != arr_airport.iata_code:
-                indian_airports = {"DEL", "BOM", "BLR", "HYD", "CCU", "MAA", "AMD", "GOI", "COK", "PNQ", "JAI", "ATQ", "LKO"}
+                indian_airports = {"DEL", "BOM", "BLR", "HYD", "CCU", "MAA", "AMD", "GOI", "GOX", "COK", "JAI", "ATQ", "LKO", "BBI", "IXC", "GAU", "IXE", "IXR", "TRV", "VTZ"}
                 flight_type = "DOMESTIC" if dep_code_clean in indian_airports else "INTERNATIONAL"
 
         # Check distinct non-null terminals for this airport/journey/flight configuration
@@ -498,9 +498,9 @@ class JourneyDetectionEngine:
         3. Calculates dynamic price breakdown from DB
         4. Generates temporary booking reference code
         """
-        import random, string
+        import secrets, string
         date_stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
-        rand_suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
+        rand_suffix = "".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(4))
         ref_code = f"SHK-{date_stamp}-{rand_suffix}"
 
         messages: List[str] = []

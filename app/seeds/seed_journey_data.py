@@ -104,6 +104,116 @@ AIRPORTS = [
         "is_supported": True,
         "is_active": True,
     },
+    {
+        "airport_name": "Kempegowda International Airport",
+        "iata_code": "BLR",
+        "icao_code": "VOBL",
+        "city": "Bengaluru",
+        "country": "India",
+        "timezone": "Asia/Kolkata",
+        "is_supported": True,
+        "is_active": True,
+    },
+    {
+        "airport_name": "Chennai International Airport",
+        "iata_code": "MAA",
+        "icao_code": "VOMM",
+        "city": "Chennai",
+        "country": "India",
+        "timezone": "Asia/Kolkata",
+        "is_supported": True,
+        "is_active": True,
+    },
+    {
+        "airport_name": "Cochin International Airport",
+        "iata_code": "COK",
+        "icao_code": "VOCI",
+        "city": "Kochi",
+        "country": "India",
+        "timezone": "Asia/Kolkata",
+        "is_supported": True,
+        "is_active": True,
+    },
+    {
+        "airport_name": "Thiruvananthapuram International Airport",
+        "iata_code": "TRV",
+        "icao_code": "VOTV",
+        "city": "Thiruvananthapuram",
+        "country": "India",
+        "timezone": "Asia/Kolkata",
+        "is_supported": True,
+        "is_active": True,
+    },
+    {
+        "airport_name": "Visakhapatnam International Airport",
+        "iata_code": "VTZ",
+        "icao_code": "VOVZ",
+        "city": "Visakhapatnam",
+        "country": "India",
+        "timezone": "Asia/Kolkata",
+        "is_supported": True,
+        "is_active": True,
+    },
+    {
+        "airport_name": "Biju Patnaik International Airport",
+        "iata_code": "BBI",
+        "icao_code": "VEBS",
+        "city": "Bhubaneswar",
+        "country": "India",
+        "timezone": "Asia/Kolkata",
+        "is_supported": True,
+        "is_active": True,
+    },
+    {
+        "airport_name": "Shaheed Bhagat Singh International Airport",
+        "iata_code": "IXC",
+        "icao_code": "VICG",
+        "city": "Chandigarh",
+        "country": "India",
+        "timezone": "Asia/Kolkata",
+        "is_supported": True,
+        "is_active": True,
+    },
+    {
+        "airport_name": "Manohar International Airport (Mopa)",
+        "iata_code": "GOX",
+        "icao_code": "VOMY",
+        "city": "Goa Mopa",
+        "country": "India",
+        "timezone": "Asia/Kolkata",
+        "is_supported": True,
+        "is_active": True,
+    },
+    {
+        "airport_name": "Lokpriya Gopinath Bordoloi International Airport",
+        "iata_code": "GAU",
+        "icao_code": "VEGT",
+        "city": "Guwahati",
+        "country": "India",
+        "timezone": "Asia/Kolkata",
+        "is_supported": True,
+        "is_active": True,
+    },
+    {
+        "airport_name": "Mangaluru International Airport",
+        "iata_code": "IXE",
+        "icao_code": "VOML",
+        "city": "Mangaluru",
+        "country": "India",
+        "timezone": "Asia/Kolkata",
+        "is_supported": True,
+        "is_active": True,
+    },
+    {
+        "airport_name": "Birsa Munda Airport",
+        "iata_code": "IXR",
+        "icao_code": "VERC",
+        "city": "Ranchi",
+        "country": "India",
+        "timezone": "Asia/Kolkata",
+        "is_supported": True,
+        "is_active": True,
+    },
 ]
 
 SERVICES = [
@@ -2595,10 +2705,10 @@ def seed_jai_production_packages(db: Session, jai_airport: SupportedAirport, ser
 def seed_atq_production_packages(db: Session, atq_airport: SupportedAirport, service_map: dict[str, Service]):
     """
     For Amritsar Airport (ATQ):
-    Seeds production packages (Price ₹2,500 across all categories):
+    Seeds production packages:
     - Domestic Departure: ₹2,500
     - Domestic Arrival: ₹2,500
-    - International Departure: ₹2,500
+    - International Departure: ₹2,000
     - International Arrival: ₹2,500
     """
     print("\n-- Configuring Production Packages for Amritsar Airport (ATQ) --")
@@ -2620,15 +2730,15 @@ def seed_atq_production_packages(db: Session, atq_airport: SupportedAirport, ser
             flight_type="DOMESTIC",
             short_description="Domestic departure assistance from the curbside area to the boarding gate.",
             features=[
-                "Welcome Guest from Curbside Area",
-                "Porter Service with Dedicated Staff",
-                "Wheelchair Service Available (Through Airlines)",
-                "Assistance from Separate Entry Gate",
-                "Assistance to Baggage Wrapping Facilities",
-                "Assistance at Separate Check-in Process at Counters",
-                "Assistance in Security Hold Area (SHA)",
-                "Lounge Service Facility Available (Charges Applicable)",
-                "Assistance to the Boarding Gate",
+                "WELCOME GUEST FROM CURBSIDE AREA",
+                "PORTER SERVICE WITH DEDICATED STAFF",
+                "WHEELCHAIR SERVICE AVAILABLE (Through Airlines)",
+                "ASSIST FROM SEPARATE ENTRY GATE",
+                "ASSIST TO BAGGAGE WRAPPING FACILITIES",
+                "ASSIST AT SEPARATE CHECKIN PROCESS AT COUNTERS",
+                "ASSIST IN S.H.A. (SECURITY HOLD AREA)",
+                "LOUNGE SERVICE FACILITY AVAILABLE (CHARGES APPLICABLE)",
+                "ASSIST GUEST TILL THE BOARDING GATE",
             ],
             additional_benefits=[],
             min_booking_notice_hours=6,
@@ -2647,12 +2757,11 @@ def seed_atq_production_packages(db: Session, atq_airport: SupportedAirport, ser
             flight_type="DOMESTIC",
             short_description="Domestic arrival assistance from the aerobridge to the car parking area.",
             features=[
-                "Welcome Guest from Aerobridge",
-                "Dedicated Staff with Placard",
-                "Porter Service with Dedicated Staff at Arrivals",
-                "Wheelchair Service Available (Through Airlines)",
-                "Assistance in Baggage Belt Area",
-                "Assistance to the Car Parking Area",
+                "WELCOME GUEST FROM AEROBRIDGE",
+                "DEDICATED STAFF WITH PLACARD",
+                "PORTER SERVICE WITH DEDICATED STAFF AT ARRIVALS",
+                "WHEELCHAIR SERVICE AVAILABLE (Through Airlines)",
+                "ASSIST IN BAGGAGE BELT AREA",
             ],
             additional_benefits=[],
             min_booking_notice_hours=6,
@@ -2671,15 +2780,15 @@ def seed_atq_production_packages(db: Session, atq_airport: SupportedAirport, ser
             flight_type="INTERNATIONAL",
             short_description="International departure assistance from the curbside area to the boarding gate.",
             features=[
-                "Welcome Guest from Curbside Area",
-                "Porter Service with Dedicated Staff",
-                "Wheelchair Service Available (Through Airlines)",
-                "Assistance from Separate Entry Gate",
-                "Assistance to Baggage Wrapping Facilities",
-                "Assistance at Separate Check-in Process at Counters",
-                "Assistance in Security Hold Area (SHA)",
-                "Lounge Service Facility Available (Charges Applicable)",
-                "Assistance to the Boarding Gate",
+                "WELCOME GUEST FROM CURBSIDE AREA",
+                "PORTER SERVICE WITH DEDICATED STAFF",
+                "WHEELCHAIR SERVICE AVAILABLE (Through Airlines)",
+                "ASSIST FROM SEPARATE ENTRY GATE",
+                "ASSIST TO BAGGAGE WRAPPING FACILITIES",
+                "ASSIST AT SEPARATE CHECK IN PROCESS AT COUNTERS",
+                "ASSIST IN S.H.A. (SECURITY HOLD AREA)",
+                "LOUNGE SERVICE FACILITY AVAILABLE (CHARGES APPLICABLE)",
+                "ASSIST GUEST TILL THE BOARDING GATE",
             ],
             additional_benefits=[],
             min_booking_notice_hours=6,
@@ -2698,12 +2807,12 @@ def seed_atq_production_packages(db: Session, atq_airport: SupportedAirport, ser
             flight_type="INTERNATIONAL",
             short_description="International arrival assistance from post-immigration to the parking area.",
             features=[
-                "Welcome Guest from Post Immigration",
-                "Porter Service with Dedicated Staff at Post Immigration Area",
-                "Assistance in Baggage Belt Area",
-                "Assistance in Customs",
-                "Coordination with Receiving Party",
-                "Assistance to the Parking Area",
+                "WELCOME GUEST FROM POST IMMIGRATION.",
+                "PORTER SERVICE WITH DEDICATED STAFF AT POST IMMIGRATION AREA.",
+                "ASSIST IN BAGGAGE BELT AREA.",
+                "ASSIST IN CUSTOMS.",
+                "COORDINATION WITH RECEIVING PARTY.",
+                "ASSIST GUEST TILL THE PARKING AREA.",
             ],
             additional_benefits=[],
             min_booking_notice_hours=6,
@@ -2717,52 +2826,509 @@ def seed_atq_production_packages(db: Session, atq_airport: SupportedAirport, ser
     print("  + Created ATQ Production Packages: Domestic & International Departure & Arrival (INR 2,500)")
 
 
+GAU_DOMESTIC_DEPARTURE_PLATINUM_FEATURES = [
+    "WELCOME GUEST FROM CURB SIDE AREA",
+    "PORTER SERVICE WITH DEDICATED STAFF",
+    "WHEELCHAIR SERVICE AVAILABLE (Through Airlines)",
+    "ASSIST FROM SEPARATE ENTRY GATE",
+    "ASSIST TO BAGGAGE WRAPPING FACILITIES",
+    "ASSIST SEPARATE BAGGAGE CHECK-IN AT AIRLINE COUNTER",
+    "ASSIST IN S.H.A.(SECURITY HOLD AREA)",
+    "ASSIST GUEST UPTO BOARDING GATE",
+]
+
+GAU_DOMESTIC_DEPARTURE_ELITE_FEATURES = [
+    "WELCOME GUEST FROM CURBSIDE AREA",
+    "PORTER SERVICE WITH DEDICATED STAFF",
+    "WHEELCHAIR SERVICE AVAILABLE (Through Airlines)",
+    "ASSIST FROM SEPARATE ENTRY GATE",
+    "ASSIST TO BAGGAGE WRAPPING FACILITIES",
+    "ASSIST AT SEPARATE CHECKIN PROCESS AT COUNTERS",
+    "ASSIST IN S.H.A.(SECURITY HOLD AREA)",
+    "LOUNGE SERVICE FACILITY AVAILABLE",
+    "ASSIST GUEST TILL THE BOARDING GATE",
+    "CANCELLATION BENEFITS UPTO 12 HOUR'S OF SERVICE TIME",
+    "MINIMUM 6 HOURS PRIORS NOTICE REQUIRED FOR RESCHEDULING.",
+]
+
+GAU_DOMESTIC_ARRIVAL_PLATINUM_FEATURES = [
+    "WELCOME GUEST FROM AEROBRIDGE",
+    "DEDICATED STAFF WITH PLACARD",
+    "PORTER SERVICE WITH DEDICATED STAFF AT ARRIVALS",
+    "WHEELCHAIR SERVICE AVAILABLE (Through Airlines)",
+    "ASSIST IN BAGGAGE BELT AREA",
+    "ASSIST GUEST TILL THE CAR PARKING AREA",
+]
+
+GAU_DOMESTIC_ARRIVAL_ELITE_FEATURES = [
+    "WELCOME GUEST FROM AEROBRIDGE",
+    "DEDICATED STAFF WITH PLACARD",
+    "PORTER SERVICE WITH DEDICATED STAFF AT ARRIVALS",
+    "WHEELCHAIR SERVICE AVAILABLE (Through Airlines)",
+    "ASSIST IN BAGGAGE BELT AREA",
+    "ASSIST GUEST TILL THE CAR PARKING AREA",
+]
+
+GAU_INTERNATIONAL_DEPARTURE_ELITE_FEATURES = [
+    "WELCOME GUEST FROM CURB SIDE AREA",
+    "PORTER SERVICE WITH DEDICATED STAFF",
+    "WHEELCHAIR SERVICE AVAILABLE (Through Airlines)",
+    "ASSIST FROM SEPARATE ENTRY GATE",
+    "ASSIST IN MONEY EXCHANGE COUNTER",
+    "ASSIST TO BAGGAGE WRAPPING FACILITIES",
+    "ASSIST SEPARATE BAGGAGE CHECK-IN AT AIRLINE COUNTER",
+    "ASSIST FOR IMMIGRATION COUNTERS",
+    "ASSIST IN S.H.A.(SECURITY HOLD AREA)",
+    "LOUNGE SERVICE FACILITY AVAILABLE (02 HOURS)",
+    "ASSIST GUEST UPTO BOARDING GATE",
+    "CANCELLATION BENEFITS UPTO 12 HOUR'S OF SERVICE TIME",
+    "MINIMUM 6 HOURS PRIORS NOTICE REQUIRED FOR RESCHEDULING.",
+]
+
+GAU_INTERNATIONAL_ARRIVAL_PLATINUM_FEATURES = [
+    "WELCOME GUEST FROM POST IMMIGRATION.",
+    "ASSIST IN DUTY FREE SHOP.",
+    "ASSIST IN BAGGAGE BELT AREA.",
+    "ASSIST FROM POST CUSTOMS.",
+    "COORDINATION WITH RECEIVING PERSON.",
+    "DROP OFF TILL CAR PARKING AREA.",
+]
+
+
+def seed_gau_production_packages(db: Session, gau_airport: SupportedAirport, service_map: dict[str, Service]):
+    """
+    Guwahati (GAU) production Platinum / Elite packages.
+    Service inclusion text is stored verbatim from the GAU source configuration.
+    International Departure Platinum is price-only (inclusions not supplied).
+    International Arrival Elite is not created (price and inclusions not supplied).
+    Existing GAU TRANSIT records are preserved.
+    """
+    print("\n-- Configuring Production Packages for Guwahati (GAU) --")
+
+    plat_svc = service_map.get("platinum")
+    elite_svc = service_map.get("elite")
+    if not plat_svc or not elite_svc:
+        raise RuntimeError("GAU requires catalog services slug=platinum and slug=elite")
+
+    # Deactivate demo ARRIVAL/DEPARTURE rows only. Do not touch TRANSIT.
+    demo_rows = (
+        db.query(AirportService)
+        .filter(
+            AirportService.airport_id == gau_airport.id,
+            AirportService.journey_type.in_(["ARRIVAL", "DEPARTURE"]),
+            AirportService.service_id.notin_([plat_svc.id, elite_svc.id]),
+        )
+        .all()
+    )
+    for row in demo_rows:
+        row.is_available = False
+
+    def upsert(svc: Service, journey: str, flight: str, price: float, features: list[str], priority: int) -> str:
+        existing = (
+            db.query(AirportService)
+            .filter_by(
+                airport_id=gau_airport.id,
+                service_id=svc.id,
+                journey_type=journey,
+                flight_type=flight,
+            )
+            .all()
+        )
+        if len(existing) > 1:
+            keep = existing[0]
+            for dup in existing[1:]:
+                dup.is_available = False
+            target = keep
+            action = "updated"
+        elif existing:
+            target = existing[0]
+            action = "updated"
+        else:
+            target = AirportService(
+                id=uuid.uuid4(),
+                airport_id=gau_airport.id,
+                service_id=svc.id,
+                journey_type=journey,
+                flight_type=flight,
+            )
+            db.add(target)
+            action = "created"
+
+        target.short_description = None
+        target.features = list(features)
+        target.additional_benefits = []
+        target.min_booking_notice_hours = 6
+        target.is_available = True
+        target.display_priority = priority
+        target.price = price
+        target.currency = "INR"
+        return action
+
+    upsert(plat_svc, "DEPARTURE", "DOMESTIC", 2420.00, GAU_DOMESTIC_DEPARTURE_PLATINUM_FEATURES, 1)
+    upsert(elite_svc, "DEPARTURE", "DOMESTIC", 4400.00, GAU_DOMESTIC_DEPARTURE_ELITE_FEATURES, 2)
+    upsert(plat_svc, "ARRIVAL", "DOMESTIC", 2420.00, GAU_DOMESTIC_ARRIVAL_PLATINUM_FEATURES, 1)
+    upsert(elite_svc, "ARRIVAL", "DOMESTIC", 4400.00, GAU_DOMESTIC_ARRIVAL_ELITE_FEATURES, 2)
+    upsert(plat_svc, "DEPARTURE", "INTERNATIONAL", 3300.00, [], 1)
+    upsert(elite_svc, "DEPARTURE", "INTERNATIONAL", 4950.00, GAU_INTERNATIONAL_DEPARTURE_ELITE_FEATURES, 2)
+    upsert(plat_svc, "ARRIVAL", "INTERNATIONAL", 2750.00, GAU_INTERNATIONAL_ARRIVAL_PLATINUM_FEATURES, 1)
+
+    # Do not create International Arrival Elite — source did not provide price or inclusions.
+    intl_arr_elite = (
+        db.query(AirportService)
+        .filter_by(
+            airport_id=gau_airport.id,
+            service_id=elite_svc.id,
+            journey_type="ARRIVAL",
+            flight_type="INTERNATIONAL",
+        )
+        .all()
+    )
+    for row in intl_arr_elite:
+        row.is_available = False
+
+    db.flush()
+    print("  + Configured GAU Platinum/Elite production packages (Intl Arrival Elite not created)")
+
+
+BBI_DOMESTIC_DEPARTURE_PLATINUM_FEATURES = [
+    "WELCOME GUEST FROM CURB SIDE AREA",
+    "PORTER SERVICE WITH DEDICATED STAFF",
+    "BAGGAGE ASSIST FOR BAGGAGE (3 PCS)",
+    "ASSIST FROM SEPARATE ENTRY GATE",
+    "ASSIST IN AIRLINE CHECK IN BAGGAGE.",
+    "ASSIST IN S.H.A.(SECURITY HOLD AREA)",
+    "ASSIST GUEST UPTO BOARDING GATE",
+]
+
+BBI_DOMESTIC_DEPARTURE_ELITE_FEATURES = [
+    "WELCOME GUEST FROM CURB SIDE AREA",
+    "PORTER SERVICE WITH DEDICATED STAFF",
+    "BAGGAGE ASSIST FOR BAGGAGE (3 PCS)",
+    "ASSIST FROM SEPARATE ENTRY GATE",
+    "ASSIST IN AIRLINE CHECK IN BAGGAGE.",
+    "ASSIST IN S.H.A.(SECURITY HOLD AREA)",
+    "LOUNGE ACCESS FOR 2 HOURS",
+    "ASSIST GUEST UPTO BOARDING GATE",
+]
+
+BBI_DOMESTIC_ARRIVAL_PLATINUM_FEATURES = [
+    "WELCOME GUEST FROM AEROBRIDGE",
+    "DEDICATED STAFF WITH PLACARD",
+    "ASSIST IN BAGGAGE BELT AREA",
+    "COORDINATION WITH RECEIVING PARTY.",
+    "ASSIST GUEST TILL THE CAR PARKING AREA",
+]
+
+
+def seed_bbi_production_packages(db: Session, bbi_airport: SupportedAirport, service_map: dict[str, Service]):
+    """
+    Bhubaneswar (BBI) production Platinum / Elite packages.
+    Service inclusion text is stored verbatim from the BBI source configuration.
+    Domestic Departure Platinum = INR 1700
+    Domestic Departure Elite = INR 2500
+    Domestic Arrival Platinum = INR 1700
+    Domestic Arrival Elite = NOT PROVIDED (is_available=False)
+    International Departure/Arrival = NOT PROVIDED (is_available=False)
+    Transit = NOT PROVIDED (is_available=False)
+    """
+    print("\n-- Configuring Production Packages for Bhubaneswar (BBI) --")
+
+    plat_svc = service_map.get("platinum")
+    elite_svc = service_map.get("elite")
+    if not plat_svc or not elite_svc:
+        raise RuntimeError("BBI requires catalog services slug=platinum and slug=elite")
+
+    # Deactivate any demo BBI service mappings
+    demo_rows = (
+        db.query(AirportService)
+        .filter(
+            AirportService.airport_id == bbi_airport.id,
+        )
+        .all()
+    )
+    for row in demo_rows:
+        row.is_available = False
+
+    def upsert(svc: Service, journey: str, flight: str, price: float, features: list[str], priority: int):
+        existing = (
+            db.query(AirportService)
+            .filter_by(
+                airport_id=bbi_airport.id,
+                service_id=svc.id,
+                journey_type=journey,
+                flight_type=flight,
+            )
+            .first()
+        )
+        if existing:
+            target = existing
+        else:
+            target = AirportService(
+                id=uuid.uuid4(),
+                airport_id=bbi_airport.id,
+                service_id=svc.id,
+                journey_type=journey,
+                flight_type=flight,
+            )
+            db.add(target)
+
+        target.short_description = None
+        target.features = list(features)
+        target.additional_benefits = []
+        target.min_booking_notice_hours = 6
+        target.is_available = True
+        target.display_priority = priority
+        target.price = price
+        target.currency = "INR"
+
+    # 1. Domestic Departure - Platinum (INR 1700)
+    upsert(plat_svc, "DEPARTURE", "DOMESTIC", 1700.00, BBI_DOMESTIC_DEPARTURE_PLATINUM_FEATURES, 1)
+
+    # 2. Domestic Departure - Elite (INR 2500)
+    upsert(elite_svc, "DEPARTURE", "DOMESTIC", 2500.00, BBI_DOMESTIC_DEPARTURE_ELITE_FEATURES, 2)
+
+    # 3. Domestic Arrival - Platinum (INR 1700)
+    upsert(plat_svc, "ARRIVAL", "DOMESTIC", 1700.00, BBI_DOMESTIC_ARRIVAL_PLATINUM_FEATURES, 1)
+
+    db.flush()
+    print("  + Configured BBI Platinum/Elite production packages (Dom Dep Plat INR 1700, Dom Dep Elite INR 2500, Dom Arr Plat INR 1700)")
+
+
+VTZ_DOMESTIC_DEPARTURE_FEATURES = [
+    "WELCOME GUEST FROM CURBSIDE AREA.",
+    "PORTER SERVICE WITH DEDICATED STAFF.",
+    "WHEELCHAIR SERVICE AVAILABLE (Through Airlines)",
+    "ASSIST FROM SEPARATE ENTRY GATE.",
+    "ASSIST TO BAGGAGE WRAPPING FACILITIES.",
+    "ASSIST AT SEPARATE CHECKIN PROCESS AT COUNTERS.",
+    "ASSIST IN S.H.A.(SECURITY HOLD AREA).",
+]
+
+VTZ_DOMESTIC_ARRIVAL_FEATURES = [
+    "WELCOME GUEST FROM AEROBRIDGE",
+    "DEDICATED STAFF WITH PLACARD",
+    "PORTER SERVICE WITH DEDICATED STAFF AT ARRIVALS",
+    "WHEELCHAIR SERVICE AVAILABLE WITH DEDICATED STAFF (Through Airlines)",
+    "ASSIST IN BAGGAGE BELT AREA",
+    "ASSIST GUEST TILL THE CAR PARKING AREA",
+]
+
+
+def seed_vtz_production_packages(db: Session, vtz_airport: SupportedAirport, service_map: dict[str, Service]):
+    """
+    Visakhapatnam (VTZ) production service and pricing configuration.
+    Departure = INR 2500.00
+    Arrival = INR 2500.00
+    Verbatim service inclusions stored exactly without alteration.
+    Transit and International journey types are deactivated (not supplied by source).
+    """
+    print("\n-- Configuring Production Packages for Visakhapatnam (VTZ) --")
+
+    meet_greet_svc = service_map.get("meet_greet")
+    if not meet_greet_svc:
+        raise RuntimeError("VTZ requires catalog service slug=meet_greet")
+
+    # Deactivate any existing VTZ services for TRANSIT or INTERNATIONAL or non-meet_greet services
+    unsupported_rows = (
+        db.query(AirportService)
+        .filter(
+            AirportService.airport_id == vtz_airport.id,
+        )
+        .all()
+    )
+    for row in unsupported_rows:
+        if row.journey_type not in ("DEPARTURE", "ARRIVAL") or row.flight_type != "DOMESTIC" or row.service_id != meet_greet_svc.id:
+            row.is_available = False
+
+    def upsert(svc: Service, journey: str, flight: str, price: float, features: list[str], priority: int) -> str:
+        existing = (
+            db.query(AirportService)
+            .filter_by(
+                airport_id=vtz_airport.id,
+                service_id=svc.id,
+                journey_type=journey,
+                flight_type=flight,
+            )
+            .all()
+        )
+        if len(existing) > 1:
+            keep = existing[0]
+            for dup in existing[1:]:
+                dup.is_available = False
+            target = keep
+            action = "updated"
+        elif existing:
+            target = existing[0]
+            action = "updated"
+        else:
+            target = AirportService(
+                id=uuid.uuid4(),
+                airport_id=vtz_airport.id,
+                service_id=svc.id,
+                journey_type=journey,
+                flight_type=flight,
+            )
+            db.add(target)
+            action = "created"
+
+        target.short_description = None
+        target.features = list(features)
+        target.additional_benefits = []
+        target.min_booking_notice_hours = 6
+        target.is_available = True
+        target.display_priority = priority
+        target.price = price
+        target.currency = "INR"
+        return action
+
+    upsert(meet_greet_svc, "DEPARTURE", "DOMESTIC", 2500.00, VTZ_DOMESTIC_DEPARTURE_FEATURES, 1)
+    upsert(meet_greet_svc, "ARRIVAL", "DOMESTIC", 2500.00, VTZ_DOMESTIC_ARRIVAL_FEATURES, 1)
+
+    db.flush()
+    print("  + Configured VTZ production packages (Departure INR 2500.00, Arrival INR 2500.00)")
+
+
+MAA_DOMESTIC_DEPARTURE_FEATURES = [
+    "WELCOME GUEST FROM CURBSIDE AREA.",
+    "PORTER SERVICE WITH DEDICATED STAFF.",
+    "WHEELCHAIR SERVICE AVAILABLE (Through Airlines).",
+    "ASSIST FROM ENTRY GATE.",
+    "ASSIST IN CHECKIN PROCESS AT COUNTERS.",
+    "ASSIST IN S.H.A.(SECURITY HOLD AREA).",
+    "ASSIST GUEST TILL THE BOARDING GATE.",
+]
+
+MAA_DOMESTIC_ARRIVAL_FEATURES = [
+    "WELCOME GUEST FROM AEROBRIDGE .",
+    "BAGGAGE ASSISTANCE FOR HAND BAGGAGE.",
+    "ASSISTANCE AT BAGGAGE BELT AREA.",
+    "COORDINATION WITH RECEIVING PERSON.",
+    "DROP OFF TILL CAR PARKING.",
+]
+
+MAA_INTERNATIONAL_ARRIVAL_FEATURES = [
+    "WELCOME GUEST FROM POST CUSTOM.",
+    "ASSISTANCE AT BAGGAGE BELT AREA.",
+    "COORDINATION WITH RECEIVING PERSON.",
+    "DROP OFF TILL CAR PARKING.",
+]
+
+MAA_INTERNATIONAL_DEPARTURE_FEATURES = [
+    "WELCOME GUEST FROM CURB SIDE.",
+    "PORTER SERVICE WITH DEDICATED STAFF",
+    "WHEELCHAIR SERVICE AVAILABLE (Through Airlines)",
+    "ASSIST FROM ENTRY GATE",
+    "ASSIST IN BAGGAGE CHECK-IN AT AIRLINE COUNTER",
+    "GUIDANCE FOR IMMIGRATION COUNTERS",
+    "ASSIST IN S.H.A.(SECURITY HOLD AREA)",
+    "ASSIST GUEST UPTO BOARDING GATE",
+]
+
+
+def seed_maa_production_packages(db: Session, maa_airport: SupportedAirport, service_map: dict[str, Service]):
+    """
+    Chennai Airport (MAA) production service and pricing configuration.
+    Domestic Departure Silver = INR 2500.00
+    Domestic Arrival Silver = INR 2500.00
+    International Arrival Silver = INR 3500.00
+    International Departure Silver = INR 4500.00
+    Verbatim service inclusions stored exactly without alteration.
+    Transit and Gold/Elite/Platinum tiers are deactivated (not supplied by source).
+    """
+    print("\n-- Configuring Production Packages for Chennai Airport (MAA) --")
+
+    silver_svc = service_map.get("silver") or service_map.get("meet_greet")
+    if not silver_svc:
+        raise RuntimeError("MAA requires catalog service slug=silver or meet_greet")
+
+    # Deactivate ALL existing MAA services to start with clean state
+    db.query(AirportService).filter(
+        AirportService.airport_id == maa_airport.id
+    ).update({"is_available": False}, synchronize_session=False)
+    db.flush()
+
+    def upsert(svc: Service, journey: str, flight: str, price: float, features: list[str], priority: int) -> str:
+        existing = (
+            db.query(AirportService)
+            .filter_by(
+                airport_id=maa_airport.id,
+                service_id=svc.id,
+                journey_type=journey,
+                flight_type=flight,
+            )
+            .first()
+        )
+        if existing:
+            target = existing
+            action = "updated"
+        else:
+            target = AirportService(
+                id=uuid.uuid4(),
+                airport_id=maa_airport.id,
+                service_id=svc.id,
+                journey_type=journey,
+                flight_type=flight,
+            )
+            db.add(target)
+            action = "created"
+
+        target.short_description = None
+        target.features = list(features)
+        target.additional_benefits = []
+        target.min_booking_notice_hours = 6
+        target.is_available = True
+        target.display_priority = priority
+        target.price = price
+        target.currency = "INR"
+        return action
+
+    upsert(silver_svc, "DEPARTURE", "DOMESTIC", 2500.00, MAA_DOMESTIC_DEPARTURE_FEATURES, 1)
+    upsert(silver_svc, "ARRIVAL", "DOMESTIC", 2500.00, MAA_DOMESTIC_ARRIVAL_FEATURES, 1)
+    upsert(silver_svc, "ARRIVAL", "INTERNATIONAL", 3500.00, MAA_INTERNATIONAL_ARRIVAL_FEATURES, 1)
+    upsert(silver_svc, "DEPARTURE", "INTERNATIONAL", 4500.00, MAA_INTERNATIONAL_DEPARTURE_FEATURES, 1)
+
+    db.flush()
+    print("  + Configured MAA production packages: Dom Dep Silver INR 2500, Dom Arr Silver INR 2500, Intl Arr Silver INR 3500, Intl Dep Silver INR 4500")
+
+
 def seed_other_airport_services(db: Session, airport_map: dict[str, SupportedAirport], service_map: dict[str, Service]):
     """Seed default services for other airports."""
     for code, airport in airport_map.items():
-        if code in ("AMD", "BOM", "GOI", "JAI", "ATQ"):
+        if code in ("AMD", "BOM", "GOI", "JAI", "ATQ", "GAU", "BBI", "VTZ", "MAA"):
             continue  # Handled separately
 
         for slug, svc in service_map.items():
             if slug in ("platinum", "elite", "silver", "elite_plus"):
                 continue
             for j_type in JOURNEY_TYPES:
-                if code == "HYD":
-                    continue  # Handled separately by seed_hyd_production_packages
-                if code == "LKO":
-                    continue  # Handled separately by seed_lko_production_packages
-                if code == "CCU":
-                    continue  # Handled separately by seed_ccu_production_packages
-                if code == "DEL" and j_type == "DEPARTURE":
-                    continue  # Handled separately by seed_del_production_packages
-
-                existing = db.query(AirportService).filter_by(
-                    airport_id=airport.id,
-                    service_id=svc.id,
-                    journey_type=j_type,
-                    flight_type="DOMESTIC",
-                ).first()
-
-                if not existing:
-                    mapping = AirportService(
-                        id=uuid.uuid4(),
+                for f_type in ["DOMESTIC", "INTERNATIONAL"]:
+                    existing = db.query(AirportService).filter_by(
                         airport_id=airport.id,
                         service_id=svc.id,
                         journey_type=j_type,
-                        flight_type="DOMESTIC",
-                        short_description=svc.description,
-                        features=[
-                            "Aerobridge exit welcome with placard",
-                            "Priority baggage assistance",
-                            "Executive handoff to chauffeur",
-                        ],
-                        min_booking_notice_hours=6,
-                        is_available=True,
-                        display_priority=svc.display_order,
-                        price=2499.00 if slug == "meet_greet" else 1999.00,
-                        currency="INR",
-                    )
-                    db.add(mapping)
+                        flight_type=f_type,
+                    ).first()
+
+                    if not existing:
+                        mapping = AirportService(
+                            id=uuid.uuid4(),
+                            airport_id=airport.id,
+                            service_id=svc.id,
+                            journey_type=j_type,
+                            flight_type=f_type,
+                            short_description=svc.description,
+                            features=[
+                                "Aerobridge exit welcome with placard",
+                                "Priority baggage assistance",
+                                "Executive handoff to chauffeur",
+                            ],
+                            min_booking_notice_hours=6,
+                            is_available=True,
+                            display_priority=svc.display_order,
+                            price=2499.00 if slug == "meet_greet" else 1999.00,
+                            currency="INR",
+                        )
+                        db.add(mapping)
     db.flush()
 
 
@@ -2796,6 +3362,9 @@ def run_seed():
         if "ATQ" in airport_map:
             seed_atq_production_packages(db, airport_map["ATQ"], service_map)
 
+        if "GAU" in airport_map:
+            seed_gau_production_packages(db, airport_map["GAU"], service_map)
+
         if "HYD" in airport_map:
             seed_hyd_production_packages(db, airport_map["HYD"], service_map)
 
@@ -2807,6 +3376,15 @@ def run_seed():
 
         if "CCU" in airport_map:
             seed_ccu_production_packages(db, airport_map["CCU"], service_map)
+
+        if "BBI" in airport_map:
+            seed_bbi_production_packages(db, airport_map["BBI"], service_map)
+
+        if "VTZ" in airport_map:
+            seed_vtz_production_packages(db, airport_map["VTZ"], service_map)
+
+        if "MAA" in airport_map:
+            seed_maa_production_packages(db, airport_map["MAA"], service_map)
 
         seed_other_airport_services(db, airport_map, service_map)
 
