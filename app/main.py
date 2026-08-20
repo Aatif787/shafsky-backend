@@ -64,6 +64,20 @@ async def startup_checks():
         else:
             structured_logger.warning("Continuing startup in development despite DB connectivity check failure.")
 
+    try:
+        from app.flight.csv_airports import preload_global_airports, resolve_airports_csv_path
+
+        count = preload_global_airports()
+        structured_logger.info(
+            "Loaded global airports.csv for origin/destination search only",
+            extra={"count": count, "path": str(resolve_airports_csv_path())},
+        )
+    except Exception as csv_err:
+        structured_logger.warning(
+            "airports.csv could not be preloaded; global airport search will retry on first query",
+            extra={"error": str(csv_err)},
+        )
+
 from app.middleware.idempotency import IdempotencyMiddleware
 
 # Observability, Security & Idempotency Middlewares
@@ -128,6 +142,18 @@ app.include_router(whatsapp_router)
 app.include_router(journey_router.router)
 app.include_router(operations_router.router)
 
+
+@app.get("/api/global-airports", tags=["Journey Detection Engine"])
+def search_global_airports_csv(q: str = ""):
+    """Origin/unrestricted airport search from tools/airports.csv only. Not used for Shafsky service availability."""
+    from app.flight.csv_airports import search_global_csv_airports
+
+    try:
+        rows = search_global_csv_airports(q or "")
+    except FileNotFoundError as exc:
+        return {"success": False, "source": "airports.csv", "error": str(exc), "data": []}
+    return {"success": True, "source": "airports.csv", "data": rows}
+
 # Production Observability & Health Routes
 @app.get("/api/health", tags=["Observability & Health"], status_code=200)
 async def backend_connectivity_health_check():
@@ -168,7 +194,7 @@ async def observability_dashboard(db: Session = Depends(get_db)):
     return {"success": True, "data": ObservabilityDashboard.get_dashboard_metrics(db)}
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", "8001"))
+    port = int(os.getenv("PORT", "8003"))
     env = getattr(settings, "ENVIRONMENT", "development").lower()
     # Only enable auto-reload in development/test environments. Bind host is configurable.
     reload_flag = env in ["development", "dev", "testing", "test"]

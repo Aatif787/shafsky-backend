@@ -42,12 +42,16 @@ def get_airport_services_catalog_endpoint(
     flight_type: Optional[str] = Query(None, description="Flight type: domestic, international"),
     origin: Optional[str] = Query(None, description="Origin airport IATA code"),
     destination: Optional[str] = Query(None, description="Destination airport IATA code"),
+    transit: Optional[str] = Query(None, description="Transit airport IATA code"),
     terminal: Optional[str] = Query(None, description="Terminal name or code"),
     db: Session = Depends(get_db)
 ):
+    airport_code = airport
+    if (service_type or "arrival").lower() in ("transit", "connection") and transit:
+        airport_code = transit
     return ServiceConfigService.resolve_catalog_services(
         db=db,
-        airport_code=airport,
+        airport_code=airport_code,
         journey_type=service_type or "arrival",
         flight_type=flight_type,
         terminal=terminal,
@@ -63,20 +67,17 @@ def get_airport_services_catalog_endpoint(
     description="Authoritative backend price calculation engine. Recalculates package and individual service totals, ignoring overlapping services included in selected package to prevent double charging."
 )
 def calculate_authoritative_price_endpoint(payload: Dict[str, Any] = Body(...), db: Session = Depends(get_db)):
-    airport_code = (payload.get("airport_code") or "DEL").strip().upper()
+    airport_code = (payload.get("airport_code") or "").strip().upper()
     selected_package_id = payload.get("selected_package_id")
     selected_service_ids = payload.get("selected_service_ids") or []
     guest_count = max(1, int(payload.get("guest_count") or 1))
 
-    if airport_code == "GAU":
-        config = ServiceConfigService.get_airport_configuration(
-            airport_code,
-            db=db,
-            journey_type=payload.get("journey_type") or payload.get("service_type"),
-            flight_type=payload.get("flight_type"),
-        )
-    else:
-        config = ServiceConfigService.get_airport_configuration(airport_code)
+    config = ServiceConfigService.get_airport_configuration(
+        airport_code,
+        db=db,
+        journey_type=payload.get("journey_type") or payload.get("service_type"),
+        flight_type=payload.get("flight_type"),
+    )
     packages = config.get("packages", [])
     individual_services = config.get("individualServices", [])
 

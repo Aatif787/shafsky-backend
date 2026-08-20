@@ -25,10 +25,7 @@ router = APIRouter(tags=["System Configuration & Feature Flags"])
 @router.get("/api/airports/{code}/config", response_model=AdminApiResponse)
 async def get_airport_hub_configuration(code: str, db: Session = Depends(get_db)):
     """Return database & catalog-driven packages, services, and rules for specified airport hub."""
-    if (code or "").strip().upper() == "GAU":
-        config_data = ServiceConfigService.get_airport_configuration(code, db=db)
-    else:
-        config_data = ServiceConfigService.get_airport_configuration(code)
+    config_data = ServiceConfigService.get_airport_configuration(code, db=db)
     return AdminApiResponse(success=True, data=config_data)
 
 # ─── FEATURE FLAGS ─────────────────────────────────────────────────────────────
@@ -78,23 +75,77 @@ async def patch_config_feature_flags(
 
 # ─── AIRPORTS ───────────────────────────────────────────────────────────────
 
-@router.get("/api/airports", response_model=AdminApiResponse)
+@router.get("/api/airports/search")
+async def search_airports_global(
+    q: str = Query("", description="Search by IATA code, city, or airport name"),
+    scope: str = Query("global", description="global = airports.csv only; supported = existing supported_airports table only"),
+    journey_type: Optional[str] = Query(None, description="When scope=supported, optionally filter by ARRIVAL/DEPARTURE/TRANSIT mappings"),
+    db: Session = Depends(get_db),
+):
+    """
+    Two isolated sources:
+    - scope=global → ./airports.csv (or ./data/airports.csv). Never used for service availability.
+    - scope=supported → existing Neon supported_airports. Never mixed with CSV.
+    """
+    query = (q or "").strip()
+    if (scope or "").lower() == "supported":
+        from app.services.journey_engine import JourneyDetectionEngine
+
+        airports = JourneyDetectionEngine.get_supported_airports(db, journey_type=journey_type)
+
+        q_up = query.upper()
+        rows = []
+        for a in airports:
+            if not query or q_up in a.iata_code or q_up in (a.airport_name or "").upper() or q_up in (a.city or "").upper() or q_up in (a.country or "").upper():
+                rows.append({
+                    "id": str(a.id),
+                    "code": a.iata_code,
+                    "iata_code": a.iata_code,
+                    "name": a.airport_name,
+                    "airport_name": a.airport_name,
+                    "city": a.city,
+                    "country": a.country,
+                    "timezone": a.timezone,
+                    "is_supported": True,
+                })
+        return {"success": True, "source": "supported_airports", "data": rows}
+
+    from app.flight.csv_airports import search_global_csv_airports
+
+    try:
+        rows = search_global_csv_airports(query)
+    except FileNotFoundError as exc:
+        return {"success": False, "source": "airports.csv", "error": str(exc), "data": []}
+    return {
+        "success": True,
+        "source": "airports.csv",
+        "data": rows,
+    }
+
+
+@router.get("/api/airports")
 async def list_public_airports(db: Session = Depends(get_db)):
-    airports = list(db.scalars(select(AirportManagement).where(AirportManagement.is_active.is_(True)).order_by(AirportManagement.code)).all())
+    """Public booking list: airports actually configured in supported_airports."""
+    from app.services.journey_engine import JourneyDetectionEngine
+
+    airports = JourneyDetectionEngine.get_supported_airports(db)
     data = [
         {
             "id": str(a.id),
-            "code": a.code,
-            "name": a.name,
+            "code": a.iata_code,
+            "iata_code": a.iata_code,
+            "name": a.airport_name,
+            "airport_name": a.airport_name,
             "city": a.city,
             "country": a.country,
-            "operatingHours": a.operating_hours,
+            "timezone": a.timezone,
+            "is_supported": bool(a.is_supported and a.is_active),
             "isActive": a.is_active,
-            "servicesConfig": a.services_config,
         }
         for a in airports
+        if a.is_supported
     ]
-    return AdminApiResponse(success=True, data=data)
+    return {"success": True, "total": len(data), "data": data}
 
 
 @router.patch("/api/airports/{airport_code}", response_model=AdminApiResponse)

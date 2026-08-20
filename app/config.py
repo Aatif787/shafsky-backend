@@ -41,25 +41,31 @@ class Settings(BaseSettings):
 
     @property
     def ALLOWED_ORIGINS(self) -> list:
+        required = [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:5174",
+            "http://127.0.0.1:5174",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+        ]
         raw = os.getenv("ALLOWED_ORIGINS", self.ALLOWED_ORIGINS_STR)
-        if not raw:
-            return [
-                "http://localhost:5173",
-                "http://127.0.0.1:5173",
-                "http://localhost:5174",
-                "http://127.0.0.1:5174",
-                "http://localhost:3000",
-                "http://127.0.0.1:3000",
-            ]
-        if raw.strip().startswith("["):
+        parsed: list[str] = []
+        if raw and raw.strip().startswith("["):
             try:
                 import json
-                parsed = json.loads(raw)
-                if isinstance(parsed, list):
-                    return parsed
+                loaded = json.loads(raw)
+                if isinstance(loaded, list):
+                    parsed = [str(o).strip() for o in loaded if str(o).strip()]
             except Exception:
-                pass
-        return [o.strip() for o in raw.split(",") if o.strip()]
+                parsed = []
+        elif raw:
+            parsed = [o.strip() for o in raw.split(",") if o.strip()]
+        merged = []
+        for origin in parsed + required:
+            if origin and origin not in merged:
+                merged.append(origin)
+        return merged
 
     class Config:
         env_file = ".env"

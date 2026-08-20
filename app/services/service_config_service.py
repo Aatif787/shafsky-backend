@@ -11,6 +11,36 @@ from app.models.schema import ServicesConfig, AirportManagement, Booking, Bookin
 logger = logging.getLogger("shafsky.services.service_config")
 EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
 
+# Individual add-on slugs stay in Neon for operations, but are never shown as booking packages.
+_ADDON_SERVICE_SLUGS = frozenset({
+    "meet_greet",
+    "fast_track",
+    "lounge",
+    "porter",
+    "buggy",
+    "wheelchair",
+    "transport",
+    "chauffeur",
+})
+_PACKAGE_SERVICE_SLUGS = frozenset({
+    "silver",
+    "gold",
+    "elite",
+    "elite_plus",
+    "platinum",
+    "bronze",
+    "diamond",
+})
+
+
+def _is_booking_package_service(svc) -> bool:
+    slug = (getattr(svc, "slug", None) or "").strip().lower()
+    if not slug or slug in _ADDON_SERVICE_SLUGS:
+        return False
+    if slug in _PACKAGE_SERVICE_SLUGS:
+        return True
+    return any(token in slug for token in _PACKAGE_SERVICE_SLUGS)
+
 DEFAULT_SERVICE_CATALOG = [
     # 1. Airport Assistance
     {
@@ -54,7 +84,7 @@ DEFAULT_SERVICE_CATALOG = [
     },
     {
         "id": "airport_assistance_baggage_assistance",
-        "title": "Baggage Assistance",
+        "title": "Baggage Assist",
         "category": "Airport Assistance",
         "description": "Dedicated porter service to transport luggage from dropoff to check-in or belt to vehicle.",
         "base_price": 1500.0,
@@ -529,25 +559,24 @@ class ServiceConfigService:
                 if journey_type:
                     stmt = stmt.where(AirportService.journey_type == journey_type.strip().upper())
                 if flight_type:
-                    f_upper = flight_type.strip().upper()
-                    stmt = stmt.where(AirportService.flight_type.in_([f_upper, "ALL"]))
+                    from app.services.service_airport_rules import normalize_flight_type
 
-                mappings = list(db.scalars(stmt).all())
-
-                if not mappings and (journey_type or flight_type):
-                    mappings = list(db.scalars(
-                        select(AirportService).where(
-                            AirportService.airport_id == airport.id,
-                            AirportService.is_available.is_(True)
-                        )
-                    ).all())
+                    f_upper = normalize_flight_type(flight_type) or flight_type.strip().upper()
+                    stmt_typed = stmt.where(AirportService.flight_type.in_([f_upper, "ALL"]))
+                    mappings = list(db.scalars(stmt_typed).all())
+                    if not mappings:
+                        mappings = list(db.scalars(stmt).all())
+                else:
+                    mappings = list(db.scalars(stmt).all())
 
                 if mappings:
                     pkg_dict = {}
                     for m in mappings:
                         svc = db.scalar(select(Service).where(Service.id == m.service_id))
-                        pkg_id = svc.slug if svc else "meet_greet"
-                        pkg_title = svc.name if svc else "Meet & Assist"
+                        if not _is_booking_package_service(svc):
+                            continue
+                        pkg_id = svc.slug
+                        pkg_title = svc.name
                         if pkg_id not in pkg_dict or (journey_type and m.journey_type == journey_type.upper()):
                             pkg_dict[pkg_id] = {
                                 "id": pkg_id,
@@ -555,20 +584,11 @@ class ServiceConfigService:
                                 "tagline": m.short_description if m.short_description is not None else ((svc.description if svc else "") or ""),
                                 "basePrice": float(m.price),
                                 "currency": m.currency or "INR",
-                                "recommendedBadge": "Most Popular" if pkg_id in ["platinum", "elite", "gold"] else "Verified Service",
+                                "recommendedBadge": "Most Popular" if pkg_id in ["platinum", "elite", "gold"] else None,
                                 "features": m.features if isinstance(m.features, list) else [],
                                 "serviceIds": [pkg_id]
                             }
 
-                    db_packages = list(pkg_dict.values())
-                    individual_services = [
-                            {"id": "meet_greet", "title": "Meet & Greet Escort", "description": "Aerobridge placard greeting & host escort.", "price": 2499.0, "currency": "INR", "estTime": "30 sec", "icon": "Users", "badge": "Flagship", "isAvailable": True},
-                            {"id": "lounge", "title": "Airport Lounge Pass", "description": "Quiet suite with buffet dining & Wi-Fi.", "price": 1999.0, "currency": "INR", "estTime": "1 min", "icon": "Hotel", "badge": "Sanctuary", "isAvailable": True},
-                            {"id": "fast_track", "title": "Fast-Track Clearance", "description": "Priority lane security & passport control.", "price": 1899.0, "currency": "INR", "estTime": "1 min", "icon": "Ticket", "badge": "Express", "isAvailable": True},
-                            {"id": "porter", "title": "Baggage Porter Service", "description": "Dedicated luggage porter.", "price": 999.0, "currency": "INR", "estTime": "Instant", "icon": "Package", "badge": "Luggage", "isAvailable": True}
-                    ]
-                    if code == "GAU":
-                        individual_services = []
                     return {
                         "code": airport.iata_code,
                         "name": airport.airport_name,
@@ -578,127 +598,12 @@ class ServiceConfigService:
                         "currency": "INR",
                         "operatingHours": "24/7",
                         "advanceNoticeHours": 6,
-                        "packages": db_packages,
-                        "individualServices": individual_services,
+                        "packages": list(pkg_dict.values()),
+                        "individualServices": [],
                     }
 
-            db_airport = db.scalar(select(AirportManagement).where(AirportManagement.code == code))
-            if db_airport and db_airport.services_config and isinstance(db_airport.services_config, dict):
-                cfg = dict(db_airport.services_config)
-                cfg["code"] = db_airport.code
-                cfg["name"] = db_airport.name
-                cfg["city"] = db_airport.city
-                cfg["country"] = db_airport.country
-                cfg["operatingHours"] = db_airport.operating_hours or "24/7"
-                return cfg
+            # Booking never uses AirportManagement.services_config demo JSON.
 
-        AIRPORT_HUB_CONFIGS: Dict[str, Dict[str, Any]] = {
-            "DEL": {
-                "code": "DEL",
-                "name": "Delhi Indira Gandhi International Airport",
-                "country": "India",
-                "city": "New Delhi",
-                "timezone": "Asia/Kolkata",
-                "currency": "INR",
-                "operatingHours": "24/7",
-                "advanceNoticeHours": 6,
-                "packages": [
-                    {
-                        "id": "silver",
-                        "title": "Silver Escort",
-                        "tagline": "Standard Aerobridge Escort & Buggy Transit",
-                        "basePrice": 4500.0,
-                        "currency": "INR",
-                        "recommendedBadge": "Best Value",
-                        "features": ["Aerobridge exit welcome with placard", "Dedicated porter for up to 3 bags", "Priority queue assistance"],
-                        "serviceIds": ["meet_greet", "porter"]
-                    },
-                    {
-                        "id": "gold",
-                        "title": "Gold VIP Sanctuary",
-                        "tagline": "Fast Track Immigration & Lounge Access",
-                        "basePrice": 8500.0,
-                        "currency": "INR",
-                        "recommendedBadge": "Most Popular",
-                        "features": ["Personal Guest Relations Officer", "Fast-track security & immigration bypass", "3-Hour VIP Lounge Sanctuary pass", "Unlimited baggage porter support"],
-                        "serviceIds": ["meet_greet", "fast_track", "lounge", "porter"]
-                    },
-                    {
-                        "id": "elite",
-                        "title": "Elite Presidential",
-                        "tagline": "Airside Maybach Tarmac & Diplomatic Gate",
-                        "basePrice": 18000.0,
-                        "currency": "INR",
-                        "recommendedBadge": "Flagship Luxury",
-                        "features": ["Direct tarmac limousine transfer", "Private VIP lounge suite reservation", "Diplomatic customs clearance desk", "Curbside executive chauffeur handoff"],
-                        "serviceIds": ["meet_greet", "fast_track", "lounge", "buggy", "porter", "transport"]
-                    }
-                ],
-                "individualServices": [
-                    {"id": "meet_greet", "title": "Meet & Greet Escort", "description": "Aerobridge placard greeting & host escort.", "price": 2499.0, "currency": "INR", "estTime": "30 sec", "icon": "Users", "badge": "Flagship", "isAvailable": True},
-                    {"id": "lounge", "title": "Airport Lounge Pass", "description": "Private lounge suite with hot buffet & showers.", "price": 1999.0, "currency": "INR", "estTime": "1 min", "icon": "Hotel", "badge": "Sanctuary", "isAvailable": True},
-                    {"id": "fast_track", "title": "Fast-Track Clearance", "description": "Diplomatic priority lane passport control.", "price": 1899.0, "currency": "INR", "estTime": "1 min", "icon": "Ticket", "badge": "Express", "isAvailable": True},
-                    {"id": "porter", "title": "Baggage Porter Service", "description": "Dedicated porter for all checked & hand luggage.", "price": 999.0, "currency": "INR", "estTime": "Instant", "icon": "Package", "badge": "Luggage", "isAvailable": True},
-                    {"id": "buggy", "title": "Electric Buggy Transfer", "description": "Airside golf cart transfer between gates.", "price": 1299.0, "currency": "INR", "estTime": "Instant", "icon": "Car", "badge": "Airside", "isAvailable": True},
-                    {"id": "wheelchair", "title": "Wheelchair & Special Assistance", "description": "Dedicated mobility assistance & ramp escort.", "price": 1499.0, "currency": "INR", "estTime": "Instant", "icon": "HeartPulse", "badge": "Care", "isAvailable": True},
-                    {"id": "transport", "title": "Airport Ground Transfer", "description": "Chauffeured sedan or SUV airport pickup.", "price": 2999.0, "currency": "INR", "estTime": "Scheduled", "icon": "Car", "badge": "Transfer", "isAvailable": True}
-                ]
-            },
-            "BOM": {
-                "code": "BOM",
-                "name": "Mumbai Chhatrapati Shivaji Maharaj International Airport",
-                "country": "India",
-                "city": "Mumbai",
-                "timezone": "Asia/Kolkata",
-                "currency": "INR",
-                "operatingHours": "24/7",
-                "advanceNoticeHours": 6,
-                "packages": [
-                    {
-                        "id": "platinum",
-                        "title": "Platinum Service",
-                        "tagline": "Premium domestic arrival & departure assistance",
-                        "basePrice": 3850.0,
-                        "currency": "INR",
-                        "recommendedBadge": "Best Value",
-                        "features": ["Welcome at Curbside Area / Aerobridge", "Dedicated Staff with Personalized Placard", "Dedicated Porter Service", "Assistance through Separate Entry Gate"],
-                        "serviceIds": ["meet_greet", "porter"]
-                    },
-                    {
-                        "id": "elite",
-                        "title": "Elite Service",
-                        "tagline": "Enhanced domestic arrival & departure assistance",
-                        "basePrice": 4950.0,
-                        "currency": "INR",
-                        "recommendedBadge": "Most Popular",
-                        "features": ["Welcome at Curbside Area / Aerobridge", "Dedicated Staff with Personalized Placard", "Dedicated Porter Service", "Lounge Access Pass", "Electric Buggy Ride"],
-                        "serviceIds": ["meet_greet", "lounge", "buggy", "porter"]
-                    },
-                    {
-                        "id": "elite_plus",
-                        "title": "Elite Plus Service",
-                        "tagline": "Complete premium domestic departure & arrival assistance",
-                        "basePrice": 7040.0,
-                        "currency": "INR",
-                        "recommendedBadge": "Flagship Luxury",
-                        "features": ["Welcome at Curbside Area / Aerobridge", "Dedicated Staff with Personalized Placard", "Dedicated Porter Service", "Lounge Access Pass", "Priority Queue Access"],
-                        "serviceIds": ["meet_greet", "fast_track", "lounge", "buggy", "porter"]
-                    }
-                ],
-                "individualServices": [
-                    {"id": "meet_greet", "title": "Meet & Greet Escort", "description": "Aerobridge placard greeting & host escort.", "price": 2499.0, "currency": "INR", "estTime": "30 sec", "icon": "Users", "badge": "Flagship", "isAvailable": True},
-                    {"id": "lounge", "title": "Adani VIP Lounge Pass", "description": "Quiet suite with buffet dining & Wi-Fi.", "price": 1999.0, "currency": "INR", "estTime": "1 min", "icon": "Hotel", "badge": "Sanctuary", "isAvailable": True},
-                    {"id": "fast_track", "title": "Fast-Track Clearance", "description": "Priority lane security & passport control.", "price": 1899.0, "currency": "INR", "estTime": "1 min", "icon": "Ticket", "badge": "Express", "isAvailable": True},
-                    {"id": "porter", "title": "Baggage Porter Service", "description": "Dedicated luggage porter.", "price": 999.0, "currency": "INR", "estTime": "Instant", "icon": "Package", "badge": "Luggage", "isAvailable": True},
-                    {"id": "buggy", "title": "Airside Buggy Ride", "description": "Terminal buggy transport.", "price": 1299.0, "currency": "INR", "estTime": "Instant", "icon": "Car", "badge": "Airside", "isAvailable": True}
-                ]
-            }
-        }
-
-        if code in AIRPORT_HUB_CONFIGS:
-            return AIRPORT_HUB_CONFIGS[code]
-
-        # No default fallback config for unsupported airports
         return {}
 
     @classmethod
@@ -718,23 +623,54 @@ class ServiceConfigService:
         Single Source of Truth: Reads directly from master AirportManagement & Service Catalog.
         Never invents synthetic packages or parallel service definitions.
         """
-        j_type = (journey_type or "arrival").strip().lower()
+        from app.services.service_airport_rules import (
+            normalize_flight_type,
+            normalize_journey_type,
+            resolve_service_airport_iata,
+        )
 
-        # Pick correct airport based on selected service type and flight status details
-        code = (airport_code or "").strip().upper()
-        if j_type == "arrival" and dest_code:
-            code = dest_code.strip().upper()
-        elif j_type == "departure" and origin_code:
-            code = origin_code.strip().upper()
+        j_norm = normalize_journey_type(journey_type)
+        j_type = j_norm.lower()
+        transit_code = None
+        # transit may be passed as airport_code when origin/dest are the other legs
+        if j_norm == "TRANSIT":
+            transit_code = airport_code
+
+        resolved = resolve_service_airport_iata(
+            j_norm,
+            origin=origin_code,
+            destination=dest_code,
+            transit=transit_code,
+        )
+        code = resolved or (airport_code or "").strip().upper()
 
         if not code:
-            code = "DEL"
+            return {
+                "covered": False,
+                "success": False,
+                "airport": {"id": None, "code": None, "name": None},
+                "journey_type": j_type,
+                "journeyType": j_type,
+                "flight_type": flight_type or "domestic",
+                "flightType": flight_type or "domestic",
+                "terminal": terminal,
+                "catalogSource": "existing-airport-catalog",
+                "packages": [],
+                "individual_services": [],
+                "individualServices": [],
+                "error": "Service airport could not be resolved from the selected journey.",
+            }
 
         db_airport = db.scalar(
             select(AirportManagement).where(AirportManagement.code == code)
         )
 
-        master_config = cls.get_airport_configuration(code, db=db, journey_type=j_type, flight_type=flight_type)
+        master_config = cls.get_airport_configuration(
+            code,
+            db=db,
+            journey_type=j_norm,
+            flight_type=flight_type,
+        )
 
         is_covered = True
         if db_airport and not db_airport.is_active:
@@ -777,7 +713,10 @@ class ServiceConfigService:
             return c_low
 
         resolved_flight_type = flight_type
-        if not resolved_flight_type:
+        explicit_ft = normalize_flight_type(flight_type)
+        if explicit_ft:
+            resolved_flight_type = explicit_ft.lower()
+        elif not resolved_flight_type:
             if origin_code and dest_code:
                 orig_ap = db.scalar(select(AirportManagement).where(AirportManagement.code == origin_code.upper()))
                 dest_ap = db.scalar(select(AirportManagement).where(AirportManagement.code == dest_code.upper()))
@@ -793,9 +732,8 @@ class ServiceConfigService:
                 resolved_flight_type = "domestic"
 
         packages = master_config.get("packages", [])
-        services = master_config.get("individualServices", [])
-
-        active_services = [s for s in services if s.get("isAvailable", True)]
+        # Booking catalogue is packages-only; demo individual cards are never returned.
+        active_services = []
         active_packages = packages
 
         if terminal:
@@ -813,9 +751,9 @@ class ServiceConfigService:
             "airport": {
                 "id": str(db_airport.id) if db_airport else code,
                 "code": code,
-                "name": db_airport.name if db_airport else master_config.get("name", f"{code} Airport"),
-                "city": db_airport.city if db_airport else master_config.get("city", code),
-                "country": db_airport.country if db_airport else master_config.get("country", "India")
+                "name": master_config.get("name") or (db_airport.name if db_airport else f"{code} Airport"),
+                "city": master_config.get("city") or (db_airport.city if db_airport else code),
+                "country": master_config.get("country") or (db_airport.country if db_airport else "India"),
             },
             "journey_type": j_type,
             "journeyType": j_type,

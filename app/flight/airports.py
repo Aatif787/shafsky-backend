@@ -53,6 +53,58 @@ AIRPORT_REGISTRY: Dict[str, Dict[str, str]] = {
 }
 
 
+def search_global_airports(query: str, limit: int = 15) -> list:
+    """Search the IATA metadata registry. Allows any 3-letter IATA even if not listed."""
+    q = (query or "").strip()
+    results = []
+    if not q:
+        for code, info in list(AIRPORT_REGISTRY.items())[:limit]:
+            results.append({
+                "code": code,
+                "name": info.get("name") or f"{code} Airport",
+                "city": info.get("city") or code,
+                "country": info.get("country") or "",
+                "timezone": info.get("timezone"),
+                "is_supported": False,
+            })
+        return results
+
+    q_up = q.upper()
+    for code, info in AIRPORT_REGISTRY.items():
+        name = info.get("name") or ""
+        city = info.get("city") or ""
+        country = info.get("country") or ""
+        if (
+            code == q_up
+            or code.startswith(q_up)
+            or q_up in name.upper()
+            or q_up in city.upper()
+            or q_up in country.upper()
+        ):
+            results.append({
+                "code": code,
+                "name": name or f"{code} Airport",
+                "city": city or code,
+                "country": country,
+                "timezone": info.get("timezone"),
+                "is_supported": False,
+            })
+        if len(results) >= limit:
+            break
+
+    if not results and len(q_up) == 3 and q_up.isalpha():
+        info = AIRPORT_REGISTRY.get(q_up, {})
+        results.append({
+            "code": q_up,
+            "name": info.get("name") or f"{q_up} International Airport",
+            "city": info.get("city") or q_up,
+            "country": info.get("country") or "",
+            "timezone": info.get("timezone"),
+            "is_supported": False,
+        })
+    return results
+
+
 def build_flight_airport(
     iata_code: Optional[str],
     raw_name: Optional[str] = None,

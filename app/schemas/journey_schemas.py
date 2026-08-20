@@ -5,7 +5,7 @@ Pydantic Schemas for Journey Detection Engine — Phase 1.
 from typing import Optional, List
 from datetime import datetime
 from uuid import UUID
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 # ─── Airport Schemas ───
@@ -25,6 +25,16 @@ class SupportedAirportResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+    @computed_field
+    @property
+    def code(self) -> str:
+        return self.iata_code
+
+    @computed_field
+    @property
+    def name(self) -> str:
+        return self.airport_name
 
 
 class SupportedAirportListResponse(BaseModel):
@@ -111,7 +121,9 @@ class UrgentAssistanceInfo(BaseModel):
 class JourneyDetectionRequest(BaseModel):
     departure_code: Optional[str] = Field(None, min_length=3, max_length=3, description="IATA code of departure airport")
     arrival_code: Optional[str] = Field(None, min_length=3, max_length=3, description="IATA code of arrival airport")
+    transit_code: Optional[str] = Field(None, min_length=3, max_length=3, description="IATA code of transit/connection airport")
     journey_type: str = Field("ARRIVAL", description="ARRIVAL, DEPARTURE, or TRANSIT")
+    flight_type: Optional[str] = Field(None, description="DOMESTIC or INTERNATIONAL (user-selected travel type)")
     service_date: str = Field(..., description="Travel date in YYYY-MM-DD format")
     service_time: Optional[str] = Field(None, description="Travel time in HH:MM format (24h)")
     requested_service_slug: Optional[str] = Field(None, description="Optional specific requested service slug to validate")
@@ -204,6 +216,7 @@ class PriceBreakdown(BaseModel):
 class BookingValidationRequest(BaseModel):
     airport_code: str = Field(..., min_length=3, max_length=3)
     journey_type: str = Field("ARRIVAL", description="ARRIVAL, DEPARTURE, or TRANSIT")
+    flight_type: Optional[str] = Field("DOMESTIC", description="DOMESTIC or INTERNATIONAL")
     service_date: str = Field(..., description="Travel date YYYY-MM-DD")
     service_time: Optional[str] = Field("12:00", description="Travel time HH:MM (24h)")
     selected_service_slugs: List[str] = Field(default_factory=list, description="Selected service slugs")

@@ -165,20 +165,45 @@ class BookingService:
             except (ValueError, TypeError):
                 pax_count = 1
 
-        # Determine service airport (check origin_code in supported_airports, else dest_code)
         from app.models.journey_models import SupportedAirport
-        target_airport = "DEL"
-        journey_type = "DEPARTURE"
+        from app.services.service_airport_rules import (
+            normalize_flight_type,
+            normalize_journey_type,
+            resolve_service_airport_iata,
+        )
 
-        if payload.origin_code and db.scalar(select(SupportedAirport).where(SupportedAirport.iata_code == payload.origin_code.upper())):
-            target_airport = payload.origin_code.upper()
-            journey_type = "DEPARTURE"
-        elif payload.dest_code and db.scalar(select(SupportedAirport).where(SupportedAirport.iata_code == payload.dest_code.upper())):
-            target_airport = payload.dest_code.upper()
-            journey_type = "ARRIVAL"
-        else:
-            target_airport = payload.origin_code or payload.dest_code or "DEL"
-            journey_type = "DEPARTURE"
+        meta = metadata_json or {}
+        journey_type = normalize_journey_type(
+            meta.get("journey_type") or meta.get("direction") or payload.service_category
+        )
+        transit_code = meta.get("transit_code") or meta.get("transit") or meta.get("service_airport")
+        target_airport = resolve_service_airport_iata(
+            journey_type,
+            origin=payload.origin_code,
+            destination=payload.dest_code,
+            transit=transit_code,
+        )
+        if not target_airport:
+            target_airport = (meta.get("service_airport") or "").strip().upper()
+
+        if not target_airport:
+            raise HTTPException(
+                status_code=400,
+                detail="Unable to resolve a supported airport for this booking.",
+            )
+
+        supported_row = db.scalar(
+            select(SupportedAirport).where(SupportedAirport.iata_code == target_airport)
+        )
+        if not supported_row or not supported_row.is_supported or not supported_row.is_active:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Shafsky does not currently operate at {target_airport}.",
+            )
+
+        flight_type = normalize_flight_type(
+            meta.get("flight_type") or meta.get("travel_type")
+        ) or "DOMESTIC"
 
         target_service = payload.service_type or "silver"
 
@@ -187,7 +212,7 @@ class BookingService:
             airport_code=target_airport,
             service_tier_or_slug=target_service,
             journey_type=journey_type,
-            flight_type="DOMESTIC",
+            flight_type=flight_type,
             pax_count=pax_count
         )
 

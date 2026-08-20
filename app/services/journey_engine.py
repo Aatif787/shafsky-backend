@@ -12,9 +12,15 @@ Responsibilities:
 from typing import Optional, List
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import select
+from sqlalchemy import select, exists
 
 from app.models.journey_models import SupportedAirport, Service, AirportService
+from app.services.service_airport_rules import (
+    normalize_flight_type,
+    normalize_iata,
+    normalize_journey_type,
+    resolve_service_airport_iata,
+)
 from app.schemas.journey_schemas import (
     AvailableServiceItem,
     DetectedAirportInfo,
@@ -40,13 +46,26 @@ class JourneyDetectionEngine:
     # ─── Airport Resolution ───
 
     @classmethod
-    def get_supported_airports(cls, db: Session) -> List[SupportedAirport]:
-        """Returns all active airports."""
+    def get_supported_airports(cls, db: Session, journey_type: Optional[str] = None) -> List[SupportedAirport]:
+        """Returns active Neon supported_airports. Optional journey filter uses one EXISTS query."""
         stmt = (
             select(SupportedAirport)
-            .where(SupportedAirport.is_active.is_(True))
+            .where(
+                SupportedAirport.is_active.is_(True),
+                SupportedAirport.is_supported.is_(True),
+            )
             .order_by(SupportedAirport.airport_name)
         )
+        jt = (journey_type or "").strip().upper() or None
+        if jt in ("ARRIVAL", "DEPARTURE", "TRANSIT"):
+            has_mapping = exists().where(
+                AirportService.airport_id == SupportedAirport.id,
+                AirportService.is_available.is_(True),
+                AirportService.journey_type == jt,
+            )
+            filtered = list(db.execute(stmt.where(has_mapping)).scalars().all())
+            if filtered:
+                return filtered
         return list(db.execute(stmt).scalars().all())
 
     @classmethod
@@ -200,6 +219,8 @@ class JourneyDetectionEngine:
         service_time: Optional[str] = None,
         requested_service_slug: Optional[str] = None,
         terminal: Optional[str] = None,
+        transit_code: Optional[str] = None,
+        flight_type: Optional[str] = None,
     ) -> JourneyDetectionResponse:
         """
         Main entry point. Given departure/arrival codes + journey type + date/time:
@@ -211,27 +232,25 @@ class JourneyDetectionEngine:
         6. Validates requested service availability if specified
         7. Returns structured response sorted by display_priority
         """
-        normalized_type = journey_type.strip().upper() if journey_type else "ARRIVAL"
-        if normalized_type not in ("ARRIVAL", "DEPARTURE", "TRANSIT"):
-            normalized_type = "ARRIVAL"
+        normalized_type = normalize_journey_type(journey_type)
 
-        # Resolve airports
+        # Resolve airports that exist in the Shafsky supported-airport table.
+        # Origin/destination/other legs do NOT need to exist in this table.
         dep_airport = cls.get_airport_by_iata(db, departure_code) if departure_code else None
         arr_airport = cls.get_airport_by_iata(db, arrival_code) if arrival_code else None
+        trn_code = normalize_iata(transit_code)
+        trn_airport = cls.get_airport_by_iata(db, trn_code) if trn_code else None
 
         dep_info = cls._to_detected_info(dep_airport)
         arr_info = cls._to_detected_info(arr_airport)
 
-        # Determine primary airport (where Shafsky renders services)
-        if normalized_type == "DEPARTURE":
-            primary_airport = dep_airport
-        elif normalized_type == "ARRIVAL":
-            primary_airport = arr_airport
-        elif normalized_type == "TRANSIT":
-            transit_code = requested_service_slug if (requested_service_slug and len(requested_service_slug) == 3) else None
-            primary_airport = cls.get_airport_by_iata(db, transit_code) if transit_code else (arr_airport or dep_airport)
-        else:
-            primary_airport = arr_airport or dep_airport
+        service_iata = resolve_service_airport_iata(
+            normalized_type,
+            origin=departure_code,
+            destination=arrival_code,
+            transit=trn_code,
+        )
+        primary_airport = cls.get_airport_by_iata(db, service_iata) if service_iata else None
 
         primary_info = cls._to_detected_info(primary_airport)
         is_supported = bool(primary_airport and primary_airport.is_supported and primary_airport.is_active)
@@ -249,23 +268,17 @@ class JourneyDetectionEngine:
                 available_services=[],
                 requested_service_slug=requested_service_slug,
                 is_requested_service_available=False,
-                unavailable_message="This service is currently unavailable for your selected journey.",
+                unavailable_message="This airport is currently not supported for online booking.",
             )
 
-        # Determine flight_type (DOMESTIC vs INTERNATIONAL)
-        flight_type = None
-        if dep_airport and arr_airport:
+        # Travel type: prefer the user's explicit selection; otherwise infer when possible.
+        explicit_flight_type = normalize_flight_type(flight_type)
+        if explicit_flight_type:
+            flight_type = explicit_flight_type
+        elif dep_airport and arr_airport:
             flight_type = "INTERNATIONAL" if dep_airport.country != arr_airport.country else "DOMESTIC"
-        elif dep_airport and arrival_code:
-            arr_code_clean = arrival_code.strip().upper()
-            if arr_code_clean != dep_airport.iata_code:
-                indian_airports = {"DEL", "BOM", "BLR", "HYD", "CCU", "MAA", "AMD", "GOI", "GOX", "COK", "JAI", "ATQ", "LKO", "BBI", "IXC", "GAU", "IXE", "IXR", "TRV", "VTZ"}
-                flight_type = "DOMESTIC" if arr_code_clean in indian_airports else "INTERNATIONAL"
-        elif arr_airport and departure_code:
-            dep_code_clean = departure_code.strip().upper()
-            if dep_code_clean != arr_airport.iata_code:
-                indian_airports = {"DEL", "BOM", "BLR", "HYD", "CCU", "MAA", "AMD", "GOI", "GOX", "COK", "JAI", "ATQ", "LKO", "BBI", "IXC", "GAU", "IXE", "IXR", "TRV", "VTZ"}
-                flight_type = "DOMESTIC" if dep_code_clean in indian_airports else "INTERNATIONAL"
+        else:
+            flight_type = None
 
         # Check distinct non-null terminals for this airport/journey/flight configuration
         terminal_stmt = (
@@ -490,6 +503,7 @@ class JourneyDetectionEngine:
         service_time: Optional[str] = "12:00",
         selected_service_slugs: Optional[List[str]] = None,
         guest_count: int = 1,
+        flight_type: Optional[str] = "DOMESTIC",
     ) -> BookingValidationResponse:
         """
         Validates an entire booking before payment:
@@ -534,7 +548,9 @@ class JourneyDetectionEngine:
         if not slugs:
             slugs = ["meet_greet"]
 
-        available_mappings = cls.get_services_for_airport(db, airport.iata_code, journey_type=journey_type)
+        available_mappings = cls.get_services_for_airport(
+            db, airport.iata_code, journey_type=journey_type, flight_type=flight_type
+        )
         service_map_by_slug = {aps.service.slug.lower(): aps for aps in available_mappings if aps.service}
 
         service_items: List[ServicePriceItem] = []
