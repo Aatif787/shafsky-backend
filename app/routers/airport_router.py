@@ -143,17 +143,10 @@ def validate_authoritative_booking_endpoint(
     payload: Dict[str, Any] = Body(...),
     db: Session = Depends(get_db)
 ):
-    # Legacy booking validation endpoint is deprecated in favor of the stepwise
-    # `/flow/*` booking flow. Return 410 Gone to avoid duplicate booking flows
-    # while providing guidance to clients.
-    raise HTTPException(
-        status_code=status.HTTP_410_GONE,
-        detail={
-            "error": "Deprecated",
-            "message": "This endpoint is deprecated. Use the stepwise booking flow under /api/airport/flow/* (init, flight-info, select-service, customer-details).",
-            "migration_docs": "/docs#tag/Airport+Meet+%26+Assist"
-        }
-    )
+    result = ServiceConfigService.validate_authoritative_booking(db, payload)
+    if not result.get("valid"):
+        return {"success": False, "valid": False, "errors": result.get("errors", [])}
+    return {"success": True, "valid": True, **result}
 
 
 @router.post(
@@ -178,15 +171,21 @@ def save_booking_draft_endpoint(
     payload: Dict[str, Any] = Body(...),
     db: Session = Depends(get_db)
 ):
-    # Deprecated: save/update booking draft via legacy endpoints is removed.
-    raise HTTPException(
-        status_code=status.HTTP_410_GONE,
-        detail={
-            "error": "Deprecated",
-            "message": "Draft booking endpoints are deprecated. Please use the new /api/airport/flow/* endpoints and server-side draft management will be handled by the new flow.",
-            "migration_docs": "/docs#tag/Airport+Meet+%26+Assist"
+    result = ServiceConfigService.save_booking_draft(db, payload)
+    if not result.get("valid"):
+        return {
+            "success": False,
+            "valid": False,
+            "errors": result.get("errors", []),
+            "error": (result.get("errors") or [{}])[0].get("message") if result.get("errors") else "Invalid draft",
         }
-    )
+    booking_ref = result.get("booking_reference")
+    return {
+        "success": True,
+        "valid": True,
+        "draft": {"booking_ref": booking_ref, **result},
+        **result,
+    }
 
 
 @router.post(

@@ -197,6 +197,158 @@ def split_flight_number(flight_clean: str) -> Tuple[str, str]:
     return flight_clean[:2], flight_clean[2:]
 
 
+def canonical_flight_iata(value: str) -> str:
+    """Compare flight IATA values ignoring spaces, case, and leading zeros in the numeric part."""
+    cleaned = re.sub(r"[\s\-_]+", "", str(value or "")).strip().upper()
+    if not cleaned:
+        return ""
+    match = re.match(r"^([A-Z]{3}|[A-Z0-9]{2})(\d+)([A-Z]?)$", cleaned)
+    if not match:
+        return cleaned
+    carrier, digits, suffix = match.group(1), match.group(2), match.group(3)
+    return f"{carrier}{digits.lstrip('0') or '0'}{suffix}"
+
+
+def _as_iata_code(value: Optional[str]) -> Optional[str]:
+    code = (value or "").strip().upper()
+    if re.fullmatch(r"[A-Z]{3}", code):
+        return code
+    return None
+
+
+def _candidate_dep_arr(item: Dict[str, Any]) -> Tuple[str, str]:
+    dep_obj = item.get("departure") if isinstance(item.get("departure"), dict) else {}
+    arr_obj = item.get("arrival") if isinstance(item.get("arrival"), dict) else {}
+    dep = str(dep_obj.get("iataCode") or dep_obj.get("iata") or item.get("departureIata") or "").strip().upper()
+    arr = str(arr_obj.get("iataCode") or arr_obj.get("iata") or item.get("arrivalIata") or "").strip().upper()
+    return dep, arr
+
+
+def _source_priority(source: Optional[str]) -> int:
+    if source in ("timetable", "flightsFuture"):
+        return 2
+    if source == "flights":
+        return 1
+    return 0
+
+
+def _scheduled_departure_stamp(item: Dict[str, Any]) -> str:
+    dep_obj = item.get("departure") if isinstance(item.get("departure"), dict) else {}
+    return str(dep_obj.get("scheduledTime") or item.get("departureTime") or "")
+
+
+def _context_airports(
+    origin_code: Optional[str],
+    destination_code: Optional[str],
+    airport_code: Optional[str],
+) -> List[str]:
+    seen = []
+    for raw in (origin_code, destination_code, airport_code):
+        code = _as_iata_code(raw)
+        if code and code not in seen:
+            seen.append(code)
+    return seen
+
+
+def _filter_to_requested_sector(
+    candidates: List[Dict[str, Any]],
+    *,
+    origin_code: Optional[str],
+    destination_code: Optional[str],
+    airport_code: Optional[str],
+    direction: Optional[str],
+) -> List[Dict[str, Any]]:
+    """
+    Same IATA flight numbers can have multiple sectors (e.g. SG476 DEL-BOM then BOM-BLR).
+    Keep the sector that matches the requested itinerary / service role.
+    """
+    if not candidates:
+        return []
+
+    origin = _as_iata_code(origin_code)
+    dest = _as_iata_code(destination_code)
+    airport = _as_iata_code(airport_code)
+    role = (direction or "").strip().lower()
+
+    exact = []
+    if origin and dest:
+        exact = [c for c in candidates if _candidate_dep_arr(c) == (origin, dest)]
+        if exact:
+            return exact
+
+    scoped: List[Dict[str, Any]] = []
+    if role in ("arrival", "arrive"):
+        target = dest or airport
+        if target:
+            scoped = [c for c in candidates if _candidate_dep_arr(c)[1] == target]
+    elif role in ("departure", "depart"):
+        target = origin or airport
+        if target:
+            scoped = [c for c in candidates if _candidate_dep_arr(c)[0] == target]
+    elif role == "transit" and airport:
+        scoped = [
+            c for c in candidates
+            if airport in _candidate_dep_arr(c)
+        ]
+
+    return scoped or candidates
+
+
+def _timetable_types_for_direction(direction: Optional[str]) -> List[str]:
+    d = (direction or "any").strip().lower()
+    if d in ("departure", "depart"):
+        return ["departure"]
+    if d in ("arrival", "arrive"):
+        return ["arrival"]
+    return ["departure", "arrival"]
+
+
+def _future_schedule_date_ok(date_clean: str) -> bool:
+    try:
+        requested = datetime.strptime(date_clean, "%Y-%m-%d").date()
+        earliest = datetime.now(timezone.utc).date() + timedelta(days=7)
+        return requested >= earliest
+    except Exception:
+        return False
+
+
+def _candidate_flight_tokens(candidate: Dict[str, Any]) -> List[str]:
+    tokens: List[str] = []
+    flight_obj = candidate.get("flight") if isinstance(candidate.get("flight"), dict) else {}
+    airline_obj = candidate.get("airline") if isinstance(candidate.get("airline"), dict) else {}
+    codeshared = candidate.get("codeshared") if isinstance(candidate.get("codeshared"), dict) else {}
+    cs_flight = codeshared.get("flight") if isinstance(codeshared.get("flight"), dict) else {}
+
+    for raw in (
+        flight_obj.get("iataNumber"),
+        flight_obj.get("icaoNumber"),
+        candidate.get("flight_iata"),
+        candidate.get("flightIata"),
+        candidate.get("flight_icao"),
+        candidate.get("flightIcao"),
+        candidate.get("flight_num"),
+        candidate.get("flightNum"),
+        cs_flight.get("iataNumber"),
+        cs_flight.get("icaoNumber"),
+    ):
+        if raw:
+            tokens.append(str(raw))
+
+    airline_iata = str(
+        airline_obj.get("iataCode") or airline_obj.get("iata") or candidate.get("airlineIata") or ""
+    ).strip().upper()
+    flight_number = str(flight_obj.get("number") or candidate.get("flightNumber") or "").strip().upper()
+    if airline_iata and flight_number:
+        if flight_number.startswith(airline_iata):
+            tokens.append(flight_number)
+        else:
+            tokens.append(f"{airline_iata}{flight_number}")
+    elif flight_number:
+        tokens.append(flight_number)
+
+    return tokens
+
+
 class AviationEdgeProvider(FlightProvider):
     """
     Production-ready Aviation Edge Flight Intelligence Provider.
@@ -211,7 +363,7 @@ class AviationEdgeProvider(FlightProvider):
     def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None):
         self.api_key = api_key or getattr(settings, "AVIATION_EDGE_API_KEY", "")
         self.base_url = base_url or getattr(settings, "AVIATION_EDGE_BASE_URL", "https://aviation-edge.com/v2/public")
-        self.timeout = float(getattr(settings, "AVIATION_EDGE_TIMEOUT", 4.0))
+        self.timeout = float(getattr(settings, "AVIATION_EDGE_TIMEOUT", 12.0))
         self.max_retries = int(getattr(settings, "AVIATION_EDGE_MAX_RETRIES", 2))
 
     def _get_redis(self):
@@ -364,51 +516,30 @@ class AviationEdgeProvider(FlightProvider):
         self,
         candidate: Dict[str, Any],
         expected_carrier_iata: str,
-        expected_carrier_icao: str
+        expected_carrier_icao: str,
+        expected_flight_iata: Optional[str] = None,
     ) -> bool:
         """
-        Validates that a returned candidate record belongs to the requested airline.
-        Prevents returning flights from incorrect airlines (e.g. returning Oman Air 'WY201' for Air India 'AI201').
+        Accepts a candidate when the requested flight IATA matches (including codeshares),
+        otherwise requires the operating airline to match. Never accepts an unrelated flight
+        from the same airline just because the carrier code matched.
         """
-        airline_obj = candidate.get("airline", {}) if isinstance(candidate.get("airline"), dict) else {}
-        flight_obj = candidate.get("flight", {}) if isinstance(candidate.get("flight"), dict) else {}
+        if expected_flight_iata:
+            expected = canonical_flight_iata(expected_flight_iata)
+            for token in _candidate_flight_tokens(candidate):
+                if canonical_flight_iata(token) == expected:
+                    return True
 
+        airline_obj = candidate.get("airline", {}) if isinstance(candidate.get("airline"), dict) else {}
         cand_airline_iata = str(airline_obj.get("iataCode") or airline_obj.get("iata") or candidate.get("airlineIata") or "").strip().upper()
         cand_airline_icao = str(airline_obj.get("icaoCode") or airline_obj.get("icao") or candidate.get("airlineIcao") or "").strip().upper()
 
-        cand_flight_iata = str(flight_obj.get("iataNumber") or candidate.get("flight_iata") or candidate.get("flightIata") or "").strip().upper()
-        cand_flight_icao = str(flight_obj.get("icaoNumber") or candidate.get("flight_icao") or candidate.get("flightIcao") or "").strip().upper()
-
-        # Rule 1: Check airline IATA code
         if cand_airline_iata and cand_airline_iata != expected_carrier_iata:
             if not expected_carrier_icao or cand_airline_icao != expected_carrier_icao:
-                logger.info(
-                    f"[CANDIDATE REJECTED] Candidate Airline: '{cand_airline_iata}' ({cand_airline_icao}) "
-                    f"!= Expected: '{expected_carrier_iata}' ({expected_carrier_icao}) | Reason: Mismatched airline code"
-                )
                 return False
 
-        # Rule 2: Check flight IATA prefix if present
-        if cand_flight_iata:
-            # Extract 2-char prefix from candidate flight iata (e.g. 'WY' from 'WY201')
-            cand_prefix = cand_flight_iata[:2]
-            if cand_prefix.isalpha() and cand_prefix != expected_carrier_iata:
-                logger.info(
-                    f"[CANDIDATE REJECTED] Candidate Flight IATA: '{cand_flight_iata}' "
-                    f"starts with '{cand_prefix}' != Expected '{expected_carrier_iata}' | Reason: Flight IATA prefix mismatch"
-                )
-                return False
-
-        # Rule 3: Check flight ICAO prefix if present
-        if cand_flight_icao and expected_carrier_icao:
-            cand_icao_prefix = cand_flight_icao[:3]
-            if cand_icao_prefix.isalpha() and cand_icao_prefix != expected_carrier_icao:
-                logger.info(
-                    f"[CANDIDATE REJECTED] Candidate Flight ICAO: '{cand_flight_icao}' "
-                    f"starts with '{cand_icao_prefix}' != Expected '{expected_carrier_icao}' | Reason: Flight ICAO prefix mismatch"
-                )
-                return False
-
+        if expected_flight_iata:
+            return False
         return True
 
     def _rank_and_select_candidate(
@@ -418,61 +549,70 @@ class AviationEdgeProvider(FlightProvider):
         expected_carrier_iata: str,
         requested_date: str,
         origin_code: Optional[str] = None,
-        destination_code: Optional[str] = None
+        destination_code: Optional[str] = None,
+        airport_code: Optional[str] = None,
+        direction: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
-        Ranks candidate records using strict multi-tier criteria:
-        1. Exact flight IATA match (e.g. AI201).
-        2. Exact airline IATA match (e.g. AI).
-        3. Matching operating airline.
-        4. Matching travel date.
-        5. Scheduled departure timestamp proximity to requested date.
+        Rank date-specific timetable sectors above stale route-master or live-tracker rows.
+        Never substitute a different city-pair that happens to reuse the same flight number.
         """
-        if not candidates:
+        scoped = _filter_to_requested_sector(
+            candidates,
+            origin_code=origin_code,
+            destination_code=destination_code,
+            airport_code=airport_code,
+            direction=direction,
+        )
+        if not scoped:
             return None
 
-        def rank_score(item: Dict[str, Any]) -> Tuple[int, int, int, int]:
-            flight_obj = item.get("flight", {}) if isinstance(item.get("flight"), dict) else {}
-            dep_obj = item.get("departure", {}) if isinstance(item.get("departure"), dict) else {}
+        def sort_key(item: Dict[str, Any]):
+            cand_tokens = _candidate_flight_tokens(item)
+            dep_code, arr_code = _candidate_dep_arr(item)
+            airline_obj = item.get("airline", {}) if isinstance(item.get("airline"), dict) else {}
+            cand_airline_iata = str(airline_obj.get("iataCode") or item.get("airlineIata") or "").strip().upper()
+            dep_date = str(_scheduled_departure_stamp(item))[:10]
 
-            cand_flight_iata = str(flight_obj.get("iataNumber") or item.get("flight_iata") or item.get("flightIata") or "").strip().upper()
-            cand_airline_iata = str(item.get("airline", {}).get("iataCode") or item.get("airlineIata") or "").strip().upper()
-            dep_date = str(dep_obj.get("scheduledTime") or item.get("departureTime") or "")[:10]
-
-            # Priority 1: Exact flight IATA match
-            score_flight_iata = 1 if cand_flight_iata == expected_flight_iata else 0
-
-            # Priority 2: Exact airline IATA match
+            score_flight_iata = 1 if any(
+                canonical_flight_iata(token) == canonical_flight_iata(expected_flight_iata)
+                for token in cand_tokens
+            ) else 0
+            score_source = _source_priority(str(item.get("_source") or ""))
             score_airline_iata = 1 if cand_airline_iata == expected_carrier_iata else 0
-
-            # Priority 3: Route match (Origin or Destination match)
-            dep_code = (dep_obj.get("iataCode") or item.get("departureIata") or "").upper()
-            arr_code = (item.get("arrival", {}).get("iataCode") or item.get("arrivalIata") or "").upper()
-
             score_route = 0
             if origin_code and dep_code == origin_code.strip().upper():
                 score_route += 1
             if destination_code and arr_code == destination_code.strip().upper():
                 score_route += 1
-
-            # Priority 4: Date match
             score_date = 1 if dep_date == requested_date else 0
+            stamp = _scheduled_departure_stamp(item) or "9999-12-31"
+            # Negated scores first so better matches sort first; earliest stamp wins ties.
+            return (
+                -score_flight_iata,
+                -score_source,
+                -score_route,
+                -score_date,
+                -score_airline_iata,
+                stamp,
+            )
 
-            return (score_flight_iata, score_airline_iata, score_route, score_date)
-
-        ranked = sorted(candidates, key=rank_score, reverse=True)
+        ranked = sorted(scoped, key=sort_key)
         top_selected = ranked[0]
+        if sort_key(top_selected)[0] != -1:
+            logger.info(
+                "[CANDIDATE RANKING REJECTED] No candidate matched the requested flight IATA; refusing airline-only substitution."
+            )
+            return None
 
-        top_flight_obj = top_selected.get("flight", {}) if isinstance(top_selected.get("flight"), dict) else {}
-        top_flight_iata = top_flight_obj.get("iataNumber") or top_selected.get("flight_iata") or top_selected.get("flightIata") or expected_flight_iata
-        top_airline_obj = top_selected.get("airline", {}) if isinstance(top_selected.get("airline"), dict) else {}
-        top_airline_name = top_airline_obj.get("name") or CARRIER_NAME_MAP.get(expected_carrier_iata, expected_carrier_iata)
-
+        top_dep, top_arr = _candidate_dep_arr(top_selected)
         logger.info(
-            f"[CANDIDATE RANKING COMPLETED] Evaluated {len(candidates)} valid candidate records.\n"
-            f"  • Top Selected Candidate: Flight '{top_flight_iata}' | Airline: '{top_airline_name}'"
+            "[CANDIDATE RANKING COMPLETED] Evaluated %s valid candidate records. Selected %s %s->%s",
+            len(scoped),
+            expected_flight_iata,
+            top_dep,
+            top_arr,
         )
-
         return top_selected
 
     def _normalize_flight_data(self, raw: Dict[str, Any], date_context: Optional[str] = None) -> FlightStatusData:
@@ -653,14 +793,12 @@ class AviationEdgeProvider(FlightProvider):
         direction: Optional[str] = None,
         origin_code: Optional[str] = None,
         destination_code: Optional[str] = None,
-        allow_fallback: bool = False
+        allow_fallback: bool = False,
+        airport_code: Optional[str] = None,
     ) -> FlightStatusData:
         """
-        Validate flight existence for a given flight number, date, and direction.
-        Executes parallel multi-tier query strategies across master routes, timetables,
-        airline catalogs, and live flight trackers before resolving results.
-        Supports all IATA and ICAO codes dynamically.
-        Never substitutes flights belonging to another airline.
+        Validate a flight number against Aviation Edge using airport-scoped timetable
+        and future-schedule filters. Does not substitute a different flight from the same airline.
         """
         provider_name = "aviation_edge"
         flight_clean = normalize_flight_number(flight_num)
@@ -670,6 +808,10 @@ class AviationEdgeProvider(FlightProvider):
         carrier_icao = CARRIER_ICAO_MAP.get(carrier_code, "")
         padded_digits = flight_digits.zfill(4) if flight_digits.isdigit() else flight_digits
         icao_flight = f"{carrier_icao}{flight_digits}" if carrier_icao else ""
+        numeric_flight = flight_digits.lstrip("0") or flight_digits
+        context_airports = _context_airports(origin_code, destination_code, airport_code)
+        timetable_types = _timetable_types_for_direction(direction_clean)
+        use_future = _future_schedule_date_ok(date_clean)
 
         logger.info(
             f"\n======================================================\n"
@@ -677,11 +819,17 @@ class AviationEdgeProvider(FlightProvider):
             f"  • Input Flight: '{flight_num}' -> Clean: '{flight_clean}'\n"
             f"  • Carrier Code: IATA='{carrier_code}' | ICAO='{carrier_icao}' | Digits='{flight_digits}'\n"
             f"  • Date Sent: '{date_clean}' | Direction: '{direction_clean}'\n"
-            f"  • Origin: {origin_code} | Destination: {destination_code}\n"
+            f"  • Origin: {origin_code} | Destination: {destination_code} | Service airport: {airport_code}\n"
             f"======================================================"
         )
 
-        cache_key = f"flight:validate:{provider_name}:{flight_clean}:{date_clean}:{direction_clean}"
+        origin_iata = _as_iata_code(origin_code)
+        dest_iata = _as_iata_code(destination_code)
+        service_iata = _as_iata_code(airport_code)
+        cache_key = (
+            f"flight:validate:{provider_name}:{flight_clean}:{date_clean}:{direction_clean}"
+            f":{origin_iata or '-'}:{dest_iata or '-'}:{service_iata or '-'}"
+        )
 
         cached = self._get_cached_data(cache_key)
         if cached:
@@ -692,108 +840,94 @@ class AviationEdgeProvider(FlightProvider):
             except Exception:
                 pass
 
-        raw_candidates: List[Dict[str, Any]] = []
+        queries: List[Tuple[str, Dict[str, Any]]] = []
 
-        # Batch 1: Concurrent IATA & ICAO master routes & timetable endpoints for specific carrier
-        batch1_queries = [
+        def add_timetable_lookups(airport: str, schedule_type: str) -> None:
+            queries.append(("timetable", {"iataCode": airport, "type": schedule_type, "flight_iata": flight_clean}))
+            queries.append(
+                (
+                    "timetable",
+                    {
+                        "iataCode": airport,
+                        "type": schedule_type,
+                        "airline_iata": carrier_code,
+                        "flight_num": numeric_flight,
+                    },
+                )
+            )
+            if use_future:
+                queries.append(
+                    (
+                        "flightsFuture",
+                        {
+                            "iataCode": airport,
+                            "type": schedule_type,
+                            "date": date_clean,
+                            "airline_iata": carrier_code,
+                            "flight_num": numeric_flight,
+                        },
+                    )
+                )
+
+        # Query only the sector that belongs to this itinerary. SG476 is DEL-BOM and later BOM-BLR;
+        # asking BOM for departures would incorrectly return Bangalore as the destination.
+        if origin_iata and dest_iata:
+            add_timetable_lookups(origin_iata, "departure")
+            add_timetable_lookups(dest_iata, "arrival")
+        elif direction_clean in ("arrival", "arrive") and (dest_iata or service_iata):
+            add_timetable_lookups(dest_iata or service_iata, "arrival")
+            if origin_iata:
+                add_timetable_lookups(origin_iata, "departure")
+        elif direction_clean in ("departure", "depart") and (origin_iata or service_iata):
+            add_timetable_lookups(origin_iata or service_iata, "departure")
+            if dest_iata:
+                add_timetable_lookups(dest_iata, "arrival")
+        else:
+            for airport in context_airports:
+                for schedule_type in timetable_types:
+                    add_timetable_lookups(airport, schedule_type)
+
+        # Static routes / live tracker are last-resort only and tagged so timetable rows win.
+        fallback_queries: List[Tuple[str, Dict[str, Any]]] = [
             ("routes", {"airlineIata": carrier_code, "flightNumber": flight_digits}),
+            ("routes", {"airlineIata": carrier_code, "flightNumber": padded_digits}),
             ("routes", {"flightIata": flight_clean}),
-            ("timetable", {"flight_iata": flight_clean, "date": date_clean}),
-            ("timetable", {"flightIata": flight_clean, "date": date_clean}),
+            ("flights", {"flightIata": flight_clean}),
         ]
         if carrier_icao:
-            batch1_queries.append(("routes", {"airlineIcao": carrier_icao, "flightNumber": flight_digits}))
+            fallback_queries.append(("routes", {"airlineIcao": carrier_icao, "flightNumber": flight_digits}))
             if icao_flight:
-                batch1_queries.append(("routes", {"flightIcao": icao_flight}))
-                batch1_queries.append(("timetable", {"flight_icao": icao_flight, "date": date_clean}))
+                fallback_queries.append(("routes", {"flightIcao": icao_flight}))
+                fallback_queries.append(("flights", {"flightIcao": icao_flight}))
+        queries.extend(fallback_queries)
 
-        with ThreadPoolExecutor(max_workers=6) as executor:
+        raw_candidates: List[Dict[str, Any]] = []
+        with ThreadPoolExecutor(max_workers=8) as executor:
             future_to_query = {
                 executor.submit(self._make_request, ep, params): (ep, params)
-                for ep, params in batch1_queries
+                for ep, params in queries
             }
             for future in as_completed(future_to_query):
+                ep, params = future_to_query[future]
                 try:
                     res = future.result()
-                    if res and isinstance(res, list) and len(res) > 0:
-                        raw_candidates.extend(res)
+                    if res and isinstance(res, list):
+                        for item in res:
+                            if isinstance(item, dict):
+                                tagged = dict(item)
+                                tagged["_source"] = ep
+                                raw_candidates.append(tagged)
                 except Exception as err:
-                    logger.warning(f"Batch 1 query error: {err}")
+                    logger.warning("Flight lookup query error for %s: %s", ep, type(err).__name__)
 
-        # Batch 2: Padded digits, alternate params (airline_iata + flight_number), and live trackers
-        if not raw_candidates:
-            batch2_queries = [
-                ("routes", {"airlineIata": carrier_code, "flightNumber": padded_digits}),
-                ("timetable", {"flight_iata": flight_clean}),
-                ("timetable", {"flight_number": flight_digits, "airline_iata": carrier_code, "date": date_clean}),
-                ("timetable", {"flight_number": flight_digits, "airlineIata": carrier_code}),
-                ("flights", {"flightIata": flight_clean}),
-            ]
-            if carrier_icao:
-                batch2_queries.append(("timetable", {"flight_number": flight_digits, "airline_icao": carrier_icao}))
-                if icao_flight:
-                    batch2_queries.append(("flights", {"flightIcao": icao_flight}))
-
-            with ThreadPoolExecutor(max_workers=6) as executor:
-                future_to_query = {
-                    executor.submit(self._make_request, ep, params): (ep, params)
-                    for ep, params in batch2_queries
-                }
-                for future in as_completed(future_to_query):
-                    try:
-                        res = future.result()
-                        if res and isinstance(res, list) and len(res) > 0:
-                            raw_candidates.extend(res)
-                    except Exception as err:
-                        logger.warning(f"Batch 2 query error: {err}")
-
-        # Batch 3: Airline Master Catalog Lookup (Full carrier route fallback)
-        if not raw_candidates:
-            logger.info(f"[BATCH 3 LOOKUP] Attempting carrier catalog lookup for airline code: {carrier_code}")
-            catalog_items = self._make_request("routes", {"airlineIata": carrier_code})
-            if not catalog_items and carrier_icao:
-                catalog_items = self._make_request("routes", {"airlineIcao": carrier_icao})
-
-            if catalog_items:
-                for item in catalog_items:
-                    item_num = str(item.get("flightNumber") or "").strip()
-                    if item_num == flight_digits or item_num == padded_digits or item_num.lstrip("0") == flight_digits.lstrip("0"):
-                        raw_candidates.append(item)
-
-        # Batch 4: Hub Timetable Schedule Search (STRICT CARRIER MATCH REQUIRED)
-        if not raw_candidates:
-            hubs_to_check = [origin_code] if origin_code else ["DEL", "BOM", "BLR"]
-            hub_queries = []
-            for hub in hubs_to_check:
-                if hub:
-                    hub_code = hub.strip().upper()
-                    hub_queries.append(("timetable", {"iataCode": hub_code, "type": "departure"}))
-                    hub_queries.append(("timetable", {"iataCode": hub_code, "type": "arrival"}))
-
-            with ThreadPoolExecutor(max_workers=6) as executor:
-                future_to_query = {
-                    executor.submit(self._make_request, ep, params): (ep, params)
-                    for ep, params in hub_queries
-                }
-                for future in as_completed(future_to_query):
-                    try:
-                        res = future.result()
-                        if res and isinstance(res, list) and len(res) > 0:
-                            for item in res:
-                                f_obj = item.get("flight", {}) if isinstance(item.get("flight"), dict) else {}
-                                item_iata = str(f_obj.get("iataNumber") or item.get("flight_iata") or item.get("flightIata") or "").upper()
-                                item_icao = str(f_obj.get("icaoNumber") or item.get("flight_icao") or item.get("flightIcao") or "").upper()
-
-                                # MUST match carrier code prefix and full flight IATA/ICAO
-                                if item_iata == flight_clean or item_icao == icao_flight:
-                                    raw_candidates.append(item)
-                    except Exception as err:
-                        logger.warning(f"Batch 4 query error: {err}")
-
-        # Filter candidates strictly by carrier code matching
         valid_candidates: List[Dict[str, Any]] = []
         for cand in raw_candidates:
-            if self._validate_candidate_airline(cand, carrier_code, carrier_icao):
+            if self._validate_candidate_airline(
+                cand,
+                carrier_code,
+                carrier_icao,
+                expected_flight_iata=flight_clean,
+            ):
                 valid_candidates.append(cand)
 
         if not valid_candidates:
@@ -801,7 +935,7 @@ class AviationEdgeProvider(FlightProvider):
                 f"\n======================================================\n"
                 f"[FLIGHT SEARCH REJECTED DECISION]\n"
                 f"  • Flight: {flight_clean} on {date_clean} (REJECTED)\n"
-                f"  • Reason: No verified schedule match found for airline '{carrier_code}'. All non-matching candidate airlines rejected.\n"
+                f"  • Reason: No verified schedule match found for '{flight_clean}'.\n"
                 f"======================================================"
             )
             raise FlightNotFoundException(flight_num=flight_clean, date=date_clean)
@@ -812,7 +946,9 @@ class AviationEdgeProvider(FlightProvider):
             expected_carrier_iata=carrier_code,
             requested_date=date_clean,
             origin_code=origin_code,
-            destination_code=destination_code
+            destination_code=destination_code,
+            airport_code=airport_code,
+            direction=direction_clean,
         )
 
         if not target_item:
@@ -856,7 +992,10 @@ class AviationEdgeProvider(FlightProvider):
         if not results:
             results = self._make_request("timetable", {"flight_iata": flight_clean})
 
-        valid_results = [r for r in results if self._validate_candidate_airline(r, carrier_code, carrier_icao)]
+        valid_results = [
+            r for r in results
+            if self._validate_candidate_airline(r, carrier_code, carrier_icao, expected_flight_iata=flight_clean)
+        ]
 
         if not valid_results:
             today_str = datetime.now().strftime("%Y-%m-%d")

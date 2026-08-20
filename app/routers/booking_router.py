@@ -1,5 +1,5 @@
 from typing import Optional, Dict, Any
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -25,12 +25,14 @@ async def create_booking(
     user_context: Optional[Dict[str, Any]] = Depends(get_optional_user)
 ):
     profile_id = None
-    if user_context and user_context.get("userId"):
-        try:
-            import uuid
-            profile_id = uuid.UUID(user_context.get("userId"))
-        except Exception:
-            pass
+    if user_context:
+        raw_id = user_context.get("user_id") or user_context.get("userId")
+        if raw_id:
+            try:
+                import uuid
+                profile_id = uuid.UUID(str(raw_id))
+            except Exception:
+                pass
 
     booking = BookingService.create_booking(db, payload, profile_id=profile_id)
     return BookingApiResponse(
@@ -43,7 +45,7 @@ async def get_my_bookings(
     db: Session = Depends(get_db),
     user_context: Dict[str, Any] = Depends(get_required_user)
 ):
-    email = user_context.get("email", "")
+    email = user_context.get("sub") or user_context.get("email") or ""
     bookings = BookingService.get_user_bookings(db, email=email)
     formatted = [BookingService.format_booking_dict(b) for b in bookings]
     return BookingApiResponse(
@@ -70,9 +72,23 @@ async def admin_list_bookings(
 async def get_booking_details(
     identifier: str,
     db: Session = Depends(get_db),
-    _user_context: Optional[Dict[str, Any]] = Depends(get_optional_user)
+    user_context: Dict[str, Any] = Depends(get_required_user)
 ):
     booking = BookingService.get_booking_by_ref_or_id(db, identifier)
+    role = user_context.get("role")
+    email = (user_context.get("sub") or user_context.get("email") or "").lower()
+    user_id = str(user_context.get("user_id") or user_context.get("userId") or "")
+    is_staff = role in (
+        "SUPER_ADMIN", "ADMIN", "OPERATIONS_MANAGER", "DUTY_OFFICER",
+        "DISPATCHER", "CONCIERGE_TEAM", "CUSTOMER_SUPPORT",
+    )
+    owns = False
+    if email and (booking.passenger_email or "").lower() == email:
+        owns = True
+    if user_id and booking.user_id and str(booking.user_id) == user_id:
+        owns = True
+    if not is_staff and not owns:
+        raise HTTPException(status_code=403, detail="Access denied.")
     return BookingApiResponse(
         success=True,
         data=BookingService.format_booking_dict(booking)
@@ -85,7 +101,7 @@ async def cancel_booking(
     db: Session = Depends(get_db),
     user_context: Dict[str, Any] = Depends(get_required_user)
 ):
-    email = user_context.get("email", "")
+    email = user_context.get("sub") or user_context.get("email") or ""
     is_admin = user_context.get("role") in ["ADMIN", "SUPER_ADMIN", "DISPATCHER"]
     
     updated_booking = BookingService.cancel_booking(

@@ -12,8 +12,8 @@ class Settings(BaseSettings):
     REDIS_PORT: int = int(os.getenv("REDIS_PORT", "6379"))
     REDIS_PASSWORD: str = os.getenv("REDIS_PASSWORD", "")
 
-    JWT_SECRET: str = os.getenv("JWT_SECRET", "shafsky-dev-secret-key-change-in-prod")
-    JWT_REFRESH_SECRET: str = os.getenv("JWT_REFRESH_SECRET", "shafsky-dev-refresh-secret-key-change-in-prod")
+    JWT_SECRET: str = os.getenv("JWT_SECRET", "")
+    JWT_REFRESH_SECRET: str = os.getenv("JWT_REFRESH_SECRET", "")
     JWT_ALGORITHM: str = os.getenv("JWT_ALGORITHM", "RS256")
     JWT_PRIVATE_KEY: str = os.getenv("JWT_PRIVATE_KEY", "")
     JWT_PUBLIC_KEY: str = os.getenv("JWT_PUBLIC_KEY", "")
@@ -36,12 +36,26 @@ class Settings(BaseSettings):
     WHATSAPP_WEBHOOK_VERIFY_TOKEN: str = os.getenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "")
     WHATSAPP_API_VERSION: str = os.getenv("WHATSAPP_API_VERSION", "v21.0")
 
-    ALLOWED_ORIGINS_STR: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,http://localhost:3000,http://127.0.0.1:3000"
+    RESEND_API_KEY: str = os.getenv("RESEND_API_KEY", "")
+    EMAIL_FROM: str = os.getenv("EMAIL_FROM", os.getenv("RESEND_FROM_EMAIL", ""))
+    RESEND_FROM_EMAIL: str = os.getenv("RESEND_FROM_EMAIL", os.getenv("EMAIL_FROM", ""))
+    EMAIL_REPLY_TO: str = os.getenv("EMAIL_REPLY_TO", "")
+    ADMIN_NOTIFICATION_EMAILS: str = os.getenv("ADMIN_NOTIFICATION_EMAILS", "")
+
+    ALLOWED_ORIGINS_STR: str = os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,http://localhost:3000,http://127.0.0.1:3000",
+    )
     CORS_ALLOW_CREDENTIALS: bool = True
+    TRUST_PROXY: bool = os.getenv("TRUST_PROXY", "false").lower() in ("1", "true", "yes")
+
+    @property
+    def is_production(self) -> bool:
+        return self.ENVIRONMENT.lower() not in ("development", "dev", "test", "testing")
 
     @property
     def ALLOWED_ORIGINS(self) -> list:
-        required = [
+        local_dev = [
             "http://localhost:5173",
             "http://127.0.0.1:5173",
             "http://localhost:5174",
@@ -62,9 +76,13 @@ class Settings(BaseSettings):
         elif raw:
             parsed = [o.strip() for o in raw.split(",") if o.strip()]
         merged = []
-        for origin in parsed + required:
+        for origin in parsed:
             if origin and origin not in merged:
                 merged.append(origin)
+        if not self.is_production:
+            for origin in local_dev:
+                if origin not in merged:
+                    merged.append(origin)
         return merged
 
     class Config:

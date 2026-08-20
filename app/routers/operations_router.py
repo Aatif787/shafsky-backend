@@ -18,6 +18,7 @@ from app.models.operations_models import OperationsQueue
 from app.models.shared_domain import Note
 from app.services.operations_engine import OperationsEngine
 from app.services.timeline_service import TimelineService
+from app.security.dependencies import get_required_staff_or_admin
 from app.schemas.operations_schemas import (
     OperationsQueueItemResponse,
     OperationsQueueListResponse,
@@ -42,6 +43,7 @@ def list_operations_queue(
     status_filter: Optional[str] = Query(None, alias="status", description="Filter by status: NEW, ASSIGNED, IN_PROGRESS, READY, etc."),
     airport: Optional[str] = Query(None, description="Filter by 3-letter IATA code"),
     db: Session = Depends(get_db),
+    _staff=Depends(get_required_staff_or_admin),
 ):
     query = db.query(OperationsQueue)
     if status_filter:
@@ -66,6 +68,7 @@ def list_operations_queue(
 def get_operations_item(
     booking_reference: str,
     db: Session = Depends(get_db),
+    _staff=Depends(get_required_staff_or_admin),
 ):
     item = db.query(OperationsQueue).filter_by(booking_reference=booking_reference).first()
     if not item:
@@ -115,6 +118,7 @@ def update_workflow_status(
     booking_reference: str,
     payload: StatusUpdateRequest,
     db: Session = Depends(get_db),
+    _staff=Depends(get_required_staff_or_admin),
 ):
     try:
         updated = OperationsEngine.update_status(
@@ -140,6 +144,7 @@ def assign_duty_officer(
     booking_reference: str,
     payload: AssignStaffRequest,
     db: Session = Depends(get_db),
+    _staff=Depends(get_required_staff_or_admin),
 ):
     item = db.query(OperationsQueue).filter_by(booking_reference=booking_reference).first()
     if not item:
@@ -176,6 +181,7 @@ def add_internal_staff_note(
     booking_reference: str,
     payload: InternalNoteCreateRequest,
     db: Session = Depends(get_db),
+    _staff=Depends(get_required_staff_or_admin),
 ):
     item = db.query(OperationsQueue).filter_by(booking_reference=booking_reference).first()
     if not item:
@@ -203,6 +209,7 @@ def add_internal_staff_note(
 def trigger_notifications(
     booking_reference: str,
     db: Session = Depends(get_db),
+    _staff=Depends(get_required_staff_or_admin),
 ):
     item = db.query(OperationsQueue).filter_by(booking_reference=booking_reference).first()
     if not item:

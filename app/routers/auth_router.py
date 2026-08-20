@@ -29,26 +29,17 @@ router = APIRouter(prefix="/api/auth", tags=["Authentication & Session Security"
 
 
 def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
-    """Sets HttpOnly, Secure, SameSite=Strict cookie for refresh token."""
+    """Sets HttpOnly refresh token cookies. Secure flag is required in production."""
     max_age_seconds = int(getattr(settings, "REFRESH_TOKEN_EXPIRE_DAYS", 7)) * 86400
-    response.set_cookie(
-        key="refreshToken",
-        value=refresh_token,
+    cookie_kwargs = dict(
         httponly=True,
-        secure=True,
-        samesite="strict",
+        secure=settings.is_production,
+        samesite="strict" if settings.is_production else "lax",
         max_age=max_age_seconds,
-        path="/api/auth"
+        path="/api/auth",
     )
-    response.set_cookie(
-        key="refresh_token",
-        value=refresh_token,
-        httponly=True,
-        secure=True,
-        samesite="strict",
-        max_age=max_age_seconds,
-        path="/api/auth"
-    )
+    response.set_cookie(key="refreshToken", value=refresh_token, **cookie_kwargs)
+    response.set_cookie(key="refresh_token", value=refresh_token, **cookie_kwargs)
 
 
 def _clear_refresh_cookie(response: Response) -> None:
@@ -69,12 +60,11 @@ async def login(
 
     device_info = DeviceTracking.get_client_device(request)
 
-    # 1. Admin Hardcoded Fallback Check
-    admin_email = os.getenv("ADMIN_EMAIL", "admin@shafskyaviation.com").lower()
-    admin_pass = os.getenv("ADMIN_PASSWORD", "ShafskyAdmin2026!")
+    admin_email = (os.getenv("ADMIN_EMAIL") or "").lower().strip()
+    admin_pass = os.getenv("ADMIN_PASSWORD") or ""
 
     user_data = None
-    if email == admin_email and password == admin_pass:
+    if admin_email and admin_pass and email == admin_email and password == admin_pass:
         # Auto-seed admin record in DB if missing to ensure DB session tracking
         user = db.scalar(select(UserAuth).where(UserAuth.email == email))
         if not user:
@@ -123,7 +113,6 @@ async def login(
         success=True,
         data=AuthDataResponse(
             accessToken=access_token,
-            refreshToken=raw_refresh,
             user=UserResponse(
                 id=user_data["user_id"],
                 email=user_data["sub"],
@@ -143,14 +132,8 @@ async def refresh_token(
 ):
     device_info = DeviceTracking.get_client_device(request)
 
-    # Extract raw refresh token from payload or HttpOnly cookie
-    raw_refresh_token = None
-    if payload and payload.refreshToken:
-        raw_refresh_token = payload.refreshToken
-    elif request.cookies.get("refreshToken"):
-        raw_refresh_token = request.cookies.get("refreshToken")
-    elif request.cookies.get("refresh_token"):
-        raw_refresh_token = request.cookies.get("refresh_token")
+    # Extract refresh token from HttpOnly cookie only (never from JSON body).
+    raw_refresh_token = request.cookies.get("refreshToken") or request.cookies.get("refresh_token")
 
     if not raw_refresh_token:
         raise HTTPException(status_code=401, detail="Missing or invalid refresh token.")
@@ -162,7 +145,6 @@ async def refresh_token(
             success=True,
             data=AuthDataResponse(
                 accessToken=token_data["accessToken"],
-                refreshToken=token_data["refreshToken"]
             )
         )
     except ValueError as ve:
@@ -186,13 +168,7 @@ async def logout(
     payload: Optional[RefreshTokenRequest] = None,
     db: Session = Depends(get_db)
 ):
-    raw_refresh = None
-    if payload and payload.refreshToken:
-        raw_refresh = payload.refreshToken
-    elif request.cookies.get("refreshToken"):
-        raw_refresh = request.cookies.get("refreshToken")
-    elif request.cookies.get("refresh_token"):
-        raw_refresh = request.cookies.get("refresh_token")
+    raw_refresh = request.cookies.get("refreshToken") or request.cookies.get("refresh_token")
 
     if raw_refresh:
         AuthService.revoke_refresh_token(db, raw_refresh)
@@ -382,19 +358,8 @@ async def update_user_profile(
     if not user and email:
         user = db.scalar(select(UserAuth).where(UserAuth.email == email))
 
-    if not user and email:
-        u_id = u_uuid or uuid.uuid4()
-        user = UserAuth(
-            id=u_id,
-            email=email,
-            password_hash="ShafskyUserPasswordHash2026",
-            role=Role.CUSTOMER,
-            is_verified=True,
-        )
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-        u_uuid = user.id
+        if not user and email:
+            raise HTTPException(status_code=404, detail="User account not found.")
 
     profile = None
     if u_uuid:

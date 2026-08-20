@@ -56,12 +56,16 @@ def validate_flight(
             except Exception:
                 arr_dt = dep_dt + timedelta(hours=2)
 
-            orig_code = (payload.origin_code or "DEL").strip().upper()
-            dest_code = (payload.destination_code or "BOM").strip().upper()
+            orig_code = (payload.origin_code or "").strip().upper()
+            dest_code = (payload.destination_code or "").strip().upper()
+            fl_num = (payload.resolved_flight_num or "").strip().upper()
+            if not orig_code or not dest_code or not fl_num:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Manual flight entry requires flight number, origin code, and destination code.",
+                )
             orig_ap = build_flight_airport(orig_code)
             dest_ap = build_flight_airport(dest_code)
-
-            fl_num = (payload.resolved_flight_num or "AI101").strip().upper()
             carrier_iata = fl_num[:2]
 
             airline_details = AirlineDetails(
@@ -114,7 +118,12 @@ def validate_flight(
                 data=FlightValidateResponseData(valid=True, flightData=flight_data)
             )
 
-        flight_num = payload.resolved_flight_num or "AI302"
+        flight_num = (payload.resolved_flight_num or "").strip().upper()
+        if not flight_num:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="flightNum is required.",
+            )
         flight_date = payload.resolved_date or datetime.now().strftime("%Y-%m-%d")
         direction = payload.resolved_direction
 
@@ -123,7 +132,8 @@ def validate_flight(
             flight_date,
             direction=direction,
             origin_code=payload.origin_code,
-            destination_code=payload.destination_code
+            destination_code=payload.destination_code,
+            airport_code=payload.airport_code,
         )
         return FlightValidateResponse(
             success=True,

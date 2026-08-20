@@ -790,6 +790,7 @@ class ServiceConfigService:
             or payload.get("verifiedFlightId")
             or payload.get("flight_number")
             or payload.get("flightNum")
+            or payload.get("flight_num")
             or ""
         ).strip().upper()
         journey_type = (
@@ -814,9 +815,9 @@ class ServiceConfigService:
             or payload.get("selected_service_ids")
             or []
         )
-        guest_count = max(1, int(payload.get("guestCount") or payload.get("guest_count") or 1))
+        guest_count = max(1, min(20, int(payload.get("guestCount") or payload.get("guest_count") or payload.get("passenger_count") or 1)))
         service_date = payload.get("serviceDate") or payload.get("service_date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        service_time = payload.get("serviceTime") or payload.get("service_time") or "12:00"
+        service_time = payload.get("serviceTime") or payload.get("service_time") or ""
 
         errors: List[str] = []
 
@@ -989,9 +990,10 @@ class ServiceConfigService:
             field_errors.append({"field": "phone", "message": "Please enter a valid phone number (minimum 7 digits)."})
 
         try:
-            guest_count = int(payload.get("guest_count") or payload.get("guestCount") or 1)
-            if guest_count < 1:
-                field_errors.append({"field": "guest_count", "message": "Passenger count must be at least 1."})
+            guest_count = int(payload.get("guest_count") or payload.get("guestCount") or payload.get("passenger_count") or 1)
+            if guest_count < 1 or guest_count > 20:
+                field_errors.append({"field": "guest_count", "message": "Passenger count must be between 1 and 20."})
+            guest_count = max(1, min(20, guest_count))
         except Exception:
             field_errors.append({"field": "guest_count", "message": "Invalid passenger count."})
             guest_count = 1
@@ -1027,8 +1029,8 @@ class ServiceConfigService:
                 passenger_phone=phone,
                 service_category="Airport Assistance",
                 flight_num=auth_val["bookingContext"]["flightNumber"],
-                origin_code=auth_val["bookingContext"]["airportCode"] if auth_val["bookingContext"]["journeyType"] == "departure" else "DEL",
-                dest_code=auth_val["bookingContext"]["airportCode"] if auth_val["bookingContext"]["journeyType"] == "arrival" else "BOM",
+                origin_code=(payload.get("origin_code") or payload.get("origin") or auth_val["bookingContext"]["airportCode"] or "").upper(),
+                dest_code=(payload.get("dest_code") or payload.get("destination") or payload.get("destination_code") or auth_val["bookingContext"]["airportCode"] or "").upper(),
                 service_type=auth_val["bookingContext"]["journeyType"],
                 selected_services={
                     "package": auth_val.get("selectedPackage"),

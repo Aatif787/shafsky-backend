@@ -343,7 +343,7 @@ class OperationsEngine:
                 subject=email_subject,
                 body_html=email_body,
             )
-            email_sent = res_email.get("status") in ("SENT", "SUCCESS", "OK")
+            email_sent = str(res_email.get("status") or "").upper() in ("SENT", "SUCCESS", "OK", "DELIVERED")
             item.email_notification_sent = email_sent
             details["email"] = res_email
         except Exception as err:

@@ -12,7 +12,8 @@ class FlightProvider(ABC):
         date: str,
         direction: Optional[str] = None,
         origin_code: Optional[str] = None,
-        destination_code: Optional[str] = None
+        destination_code: Optional[str] = None,
+        airport_code: Optional[str] = None,
     ) -> FlightStatusData:
         """Validate flight status and retrieve metadata."""
         pass

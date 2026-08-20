@@ -83,7 +83,7 @@ def test_cache_key_includes_provider_flight_date_direction():
     # Assert cache key contained provider, flight, date, and direction
     provider._set_cached_data.assert_called_once()
     cache_key = provider._set_cached_data.call_args[0][0]
-    assert cache_key == "flight:validate:aviation_edge:AI2525:2026-08-04:arrival"
+    assert cache_key == "flight:validate:aviation_edge:AI2525:2026-08-04:arrival:-:-:-"
 
 
 def test_cache_isolation_between_directions():
@@ -112,8 +112,8 @@ def test_cache_isolation_between_directions():
         res2 = provider.validate_flight("AI2525", "2026-08-04", direction="departure")
 
     # Assert two distinct cache entries exist
-    assert "flight:validate:aviation_edge:AI2525:2026-08-04:arrival" in cache_store
-    assert "flight:validate:aviation_edge:AI2525:2026-08-04:departure" in cache_store
+    assert "flight:validate:aviation_edge:AI2525:2026-08-04:arrival:-:-:-" in cache_store
+    assert "flight:validate:aviation_edge:AI2525:2026-08-04:departure:-:-:-" in cache_store
 
 
 def test_structured_logging_output(caplog):

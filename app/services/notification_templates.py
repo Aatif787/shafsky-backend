@@ -1,33 +1,76 @@
+from html import escape
 from typing import Dict, Any
+
+
+def _safe(value: Any, default: str = "") -> str:
+    if value is None:
+        return default
+    text = str(value).strip()
+    return escape(text) if text else default
+
 
 class NotificationTemplateEngine:
     @classmethod
     def render_template(cls, template_type: str, data: Dict[str, Any]) -> Dict[str, str]:
         t_type = template_type.upper()
         
-        name = data.get("passengerName", data.get("passenger_name", "Valued Guest"))
-        ref = data.get("bookingRef", data.get("booking_ref", "N/A"))
-        flight = data.get("flightNum", data.get("flight_num", "Flight"))
-        origin = data.get("originCode", data.get("origin_code", "Airport"))
-        dest = data.get("destCode", data.get("dest_code", "Destination"))
-        date_str = data.get("departureTime", data.get("departure_time", "Scheduled Time"))
-        amount = data.get("totalAmount", data.get("total_amount", "0.00"))
-        currency = data.get("currency", "INR")
+        name = _safe(data.get("passengerName") or data.get("passenger_name"), "Valued Guest")
+        ref = _safe(data.get("bookingRef") or data.get("booking_ref"), "N/A")
+        flight = _safe(data.get("flightNum") or data.get("flight_num"), "Flight")
+        origin = _safe(data.get("originCode") or data.get("origin_code"), "Airport")
+        dest = _safe(data.get("destCode") or data.get("dest_code"), "Destination")
+        date_str = _safe(data.get("departureTime") or data.get("departure_time"), "Scheduled Time")
+        amount = _safe(data.get("totalAmount") or data.get("total_amount"), "0.00")
+        currency = _safe(data.get("currency"), "INR")
         
+        airport = _safe(data.get("airportCode") or data.get("airport_code") or origin)
+        journey = _safe(data.get("journeyType") or data.get("journey_type") or data.get("serviceType") or data.get("service_type"))
+        service = _safe(data.get("serviceName") or data.get("service_name") or data.get("package") or journey)
+        phone = _safe(data.get("passengerPhone") or data.get("passenger_phone") or data.get("phone"))
+        terminal = _safe(data.get("terminal"))
+        status = _safe(data.get("status"), "PENDING")
+        support = _safe(data.get("supportPhone"), "+91 9599087959")
+
         if t_type == "BOOKING_CONFIRMATION":
-            subject = f"Shafsky Aviation - Booking Confirmed ({ref})"
+            subject = f"Shafsky Aviation — Booking Confirmed ({ref})"
             html = f"""
             <h2>Shafsky Aviation VIP Services</h2>
             <p>Dear <strong>{name}</strong>,</p>
-            <p>Your airport booking <strong>{ref}</strong> has been successfully confirmed!</p>
+            <p>Your airport concierge booking <strong>{ref}</strong> has been received and confirmed.</p>
             <ul>
+                <li><strong>Airport:</strong> {airport}</li>
+                <li><strong>Service type:</strong> {journey or service}</li>
+                <li><strong>Package / service:</strong> {service}</li>
                 <li><strong>Flight:</strong> {flight} ({origin} &rarr; {dest})</li>
-                <li><strong>Departure Time:</strong> {date_str}</li>
-                <li><strong>Amount Paid:</strong> {currency} {amount}</li>
+                <li><strong>Date / time:</strong> {date_str}</li>
+                {f"<li><strong>Terminal:</strong> {terminal}</li>" if terminal else ""}
+                <li><strong>Amount:</strong> {currency} {amount}</li>
+                <li><strong>Status:</strong> {status}</li>
             </ul>
-            <p>Our dedicated VIP ground team will meet you at the airport.</p>
+            <p>Our 24/7 command desk: {support}</p>
             """
-            whatsapp = f"✈️ *Shafsky Aviation*: Booking Confirmed! Ref: *{ref}*. Flight: {flight} ({origin} -> {dest}). Departure: {date_str}. Our VIP service team is ready to assist you!"
+            whatsapp = f"✈️ *Shafsky Aviation*: Booking confirmed. Ref *{ref}*. {airport} / {flight}. {date_str}."
+
+        elif t_type == "ADMIN_NEW_BOOKING":
+            subject = f"[Shafsky Ops] New booking {ref} — {airport}"
+            html = f"""
+            <h2>New booking received</h2>
+            <ul>
+                <li><strong>Reference:</strong> {ref}</li>
+                <li><strong>Customer:</strong> {name}</li>
+                <li><strong>Email:</strong> {data.get("passengerEmail") or data.get("passenger_email") or ""}</li>
+                <li><strong>Phone:</strong> {phone}</li>
+                <li><strong>Airport:</strong> {airport}</li>
+                <li><strong>Journey:</strong> {journey}</li>
+                <li><strong>Package / service:</strong> {service}</li>
+                <li><strong>Flight:</strong> {flight} ({origin} &rarr; {dest})</li>
+                <li><strong>Date / time:</strong> {date_str}</li>
+                {f"<li><strong>Terminal:</strong> {terminal}</li>" if terminal else ""}
+                <li><strong>Amount:</strong> {currency} {amount}</li>
+                <li><strong>Status:</strong> {status}</li>
+            </ul>
+            """
+            whatsapp = f"🚨 New booking *{ref}* — {name} — {airport} — {flight}"
 
         elif t_type == "BOOKING_CANCELLED":
             reason = data.get("reason", "Cancelled upon request")

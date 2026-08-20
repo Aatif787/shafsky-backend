@@ -15,7 +15,7 @@ from app.ai.schemas import (
     ResumeRequest
 )
 from app.ai.service import AiService
-from app.ai.memory import ConversationMemory
+from app.security.dependencies import get_required_staff_or_admin
 
 router = APIRouter(prefix="/api/ai", tags=["AI Conversation Engine"])
 
@@ -81,7 +81,8 @@ def whatsapp_webhook_endpoint(
 )
 def staff_takeover_endpoint(
     payload: TakeoverRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _staff=Depends(get_required_staff_or_admin),
 ):
     """Transfers conversation from AI to human staff duty officer."""
     try:
@@ -99,7 +100,8 @@ def staff_takeover_endpoint(
 )
 def resume_ai_endpoint(
     payload: ResumeRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _staff=Depends(get_required_staff_or_admin),
 ):
     """Resumes AI control of conversation from human staff."""
     try:
@@ -116,7 +118,8 @@ def resume_ai_endpoint(
     summary="Retrieve Active Conversation Session Details"
 )
 def get_conversation_details_endpoint(
-    conversation_id: str
+    conversation_id: str,
+    _staff=Depends(get_required_staff_or_admin),
 ):
     """Retrieves full conversation session state and message history."""
     try:

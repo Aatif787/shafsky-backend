@@ -190,6 +190,29 @@ class AirportService:
         db.commit()
         db.refresh(booking)
         logger.info(f"Created Airport Booking {booking.id} ({ref}) with workflow instance {wf_instance.id}")
+        try:
+            from app.services.notification_service import NotificationService
+            primary = next((p for p in passengers_data if p.get("is_primary")), passengers_data[0] if passengers_data else {})
+            NotificationService.notify_booking_created(db, {
+                "booking_ref": ref,
+                "passenger_name": primary.get("full_name"),
+                "passenger_email": primary.get("contact_email"),
+                "passenger_phone": primary.get("contact_phone"),
+                "flight_num": f_obj.flight_number,
+                "origin_code": f_obj.departure_airport,
+                "dest_code": f_obj.arrival_airport,
+                "airport_code": f_obj.arrival_airport if f_obj.flight_type == "ARRIVAL" else f_obj.departure_airport,
+                "journey_type": f_obj.flight_type,
+                "service_type": service_package,
+                "service_name": service_package,
+                "departure_time": f_obj.scheduled_time.isoformat() if getattr(f_obj.scheduled_time, "isoformat", None) else str(f_obj.scheduled_time),
+                "terminal": f_obj.terminal,
+                "total_amount": float(booking.total_price),
+                "currency": booking.currency,
+                "status": booking.status,
+            })
+        except Exception:
+            logger.exception("Airport booking persisted but notification dispatch failed for %s", ref)
         return booking
 
     @classmethod

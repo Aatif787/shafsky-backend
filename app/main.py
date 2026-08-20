@@ -1,7 +1,7 @@
 import os
 import uvicorn
 from datetime import datetime, timezone
-from fastapi import FastAPI, Depends, Response
+from fastapi import FastAPI, Depends, Response, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
@@ -17,6 +17,7 @@ import app.models.airport  # Phase C.1 Airport Meet & Assist models
 import app.models.journey_models  # Phase 1 Journey Detection Engine models
 import app.models.operations_models  # Phase 6 Operations & Communication Engine models
 from app.security.middleware import SecurityMiddleware
+from app.security.dependencies import get_required_admin
 from app.security.secrets import validate_secrets_on_startup
 from app.monitoring.middlewares import ObservabilityMiddleware
 from app.monitoring.health import HealthCheckSuite
@@ -37,12 +38,15 @@ from app.disaster_recovery import dr_router
 validate_secrets_on_startup()
 
 
+_prod = settings.is_production
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version="2.0.0",
     description="Enterprise FastAPI Backend Engine for Shafsky Aviation Concierge Platform",
-    docs_url="/docs",
-    redoc_url="/redoc"
+    docs_url=None if _prod else "/docs",
+    redoc_url=None if _prod else "/redoc",
+    openapi_url=None if _prod else "/openapi.json",
 )
 
 
@@ -185,12 +189,18 @@ async def liveness_check():
     return HealthCheckSuite.run_liveness()
 
 @app.get("/metrics", tags=["Observability & Health"])
-async def prometheus_metrics():
+async def prometheus_metrics(
+    request: Request,
+    _admin=Depends(get_required_admin),
+):
     metrics_text = PrometheusMetricsCollector.generate_metrics_text()
     return Response(content=metrics_text, media_type="text/plain; version=0.0.4")
 
 @app.get("/api/admin/observability/dashboard", tags=["Observability & Health"])
-async def observability_dashboard(db: Session = Depends(get_db)):
+async def observability_dashboard(
+    db: Session = Depends(get_db),
+    _admin=Depends(get_required_admin),
+):
     return {"success": True, "data": ObservabilityDashboard.get_dashboard_metrics(db)}
 
 if __name__ == "__main__":

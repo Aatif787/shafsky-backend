@@ -18,6 +18,10 @@ from app.schemas.payment import PaymentInitiateRequest, RefundRequest, WebhookPa
 from app.providers.base import PaymentProvider, MockPaymentProvider
 from app.services.timeline_service import TimelineService
 from app.services.admin_service import AdminService
+from app.config import settings
+import hmac
+import hashlib
+import os
 
 
 class PaymentService:
@@ -31,12 +35,16 @@ class PaymentService:
         provider: Optional[PaymentProvider] = None
     ) -> PaymentTransaction:
         """Initiates a payment transaction and registers intent with provider."""
-        provider = provider or MockPaymentProvider()
+        if provider is None:
+            if settings.is_production:
+                raise ValueError("Payment provider is not configured.")
+            provider = MockPaymentProvider()
         ref = f"PAY-{uuid.uuid4().hex[:8].upper()}"
 
-        # Server-controlled Authoritative Amount Lookup from Database
-        authoritative_amount = payload.amount
-        if str(payload.entity_type).upper() == "BOOKING" and payload.entity_id:
+        # Server-controlled amount. Never trust client-provided amount for bookings.
+        authoritative_amount = None
+        entity_type = str(payload.entity_type).upper()
+        if entity_type in ("BOOKING", "AIRPORT_BOOKING", "TICKET_BOOKING") and payload.entity_id:
             from app.models.schema import Booking
             from sqlalchemy import or_
             try:
@@ -45,8 +53,11 @@ class PaymentService:
             except ValueError:
                 booking = db.scalar(select(Booking).where(Booking.booking_ref == str(payload.entity_id)))
 
-            if booking and booking.total_amount is not None:
-                authoritative_amount = float(booking.total_amount)
+            if not booking or booking.total_amount is None:
+                raise ValueError("Booking not found or has no authoritative amount.")
+            authoritative_amount = float(booking.total_amount)
+        else:
+            raise ValueError("Payment amount must be resolved from a persisted booking.")
 
         # Register intent with payment provider
         intent = provider.create_payment_intent(
@@ -80,7 +91,7 @@ class PaymentService:
             event_type="PAYMENT_INITIATED",
             title=f"Payment Initiated ({ref})",
             details={
-                "amount": payload.amount,
+                "amount": authoritative_amount,
                 "currency": payload.currency,
                 "transactionRef": ref,
                 "gatewayPaymentId": intent.get("payment_id")
@@ -94,12 +105,21 @@ class PaymentService:
             action="PAYMENT_INITIATED",
             resource_type="PAYMENT",
             resource_id=str(transaction.id),
-            details={"transactionRef": ref, "amount": payload.amount}
+            details={"transactionRef": ref, "amount": authoritative_amount}
         )
 
         db.commit()
         db.refresh(transaction)
         return transaction
+
+    @classmethod
+    def verify_internal_webhook_signature(cls, payload: WebhookPayload, signature: Optional[str]) -> bool:
+        secret = (os.getenv("PAYMENT_WEBHOOK_SECRET") or os.getenv("RAZORPAY_WEBHOOK_SECRET") or "").strip()
+        if not secret or not signature:
+            return False
+        canonical = f"{payload.transaction_ref}:{payload.event_type}:{payload.gateway_payment_id}"
+        computed = hmac.new(secret.encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256).hexdigest()
+        return hmac.compare_digest(computed, signature)
 
     @classmethod
     def process_webhook(

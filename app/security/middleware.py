@@ -2,24 +2,20 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi import Request
 from app.security.headers import get_security_headers
 from app.security.rate_limit import RateLimiter
+from app.security.client_ip import get_client_ip
 
 class SecurityMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        # 1. Safely resolve client IP across reverse proxies and load balancers
-        cf_ip = request.headers.get("CF-Connecting-IP")
-        forwarded = request.headers.get("X-Forwarded-For")
-        if cf_ip:
-            client_ip = cf_ip.strip()
-        elif forwarded:
-            client_ip = forwarded.split(",")[0].strip()
-        else:
-            client_ip = request.client.host if request.client else "127.0.0.1"
-
+        client_ip = get_client_ip(request)
         endpoint_path = request.url.path
 
         # 2. Apply Rate Limiting
         if endpoint_path.startswith("/api/auth/login") or endpoint_path.startswith("/api/auth/register"):
             RateLimiter.check_rate_limit(f"rate_limit_auth:{client_ip}", max_requests=10, window_seconds=60)
+        elif endpoint_path.startswith("/api/flight/validate") or endpoint_path.startswith("/api/flights/validate"):
+            RateLimiter.check_rate_limit(f"rate_limit_flight:{client_ip}", max_requests=20, window_seconds=60)
+        elif endpoint_path.startswith("/api/ai/chat"):
+            RateLimiter.check_rate_limit(f"rate_limit_ai:{client_ip}", max_requests=30, window_seconds=60)
         elif endpoint_path.startswith("/api/"):
             RateLimiter.check_rate_limit(f"rate_limit_api:{client_ip}", max_requests=200, window_seconds=60)
 

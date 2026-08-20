@@ -65,8 +65,12 @@ def initiate_payment_endpoint(
 )
 def payment_webhook_endpoint(
     payload: WebhookPayload,
+    request: Request,
     db: Session = Depends(get_db)
 ):
+    signature = payload.signature or request.headers.get("X-Webhook-Signature") or request.headers.get("x-webhook-signature")
+    if not PaymentService.verify_internal_webhook_signature(payload, signature):
+        raise HTTPException(status_code=401, detail="Invalid webhook signature.")
     try:
         tx = PaymentService.process_webhook(db, payload)
         return PaymentApiResponse(
@@ -124,6 +128,38 @@ def get_transaction_endpoint(
         raise HTTPException(status_code=400, detail="Invalid transaction UUID format.")
 
     tx = db.scalar(select(PaymentTransaction).where(PaymentTransaction.id == tx_uuid))
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transaction not found.")
+
+    role = current_user.get("role")
+    email = (current_user.get("sub") or current_user.get("email") or "").lower()
+    user_id = str(current_user.get("user_id") or current_user.get("userId") or "")
+    is_staff = role in (
+        "SUPER_ADMIN", "ADMIN", "OPERATIONS_MANAGER", "DUTY_OFFICER",
+        "MEET_AND_ASSIST_STAFF", "CONCIERGE_TEAM", "CUSTOMER_SUPPORT",
+    )
+    owns = False
+    if user_id and tx.customer_id and str(tx.customer_id) == user_id:
+        owns = True
+    gateway = tx.gateway_response or {}
+    if email and str(gateway.get("customer_email", "")).lower() == email:
+        owns = True
+    if not is_staff and not owns:
+        raise HTTPException(status_code=403, detail="Access denied.")
+
+    return PaymentApiResponse(
+        success=True,
+        data={
+            "id": str(tx.id),
+            "transaction_ref": tx.transaction_ref,
+            "amount": tx.amount,
+            "currency": tx.currency,
+            "status": tx.status.value if hasattr(tx.status, "value") else str(tx.status),
+            "gateway_payment_id": tx.gateway_payment_id,
+        }
+    )
+
+
 @router.post(
     "/razorpay/webhook",
     response_model=PaymentApiResponse,
@@ -145,10 +181,8 @@ async def razorpay_webhook_endpoint(
     from app.providers.razorpay_provider import razorpay_provider
     from app.integrations.whatsapp.service import WhatsAppBookingStateMachine
 
-    # Verify signature if configured
-    if razorpay_provider.is_configured():
-        if not razorpay_provider.verify_webhook_signature(body_bytes, signature):
-            raise HTTPException(status_code=400, detail="Invalid Razorpay webhook signature header.")
+    if not razorpay_provider.verify_webhook_signature(body_bytes, signature):
+        raise HTTPException(status_code=400, detail="Invalid Razorpay webhook signature header.")
 
     try:
         import json

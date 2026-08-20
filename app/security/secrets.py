@@ -28,6 +28,8 @@ def validate_secrets_on_startup():
         ("JWT_PUBLIC_KEY", str(settings.JWT_PUBLIC_KEY)),
         ("JWT_REFRESH_SECRET", str(settings.JWT_REFRESH_SECRET)),
     ])
+    if getattr(settings, "ALLOW_HS256_LEGACY_FALLBACK", False) or getattr(settings, "JWT_ALGORITHM", "RS256").upper() == "HS256":
+        critical_secrets.append(("JWT_SECRET", str(settings.JWT_SECRET)))
 
     missing = []
     for name, value in critical_secrets:

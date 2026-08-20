@@ -15,8 +15,10 @@ from app.providers.base import (
     WhatsAppProvider, MockWhatsAppProvider,
     SMSProvider, MockSMSProvider
 )
+from app.providers.resend_email import ResendEmailProvider
 from app.services.notification_service import NotificationService
 from app.services.timeline_service import TimelineService
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -35,24 +37,18 @@ class CommunicationService:
         provider: Optional[EmailProvider] = None
     ) -> Dict[str, Any]:
         """Dispatches an email notification via configured provider."""
-        provider = provider or MockEmailProvider()
+        if provider is None:
+            if (settings.RESEND_API_KEY or "").strip():
+                provider = ResendEmailProvider()
+            else:
+                logger.warning("Email dispatch using mock provider because Resend is not configured")
+                provider = MockEmailProvider()
         res = provider.send_email(to_email=to_email, subject=subject, body_html=body_html)
-
-        # Store notification log in database
-        if user_id:
-            try:
-                NotificationService.create_notification(
-                    db,
-                    user_id=user_id,
-                    title=subject,
-                    message=f"Email sent to {to_email}",
-                    notification_type="EMAIL",
-                    channel="EMAIL",
-                    data={"email": to_email, "messageId": res.get("message_id")}
-                )
-            except Exception as err:
-                logger.warning(f"Failed to log notification record: {err}")
-
+        status = str(res.get("status") or "").upper()
+        if status in ("DELIVERED", "SENT", "SUCCESS", "OK"):
+            logger.info("Email dispatch accepted", extra={"message_id": res.get("message_id")})
+        else:
+            logger.warning("Email dispatch not delivered", extra={"status": status, "error": res.get("error") or res.get("reason")})
         return res
 
     @classmethod

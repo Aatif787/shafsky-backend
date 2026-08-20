@@ -2,15 +2,22 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 from app.config import settings
 
+def _database_url() -> str:
+    url = (settings.DATABASE_URL or "").replace("postgres://", "postgresql://", 1)
+    if settings.is_production and url and "sslmode=" not in url:
+        sep = "&" if "?" in url else "?"
+        url = f"{url}{sep}sslmode=require"
+    return url
+
 # SQLAlchemy 2.0 Engine Configuration
 engine = create_engine(
-    (settings.DATABASE_URL.replace("postgres://", "postgresql://", 1)
-     if settings.DATABASE_URL else settings.DATABASE_URL),
+    _database_url(),
     pool_size=10,
     max_overflow=20,
     pool_timeout=30,
     pool_recycle=1800,
-    pool_pre_ping=True
+    pool_pre_ping=True,
+    connect_args={"options": "-c statement_timeout=15000"} if _database_url().startswith("postgresql") else {},
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

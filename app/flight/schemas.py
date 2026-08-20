@@ -183,6 +183,7 @@ class FlightValidateRequest(BaseModel):
     trip_type: Optional[str] = Field(default=None, alias="tripType")
     direction: Optional[str] = None
     service_type: Optional[str] = Field(default=None, alias="serviceType")
+    airport_code: Optional[str] = Field(default=None, alias="airportCode")
     mode: Optional[str] = None
 
     @property

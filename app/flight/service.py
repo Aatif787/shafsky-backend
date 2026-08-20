@@ -20,11 +20,17 @@ class FlightIntelligenceService:
         date: str,
         direction: Optional[str] = None,
         origin_code: Optional[str] = None,
-        destination_code: Optional[str] = None
+        destination_code: Optional[str] = None,
+        airport_code: Optional[str] = None,
     ) -> FlightStatusData:
         """Validate flight existence and return parsed metadata."""
         return self._get_provider().validate_flight(
-            flight_num, date, direction, origin_code, destination_code
+            flight_num,
+            date,
+            direction,
+            origin_code,
+            destination_code,
+            airport_code=airport_code,
         )
 
     def get_flight_status(self, flight_num: str) -> FlightStatusData:

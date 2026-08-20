@@ -556,7 +556,8 @@ class WhatsAppBookingStateMachine:
         try:
             val_res = flight_service.validate_flight(
                 flight_num=clean_flight,
-                date=datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                airport_code=conv.selected_airport_iata,
             )
 
             if val_res and getattr(val_res, "is_valid", True):
@@ -916,24 +917,23 @@ class WhatsAppBookingStateMachine:
 
         # 3. Customer & Team Email Notifications
         try:
-            from app.services.notification_templates import NotificationTemplateEngine
-            template_data = {
-                "passengerName": booking.passenger_name,
-                "bookingRef": booking.booking_ref,
-                "flightNum": booking.flight_num,
-                "originCode": booking.origin_code,
-                "destCode": booking.dest_code,
-                "totalAmount": booking.total_amount,
+            from app.services.notification_service import NotificationService
+            NotificationService.notify_booking_created(db, {
+                "booking_ref": booking.booking_ref,
+                "passenger_name": booking.passenger_name,
+                "passenger_email": booking.passenger_email,
+                "passenger_phone": booking.passenger_phone,
+                "flight_num": booking.flight_num,
+                "origin_code": booking.origin_code,
+                "dest_code": booking.dest_code,
+                "airport_code": booking.origin_code or booking.dest_code,
+                "service_type": booking.service_type,
+                "total_amount": booking.total_amount,
                 "currency": "INR",
-                "transactionId": payment_id
-            }
-            email_payload = NotificationTemplateEngine.render_template("BOOKING_CONFIRMATION", template_data)
-            
-            # Dispatch via Resend integration if configured
-            from app.services.operations_engine import OperationsEngine
-            logger.info(f"[Email Notification] Rendered confirmation email for booking {booking.booking_ref}")
+                "status": "PAID",
+            })
         except Exception as email_err:
-            logger.warning(f"[Email Notification] Exception rendering email: {email_err}")
+            logger.warning("Payment confirmation email dispatch failed: %s", type(email_err).__name__)
 
         return True
 

@@ -40,11 +40,8 @@ class DeviceTracking:
     @classmethod
     def get_client_device(cls, request: Request) -> Dict[str, str]:
         user_agent = request.headers.get("User-Agent", "Unknown Client")
-        forwarded_for = request.headers.get("X-Forwarded-For")
-        if forwarded_for:
-            ip = forwarded_for.split(",")[0].strip()
-        else:
-            ip = request.client.host if request.client else "127.0.0.1"
+        from app.security.client_ip import get_client_ip
+        ip = get_client_ip(request)
 
         client_device_id = request.headers.get("X-Device-ID")
         if not client_device_id:

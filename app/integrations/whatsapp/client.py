@@ -5,6 +5,7 @@ Handles outbound messaging, webhook challenge verification, and Graph API reques
 
 import os
 import hmac
+import hashlib
 import logging
 from typing import Dict, Any, Optional, List
 import httpx
@@ -64,6 +65,18 @@ class WhatsAppClient:
 
         logger.warning("[WhatsApp] Meta webhook challenge verification failed.")
         return None
+
+    def verify_webhook_signature(self, payload_bytes: bytes, signature_header: Optional[str]) -> bool:
+        """Verifies Meta X-Hub-Signature-256 using WHATSAPP_APP_SECRET."""
+        self._load_config()
+        app_secret = os.getenv("WHATSAPP_APP_SECRET", "").strip()
+        if not app_secret or not signature_header:
+            return False
+        expected = signature_header.strip()
+        if expected.startswith("sha256="):
+            expected = expected.split("=", 1)[1]
+        computed = hmac.new(app_secret.encode("utf-8"), payload_bytes, hashlib.sha256).hexdigest()
+        return hmac.compare_digest(computed, expected)
 
     def send_message(
         self,

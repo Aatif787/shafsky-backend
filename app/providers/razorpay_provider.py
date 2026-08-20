@@ -22,7 +22,7 @@ class RazorpayProvider:
     def _load_config(self):
         self.key_id = os.getenv("RAZORPAY_KEY_ID", "").strip()
         self.key_secret = os.getenv("RAZORPAY_KEY_SECRET", "").strip()
-        self.webhook_secret = os.getenv("RAZORPAY_WEBHOOK_SECRET", "shafsky_rzp_secret_123").strip()
+        self.webhook_secret = os.getenv("RAZORPAY_WEBHOOK_SECRET", "").strip()
 
     def is_configured(self) -> bool:
         self._load_config()

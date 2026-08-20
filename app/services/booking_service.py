@@ -1,5 +1,6 @@
 import uuid
 import secrets
+import logging
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
@@ -12,6 +13,8 @@ from app.models.schema import Booking, BookingStatus, Profile
 from app.schemas.booking import BookingCreate
 from app.booking.exceptions import ConcurrencyException
 from app.booking.service_validator import ServiceValidator
+
+logger = logging.getLogger("shafsky.booking")
 
 class BookingService:
     @classmethod
@@ -253,6 +256,29 @@ class BookingService:
                 db.add(new_booking)
                 db.commit()
                 db.refresh(new_booking)
+                try:
+                    from app.services.notification_service import NotificationService
+                    meta = new_booking.metadata_json or {}
+                    NotificationService.notify_booking_created(db, {
+                        "booking_ref": new_booking.booking_ref,
+                        "passenger_name": new_booking.passenger_name,
+                        "passenger_email": new_booking.passenger_email,
+                        "passenger_phone": new_booking.passenger_phone,
+                        "flight_num": new_booking.flight_num,
+                        "origin_code": new_booking.origin_code,
+                        "dest_code": new_booking.dest_code,
+                        "airport_code": meta.get("service_airport") or new_booking.origin_code or new_booking.dest_code,
+                        "journey_type": meta.get("journey_type") or new_booking.service_type,
+                        "service_type": new_booking.service_type,
+                        "service_name": meta.get("package") or new_booking.service_type,
+                        "departure_time": new_booking.departure_time.isoformat() if new_booking.departure_time else None,
+                        "terminal": meta.get("terminal"),
+                        "total_amount": new_booking.total_amount,
+                        "currency": new_booking.currency,
+                        "status": new_booking.status.value if hasattr(new_booking.status, "value") else str(new_booking.status),
+                    })
+                except Exception:
+                    logger.exception("Booking persisted but notification dispatch failed for %s", new_booking.booking_ref)
                 return new_booking
             except IntegrityError as exc:
                 db.rollback()

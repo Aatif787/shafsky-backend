@@ -15,6 +15,7 @@ from app.integrations.whatsapp.schemas import (
     WhatsAppApiResponse
 )
 from app.integrations.whatsapp.service import WhatsAppService
+from app.security.dependencies import get_required_super_admin
 
 router = APIRouter(prefix="/api/whatsapp", tags=["Official Meta WhatsApp Cloud API"])
 
@@ -58,12 +59,16 @@ async def handle_whatsapp_webhook_event(
 ):
     """
     Receives and processes incoming WhatsApp webhook events from Meta Cloud API.
-    Safely processes messages and message status updates without trusting arbitrary input structure.
     """
+    body_bytes = await request.body()
+    signature = request.headers.get("X-Hub-Signature-256") or request.headers.get("x-hub-signature-256")
+    if not whatsapp_client.verify_webhook_signature(body_bytes, signature):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid WhatsApp webhook signature.")
+
     try:
-        payload = await request.json()
+        import json
+        payload = json.loads(body_bytes.decode("utf-8"))
     except Exception:
-        # Invalid JSON payload
         return WhatsAppApiResponse(success=True, data={"status": "ignored", "reason": "Invalid JSON body"})
 
     try:
@@ -81,6 +86,7 @@ async def handle_whatsapp_webhook_event(
 )
 def test_send_whatsapp_message(
     payload: WhatsAppTestSendRequest,
+    _admin=Depends(get_required_super_admin),
 ):
     """
     Protected development/internal endpoint to verify message dispatch via Meta Cloud API

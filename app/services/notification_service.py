@@ -1,5 +1,6 @@
 import uuid
 import httpx
+import logging
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
@@ -11,32 +12,84 @@ from app.models.schema import NotificationRecord, NotificationStatus
 from app.schemas.notification import NotificationSendRequest
 from app.services.notification_templates import NotificationTemplateEngine
 
+logger = logging.getLogger("shafsky.notifications")
+
+
 class NotificationService:
     @classmethod
-    async def send_email_resend(cls, recipient_email: str, subject: str, html_content: str) -> Dict[str, Any]:
-        if not recipient_email or not settings.RESEND_API_KEY:
-            return {"status": "BYPASSED", "reason": "No API key or recipient email"}
+    def _from_address(cls) -> str:
+        return (settings.EMAIL_FROM or settings.RESEND_FROM_EMAIL or "").strip()
+
+    @classmethod
+    def _resend_configured(cls) -> bool:
+        return bool((settings.RESEND_API_KEY or "").strip() and cls._from_address())
+
+    @classmethod
+    def admin_notification_recipients(cls) -> List[str]:
+        raw = (settings.ADMIN_NOTIFICATION_EMAILS or "").strip()
+        emails = [e.strip() for e in raw.split(",") if e.strip() and "@" in e]
+        if not emails:
+            fallback = (getattr(settings, "ADMIN_EMAIL", None) or "") 
+            if not fallback:
+                import os
+                fallback = (os.getenv("ADMIN_EMAIL") or "").strip()
+            if fallback and "@" in fallback:
+                emails = [fallback]
+        return emails
+
+    @classmethod
+    def send_email_resend_sync(cls, recipient_email: str, subject: str, html_content: str) -> Dict[str, Any]:
+        recipient = (recipient_email or "").strip()
+        if not recipient:
+            logger.warning("Email skipped: missing recipient")
+            return {"status": "FAILED", "error": "missing_recipient"}
+        if not cls._resend_configured():
+            logger.warning(
+                "Email skipped: Resend is not configured (RESEND_API_KEY and EMAIL_FROM / RESEND_FROM_EMAIL required)"
+            )
+            return {"status": "BYPASSED", "reason": "resend_not_configured"}
 
         url = "https://api.resend.com/emails"
         headers = {
             "Authorization": f"Bearer {settings.RESEND_API_KEY}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
-        body = {
-            "from": getattr(settings, "EMAIL_FROM", "bookings@shafskyaviation.com"),
-            "to": [recipient_email],
+        body: Dict[str, Any] = {
+            "from": cls._from_address(),
+            "to": [recipient],
             "subject": subject,
-            "html": html_content
+            "html": html_content,
         }
+        reply_to = (settings.EMAIL_REPLY_TO or "").strip()
+        if reply_to:
+            body["reply_to"] = reply_to
 
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.post(url, json=body, headers=headers)
-                if resp.status_code in [200, 201]:
-                    return {"status": "DELIVERED", "message_id": resp.json().get("id", "RESEND-OK")}
-                return {"status": "FAILED", "error": f"HTTP {resp.status_code}: {resp.text}"}
-        except Exception as e:
-            return {"status": "FAILED", "error": str(e)}
+            with httpx.Client(timeout=15.0) as client:
+                resp = client.post(url, json=body, headers=headers)
+            if resp.status_code in (200, 201):
+                message_id = ""
+                try:
+                    message_id = str((resp.json() or {}).get("id") or "")
+                except Exception:
+                    message_id = ""
+                logger.info(
+                    "Resend accepted email",
+                    extra={"recipient_domain": recipient.split("@")[-1], "message_id": message_id, "http_status": resp.status_code},
+                )
+                return {"status": "DELIVERED", "message_id": message_id or "RESEND-OK"}
+            logger.error(
+                "Resend rejected email",
+                extra={"http_status": resp.status_code, "provider_error": (resp.text or "")[:400]},
+            )
+            return {"status": "FAILED", "error": f"provider_rejected:{resp.status_code}"}
+        except Exception as exc:
+            logger.error("Resend request failed: %s", type(exc).__name__)
+            return {"status": "FAILED", "error": "request_failed"}
+
+    @classmethod
+    async def send_email_resend(cls, recipient_email: str, subject: str, html_content: str) -> Dict[str, Any]:
+        return cls.send_email_resend_sync(recipient_email, subject, html_content)
 
     @classmethod
     async def send_whatsapp_meta(cls, recipient_phone: str, text_content: str) -> Dict[str, Any]:
@@ -100,6 +153,7 @@ class NotificationService:
             record.updated_at = datetime.now(timezone.utc)
             db.commit()
         except Exception as ex:
+            logger.exception("Notification processing failed for record %s: %s", record_id_str, type(ex).__name__)
             db.rollback()
         finally:
             db.close()
@@ -171,3 +225,146 @@ class NotificationService:
             }
             for r in records
         ]
+
+    @classmethod
+    def _already_notified(cls, db: Session, template_type: str, booking_ref: str, recipient_email: str) -> bool:
+        if not booking_ref or not recipient_email:
+            return False
+        records = list(
+            db.scalars(
+                select(NotificationRecord)
+                .where(
+                    NotificationRecord.template_type == template_type,
+                    NotificationRecord.recipient_email == recipient_email,
+                    NotificationRecord.status.in_([NotificationStatus.DELIVERED, NotificationStatus.SENDING, NotificationStatus.QUEUED]),
+                )
+                .order_by(desc(NotificationRecord.created_at))
+                .limit(20)
+            ).all()
+        )
+        for rec in records:
+            payload = rec.payload or {}
+            ref = str(payload.get("booking_ref") or payload.get("bookingRef") or "")
+            if ref == booking_ref:
+                return True
+        return False
+
+    @classmethod
+    def _record_and_send(
+        cls,
+        db: Session,
+        *,
+        recipient_email: str,
+        template_type: str,
+        payload: Dict[str, Any],
+        booking_ref: str,
+    ) -> Dict[str, Any]:
+        if cls._already_notified(db, template_type, booking_ref, recipient_email):
+            logger.info(
+                "Skipping duplicate notification",
+                extra={"template": template_type, "booking_ref": booking_ref},
+            )
+            return {"status": "SKIPPED", "reason": "duplicate"}
+
+        rendered = NotificationTemplateEngine.render_template(template_type, payload)
+        record = NotificationRecord(
+            id=uuid.uuid4(),
+            recipient_email=recipient_email,
+            recipient_phone=None,
+            template_type=template_type,
+            channel="EMAIL_ONLY",
+            payload=payload,
+            status=NotificationStatus.SENDING,
+            attempts=1,
+            max_attempts=3,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        db.add(record)
+        db.flush()
+
+        result = cls.send_email_resend_sync(recipient_email, rendered["subject"], rendered["html"])
+        if result.get("status") == "DELIVERED":
+            record.status = NotificationStatus.DELIVERED
+            record.delivered_at = datetime.now(timezone.utc)
+            record.message_id = result.get("message_id")
+            record.error_log = None
+        elif result.get("status") == "BYPASSED":
+            record.status = NotificationStatus.BYPASSED
+            record.error_log = result.get("reason") or "resend_not_configured"
+        else:
+            record.status = NotificationStatus.FAILED
+            record.error_log = result.get("error") or "delivery_failed"
+        record.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        return result
+
+    @classmethod
+    def notify_booking_created(cls, db: Session, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        After a booking is persisted, send customer confirmation and admin/team alert.
+        Failures are recorded and never raised to the booking caller.
+        """
+        booking_ref = str(context.get("booking_ref") or context.get("bookingRef") or "")
+        customer_email = str(context.get("passenger_email") or context.get("passengerEmail") or "").strip()
+        payload = {
+            "booking_ref": booking_ref,
+            "bookingRef": booking_ref,
+            "passengerName": context.get("passenger_name") or context.get("passengerName"),
+            "passengerEmail": customer_email,
+            "passengerPhone": context.get("passenger_phone") or context.get("passengerPhone"),
+            "flightNum": context.get("flight_num") or context.get("flightNum"),
+            "originCode": context.get("origin_code") or context.get("originCode"),
+            "destCode": context.get("dest_code") or context.get("destCode"),
+            "airportCode": context.get("airport_code") or context.get("airportCode"),
+            "journeyType": context.get("journey_type") or context.get("journeyType"),
+            "service_type": context.get("service_type") or context.get("serviceType"),
+            "service_name": context.get("service_name") or context.get("package") or context.get("service_type"),
+            "departureTime": context.get("departure_time") or context.get("service_date"),
+            "terminal": context.get("terminal"),
+            "totalAmount": context.get("total_amount") or context.get("totalAmount"),
+            "currency": context.get("currency") or "INR",
+            "status": context.get("status") or "PENDING",
+        }
+
+        summary: Dict[str, Any] = {"booking_ref": booking_ref, "customer": None, "admin": []}
+        logger.info("Booking notification requested", extra={"booking_ref": booking_ref})
+
+        try:
+            if customer_email:
+                summary["customer"] = cls._record_and_send(
+                    db,
+                    recipient_email=customer_email,
+                    template_type="BOOKING_CONFIRMATION",
+                    payload=payload,
+                    booking_ref=booking_ref,
+                )
+            else:
+                logger.warning("Customer confirmation skipped: missing email", extra={"booking_ref": booking_ref})
+                summary["customer"] = {"status": "FAILED", "error": "missing_recipient"}
+
+            for admin_email in cls.admin_notification_recipients():
+                summary["admin"].append(
+                    {
+                        "recipient_domain": admin_email.split("@")[-1],
+                        **cls._record_and_send(
+                            db,
+                            recipient_email=admin_email,
+                            template_type="ADMIN_NEW_BOOKING",
+                            payload=payload,
+                            booking_ref=booking_ref,
+                        ),
+                    }
+                )
+            if not summary["admin"]:
+                logger.warning(
+                    "Admin notification skipped: set ADMIN_NOTIFICATION_EMAILS",
+                    extra={"booking_ref": booking_ref},
+                )
+        except Exception as exc:
+            logger.exception("Booking notification failed for %s: %s", booking_ref, type(exc).__name__)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        return summary

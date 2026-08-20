@@ -1,11 +1,11 @@
 from typing import Dict, Any, Optional, List
-from fastapi import APIRouter, Depends, BackgroundTasks, Query
+from fastapi import APIRouter, Depends, BackgroundTasks, Query, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db, SessionLocal
 from app.schemas.notification import NotificationSendRequest, NotificationApiResponse
 from app.services.notification_service import NotificationService
-from app.security.dependencies import get_required_admin
+from app.security.dependencies import get_required_admin, get_required_user
 
 router = APIRouter(prefix="/api/notifications", tags=["Communication & Automation Hub"])
 
@@ -13,7 +13,8 @@ router = APIRouter(prefix="/api/notifications", tags=["Communication & Automatio
 async def send_notification(
     payload: NotificationSendRequest,
     background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _admin_context: Dict[str, Any] = Depends(get_required_admin)
 ):
     record = NotificationService.enqueue_notification(
         db,
@@ -84,16 +85,10 @@ from app.services.auth_service import AuthService
 async def list_user_notifications(
     authorization: Optional[str] = Header(None),
     limit: int = Query(50, le=200),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user_context: Dict[str, Any] = Depends(get_required_user),
 ):
-    user_id_str = None
-    if authorization and authorization.startswith("Bearer "):
-        token = authorization.split(" ")[1]
-        try:
-            decoded = AuthService.decode_access_token(token)
-            user_id_str = decoded.get("user_id")
-        except Exception:
-            pass
+    user_id_str = user_context.get("user_id") or user_context.get("userId")
 
     try:
         u_uuid = uuid.UUID(user_id_str) if user_id_str else None
@@ -108,11 +103,7 @@ async def list_user_notifications(
             .limit(limit)
         ).all())
     else:
-        records = list(db.scalars(
-            select(UserNotification)
-            .order_by(UserNotification.created_at.desc())
-            .limit(limit)
-        ).all())
+        records = []
 
     data = [
         {
@@ -134,7 +125,8 @@ async def list_user_notifications(
 @router.post("/{notification_id}/read", response_model=NotificationApiResponse)
 async def mark_notification_read(
     notification_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user_context: Dict[str, Any] = Depends(get_required_user),
 ):
     try:
         n_uuid = uuid.UUID(notification_id)
@@ -144,6 +136,9 @@ async def mark_notification_read(
     n = db.scalar(select(UserNotification).where(UserNotification.id == n_uuid))
     if not n:
         return NotificationApiResponse(success=False, data={"error": "Notification not found."})
+    user_id_str = str(user_context.get("user_id") or user_context.get("userId") or "")
+    if user_id_str and str(n.user_id) != user_id_str:
+        raise HTTPException(status_code=403, detail="Access denied.")
 
     n.read_at = datetime.now(timezone.utc)
     db.commit()
@@ -156,36 +151,23 @@ async def mark_notification_read(
 
 @router.post("/read-all", response_model=NotificationApiResponse)
 async def mark_all_notifications_read(
-    authorization: Optional[str] = Header(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user_context: Dict[str, Any] = Depends(get_required_user),
 ):
-    user_id_str = None
-    if authorization and authorization.startswith("Bearer "):
-        token = authorization.split(" ")[1]
-        try:
-            decoded = AuthService.decode_access_token(token)
-            user_id_str = decoded.get("user_id")
-        except Exception:
-            pass
-
+    user_id_str = user_context.get("user_id") or user_context.get("userId")
     try:
         u_uuid = uuid.UUID(user_id_str) if user_id_str else None
     except Exception:
         u_uuid = None
 
     now = datetime.now(timezone.utc)
-    if u_uuid:
-        db.execute(
-            update(UserNotification)
-            .where(UserNotification.user_id == u_uuid, UserNotification.read_at.is_(None))
-            .values(read_at=now)
-        )
-    else:
-        db.execute(
-            update(UserNotification)
-            .where(UserNotification.read_at.is_(None))
-            .values(read_at=now)
-        )
+    if not u_uuid:
+        raise HTTPException(status_code=401, detail="Missing user identity.")
+    db.execute(
+        update(UserNotification)
+        .where(UserNotification.user_id == u_uuid, UserNotification.read_at.is_(None))
+        .values(read_at=now)
+    )
     db.commit()
 
     return NotificationApiResponse(
@@ -197,13 +179,20 @@ async def mark_all_notifications_read(
 @router.delete("/{notification_id}", response_model=NotificationApiResponse)
 async def delete_notification(
     notification_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user_context: Dict[str, Any] = Depends(get_required_user),
 ):
     try:
         n_uuid = uuid.UUID(notification_id)
     except Exception:
         return NotificationApiResponse(success=False, data={"error": "Invalid notification ID format."})
 
+    n = db.scalar(select(UserNotification).where(UserNotification.id == n_uuid))
+    if not n:
+        return NotificationApiResponse(success=False, data={"error": "Notification not found."})
+    user_id_str = str(user_context.get("user_id") or user_context.get("userId") or "")
+    if user_id_str and str(n.user_id) != user_id_str:
+        raise HTTPException(status_code=403, detail="Access denied.")
     db.execute(delete(UserNotification).where(UserNotification.id == n_uuid))
     db.commit()
 
