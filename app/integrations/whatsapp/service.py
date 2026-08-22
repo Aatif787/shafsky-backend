@@ -195,19 +195,19 @@ class WhatsAppBookingStateMachine:
         CANCEL_COMMANDS = {"cancel", "stop", "abort"}
         if text_lower in CANCEL_COMMANDS or input_id == "btn_cancel":
             cls._transition_state(db, conv, "CANCELLED")
-            msg = "Your booking process has been cancelled. Type *Hi* anytime to start a new booking with Shafsky Aviation."
+            msg = "🛎️ *Shafsky Aviation Concierge*\n\nYour booking process has been cancelled.\n\nPlease type *Hi* anytime to begin a new reservation."
             whatsapp_client.send_text_message(conv.phone_number, msg)
             return {"status": "cancelled", "state": conv.current_state}
 
         HELP_COMMANDS = {"help", "support", "info"}
         if text_lower in HELP_COMMANDS:
             help_msg = (
-                "ℹ️ *Shafsky Aviation Assistance*\n\n"
-                "You are using our automated booking system.\n"
+                "🛎️ *Shafsky Aviation Assistance*\n\n"
+                "You are currently using our automated concierge system.\n"
                 "• Type *Hi* to restart your booking.\n"
                 "• Type *BACK* to return to the previous step.\n"
                 "• Type *CANCEL* to cancel your current booking.\n\n"
-                "For direct representative support, call: +91-9599087959."
+                "For direct assistance from a Premium Representative, please call: *+91-9599087959*."
             )
             whatsapp_client.send_text_message(conv.phone_number, help_msg)
             return {"status": "help_sent", "state": conv.current_state}
@@ -383,8 +383,8 @@ class WhatsAppBookingStateMachine:
 
         body_text = (
             f"{prefix_notice}"
-            "Welcome to Shafsky Aviation ✈️\n\n"
-            "How can we assist you today?\n\n"
+            "✨ *Welcome to Shafsky Aviation*\n\n"
+            "How may our concierge assist you today?\n\n"
             "1️⃣ Airport Services\n"
             "2️⃣ Travel Services\n"
             "3️⃣ Private Charter\n"
@@ -411,8 +411,8 @@ class WhatsAppBookingStateMachine:
         if not res.get("success"):
             fallback_text = (
                 f"{prefix_notice}"
-                "Welcome to Shafsky Aviation ✈️\n\n"
-                "How can we assist you today?\n\n"
+                "✨ *Welcome to Shafsky Aviation*\n\n"
+                "How may our concierge assist you today?\n\n"
                 "1️⃣ Airport Services\n"
                 "2️⃣ Travel Services\n"
                 "3️⃣ Private Charter\n"
@@ -448,7 +448,7 @@ class WhatsAppBookingStateMachine:
         if not matched_category:
             whatsapp_client.send_text_message(
                 conv.phone_number,
-                "Please select a valid option (1-4):\n1️⃣ Airport Services\n2️⃣ Travel Services\n3️⃣ Private Charter\n4️⃣ Hotel & Transportation"
+                "Please select a valid option (1-4):\n\n1️⃣ Airport Services\n2️⃣ Travel Services\n3️⃣ Private Charter\n4️⃣ Hotel & Transportation"
             )
             return {"status": "invalid_category"}
 

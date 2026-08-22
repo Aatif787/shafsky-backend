@@ -49,7 +49,7 @@ class NotificationTemplateEngine:
             </ul>
             <p>Our 24/7 command desk: {support}</p>
             """
-            whatsapp = f"✈️ *Shafsky Aviation*: Booking confirmed. Ref *{ref}*. {airport} / {flight}. {date_str}."
+            whatsapp = f"✈️ *Shafsky Aviation VIP Desk*\n\nDear *{name}*,\n\nWe are delighted to confirm your VIP service booking.\n\n*Reference:* {ref}\n*Airport:* {airport}\n*Flight:* {flight}\n*Date:* {date_str}\n\nOur 24/7 command desk is at your disposal: {support}."
 
         elif t_type == "ADMIN_NEW_BOOKING":
             subject = f"[Shafsky Ops] New booking {ref} — {airport}"
@@ -70,7 +70,7 @@ class NotificationTemplateEngine:
                 <li><strong>Status:</strong> {status}</li>
             </ul>
             """
-            whatsapp = f"🚨 New booking *{ref}* — {name} — {airport} — {flight}"
+            whatsapp = f"🚨 *Operations Alert*\n\nNew booking received:\n*Ref:* {ref}\n*Guest:* {name}\n*Airport:* {airport}\n*Flight:* {flight}"
 
         elif t_type == "BOOKING_CANCELLED":
             reason = data.get("reason", "Cancelled upon request")
@@ -81,7 +81,7 @@ class NotificationTemplateEngine:
             <p>Your booking <strong>{ref}</strong> for flight {flight} has been cancelled.</p>
             <p><strong>Reason:</strong> {reason}</p>
             """
-            whatsapp = f"⚠️ *Shafsky Aviation*: Booking *{ref}* for flight {flight} has been cancelled. Reason: {reason}."
+            whatsapp = f"🛎️ *Shafsky Aviation Update*\n\nDear *{name}*,\n\nYour booking (*{ref}*) for flight {flight} has been cancelled.\n*Reason:* {reason}\n\nWe look forward to serving you in the future."
 
         elif t_type == "BOOKING_UPDATED":
             status = data.get("status", "UPDATED")
@@ -91,7 +91,7 @@ class NotificationTemplateEngine:
             <p>Dear <strong>{name}</strong>,</p>
             <p>Your booking <strong>{ref}</strong> status is now: <strong>{status}</strong>.</p>
             """
-            whatsapp = f"ℹ️ *Shafsky Aviation*: Status update for booking *{ref}*: Current status is *{status}*."
+            whatsapp = f"✨ *Shafsky Aviation Update*\n\nDear *{name}*,\n\nYour booking (*{ref}*) status has been updated to: *{status}*.\n\nPlease contact your concierge if you have any questions."
 
         elif t_type == "PAYMENT_SUCCESS":
             txn_id = data.get("transactionId", "TXN-OK")
@@ -101,7 +101,7 @@ class NotificationTemplateEngine:
             <p>Dear <strong>{name}</strong>,</p>
             <p>Payment of <strong>{currency} {amount}</strong> received. Transaction ID: <code>{txn_id}</code>.</p>
             """
-            whatsapp = f"💳 *Shafsky Aviation*: Payment of {currency} {amount} received for booking *{ref}*. Transaction: {txn_id}."
+            whatsapp = f"💎 *Shafsky Aviation Billing*\n\nDear *{name}*,\n\nWe have successfully received your payment of *{currency} {amount}* for booking *{ref}*.\n\n*Transaction ID:* {txn_id}"
 
         elif t_type == "PAYMENT_FAILED":
             err = data.get("error", "Transaction declined")
@@ -111,7 +111,7 @@ class NotificationTemplateEngine:
             <p>Dear <strong>{name}</strong>,</p>
             <p>We could not process payment for booking <strong>{ref}</strong>. Error: {err}</p>
             """
-            whatsapp = f"❌ *Shafsky Aviation*: Payment failed for booking *{ref}*. Error: {err}. Please retry your payment."
+            whatsapp = f"⚠️ *Shafsky Aviation Billing*\n\nDear *{name}*,\n\nWe encountered an issue processing the payment for booking *{ref}*.\n*Error:* {err}\n\nPlease kindly retry your payment or contact support."
 
         elif t_type == "REMINDER":
             subject = f"Shafsky Aviation - Pre-Flight Service Reminder ({ref})"
@@ -120,7 +120,7 @@ class NotificationTemplateEngine:
             <p>Dear <strong>{name}</strong>,</p>
             <p>This is a reminder for your upcoming flight <strong>{flight}</strong> departing at {date_str}.</p>
             """
-            whatsapp = f"⏰ *Shafsky Aviation*: Reminder for flight *{flight}* ({origin} -> {dest}) departing at {date_str}. Ref: *{ref}*."
+            whatsapp = f"⏰ *Shafsky Aviation Concierge*\n\nDear *{name}*,\n\nThis is a gentle reminder for your upcoming flight *{flight}* ({origin} -> {dest}) departing at *{date_str}*.\n\n*Reference:* {ref}\n\nOur team is preparing for your arrival."
 
         elif t_type == "FLIGHT_DELAY":
             new_time = data.get("newDepartureTime", "Updated Time")
@@ -130,7 +130,7 @@ class NotificationTemplateEngine:
             <p>Dear <strong>{name}</strong>,</p>
             <p>Flight <strong>{flight}</strong> schedule has changed. New Estimated Departure: <strong>{new_time}</strong>.</p>
             """
-            whatsapp = f"⚠️ *Shafsky Aviation*: Flight *{flight}* is delayed. New departure time: *{new_time}*."
+            whatsapp = f"⚠️ *Shafsky Aviation Flight Alert*\n\nDear *{name}*,\n\nPlease be advised that flight *{flight}* has been delayed.\n*New Departure Time:* {new_time}\n\nOur concierge team will adjust your services accordingly."
 
         elif t_type == "FLIGHT_GATE_CHANGED":
             gate = data.get("gate", "TBA")
@@ -141,7 +141,7 @@ class NotificationTemplateEngine:
             <p>Dear <strong>{name}</strong>,</p>
             <p>Flight <strong>{flight}</strong> departure gate is now: <strong>Gate {gate} (Terminal {terminal})</strong>.</p>
             """
-            whatsapp = f"🚪 *Shafsky Aviation*: Gate change for flight *{flight}*: Gate *{gate}*, Terminal *{terminal}*."
+            whatsapp = f"🚪 *Shafsky Aviation Gate Update*\n\nDear *{name}*,\n\nThe departure gate for flight *{flight}* has been updated.\n*New Gate:* {gate} (Terminal {terminal})\n\nYour representative will guide you accordingly."
 
         elif t_type == "VIP_WELCOME":
             agent_name = data.get("agentName", "Airport Representative")
@@ -153,12 +153,12 @@ class NotificationTemplateEngine:
             <p>Your dedicated VIP Airport Representative <strong>{agent_name}</strong> is awaiting your arrival.</p>
             <p>Agent Contact: <strong>{agent_phone}</strong></p>
             """
-            whatsapp = f"🌟 *Shafsky VIP*: Welcome to {origin}! Your airport representative *{agent_name}* is ready. Call: {agent_phone}."
+            whatsapp = f"🌟 *Shafsky VIP Welcome*\n\nDear *{name}*,\n\nWelcome to *{origin}*!\n\nYour dedicated VIP Airport Representative, *{agent_name}*, is awaiting your arrival.\n*Agent Contact:* {agent_phone}"
 
         else:
             subject = f"Shafsky Aviation Notification ({ref})"
             html = f"<p>Dear <strong>{name}</strong>,</p><p>Notification regarding your booking <strong>{ref}</strong>.</p>"
-            whatsapp = f"ℹ️ *Shafsky Aviation*: Update for booking *{ref}*."
+            whatsapp = f"✨ *Shafsky Aviation Update*\n\nDear *{name}*,\n\nThere is an update regarding your booking *{ref}*.\n\nPlease contact our desk for details."
 
         return {
             "subject": subject,
