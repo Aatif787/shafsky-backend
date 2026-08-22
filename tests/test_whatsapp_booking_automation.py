@@ -462,7 +462,7 @@ def test_scenario_21_whatsapp_flight_pure_local_validation_valid_formats(mock_bu
 
 # 16. WhatsApp Flight Local Validation - Invalid Formats Rejected
 @pytest.mark.parametrize("invalid_input", [
-    ("hello"),
+    ("invalid_code_123"),
     ("12345"),
     ("ABC"),
     (""),
@@ -687,3 +687,92 @@ def test_scenario_30_hotel_transportation_flow(mock_buttons):
         assert mock_buttons.called
     finally:
         db.close()
+
+
+# 25. Explicit Global Restart Verification When in FLIGHT_INPUT State ("Hi" MUST ALWAYS WIN)
+@pytest.mark.parametrize("restart_word", ["hi", "Hi", "HI", "hello", "Hello", "HEY", "hey", "START", "start", "menu", "Menu", "restart", "Restart", "main menu", "0"])
+@patch("app.integrations.whatsapp.client.WhatsAppClient.send_interactive_list")
+def test_scenario_31_global_restart_from_flight_input_state(mock_list, restart_word):
+    """
+    PRIORITY BUG TEST:
+    When a customer is in FLIGHT_INPUT state and sends 'Hi' or any restart command,
+    the bot MUST NOT respond with 'Please enter a valid flight number'.
+    Instead, it MUST reset the session and present the Main Menu immediately.
+    """
+    mock_list.return_value = {"success": True, "message_id": "wamid.menu_01"}
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        phone = f"91{uuid.uuid4().int % 10**10:010d}"
+        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
+        conv.selected_category = "Airport Services"
+        conv.selected_airport_iata = "DEL"
+        conv.selected_airport_name = "Indira Gandhi International Airport"
+        conv.selected_service_name = "Silver Meet & Assist"
+        conv.requires_airport = True
+        conv.requires_flight = True
+        conv.current_state = "FLIGHT_INPUT"
+        db.commit()
+
+        # Send restart command
+        res = WhatsAppBookingStateMachine.process_incoming_event(db, phone, restart_word)
+        db.refresh(conv)
+
+        # Must be in CATEGORY_SELECTION with all temporary booking state cleared
+        assert conv.current_state == "CATEGORY_SELECTION"
+        assert conv.flight_num is None
+        assert conv.selected_airport_iata is None
+        assert conv.selected_service_name is None
+        assert mock_list.called
+        args, kwargs = mock_list.call_args
+        assert "Welcome to Shafsky Aviation ✈️" in kwargs.get("body_text", "")
+        assert "1️⃣ Airport Services" in kwargs.get("body_text", "")
+    finally:
+        db.close()
+
+
+# 26. Global Restart From Every Other Active State
+@pytest.mark.parametrize("active_state", [
+    "JOURNEY_TYPE_SELECTION",
+    "AIRPORT_SELECTION",
+    "AIRPORT_CONFIRMATION",
+    "SERVICE_SELECTION",
+    "HOTEL_TRANSPORT_SUBMENU",
+    "CHARTER_ORIGIN",
+    "CHARTER_DESTINATION",
+    "TRANSPORT_PICKUP",
+    "TRANSPORT_DROPOFF",
+    "HOTEL_CITY",
+    "HOTEL_NIGHTS",
+    "FLIGHT_CONFIRMATION",
+    "DATE_SELECTION",
+    "PASSENGER_COUNT",
+    "CUSTOMER_NAME",
+    "CUSTOMER_EMAIL",
+    "CUSTOMER_PHONE",
+    "ADDITIONAL_REQUIREMENTS",
+    "BOOKING_REVIEW",
+])
+@patch("app.integrations.whatsapp.client.WhatsAppClient.send_interactive_list")
+def test_scenario_32_global_restart_from_any_state(mock_list, active_state):
+    mock_list.return_value = {"success": True, "message_id": "wamid.menu_02"}
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        phone = f"91{uuid.uuid4().int % 10**10:010d}"
+        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
+        conv.current_state = active_state
+        conv.selected_airport_iata = "DEL"
+        conv.flight_num = "AI2424"
+        db.commit()
+
+        res = WhatsAppBookingStateMachine.process_incoming_event(db, phone, "hi")
+        db.refresh(conv)
+
+        assert conv.current_state == "CATEGORY_SELECTION"
+        assert conv.flight_num is None
+        assert conv.selected_airport_iata is None
+        assert mock_list.called
+    finally:
+        db.close()
+

@@ -39,6 +39,16 @@ class WhatsAppBookingStateMachine:
     """
 
     @classmethod
+    def _transition_state(cls, db: Session, conv: WhatsAppConversation, new_state: str) -> None:
+        """Helper to transition conversation state with standard audit logging."""
+        old_state = conv.current_state
+        if old_state != new_state:
+            logger.info(f"[WhatsApp Session] State changed: {old_state} -> {new_state} for {conv.phone_number}")
+            conv.current_state = new_state
+            conv.updated_at = datetime.now(timezone.utc)
+            db.commit()
+
+    @classmethod
     def _reset_conversation_fields(cls, conv: WhatsAppConversation) -> WhatsAppConversation:
         """Resets all booking-specific fields for a new session."""
         conv.selected_category = None
@@ -70,7 +80,7 @@ class WhatsAppBookingStateMachine:
     def get_or_create_conversation(cls, db: Session, phone_number: str) -> Tuple[WhatsAppConversation, bool]:
         """
         Retrieves active conversation session or creates a new one.
-        Enforces 30-minute session inactivity expiry.
+        Enforces configurable session inactivity expiry (default 30 minutes).
         Returns: (conversation_object, is_session_expired_flag)
         """
         clean_phone = "".join(filter(str.isdigit, str(phone_number)))
@@ -79,6 +89,8 @@ class WhatsAppBookingStateMachine:
 
         is_expired = False
         now_utc = datetime.now(timezone.utc)
+        timeout_minutes = int(os.getenv("WHATSAPP_SESSION_TIMEOUT_MINUTES", "30"))
+        timeout_seconds = timeout_minutes * 60
 
         if not conv:
             conv = WhatsAppConversation(
@@ -92,22 +104,27 @@ class WhatsAppBookingStateMachine:
             db.add(conv)
             db.commit()
             db.refresh(conv)
+            logger.info(f"[WhatsApp Session] New session for {clean_phone}")
         else:
-            # Check 30-minute inactivity expiry for non-terminal active sessions
+            # Check inactivity expiry for non-terminal active sessions
             last_act = conv.updated_at or conv.created_at
             if last_act:
                 # Normalize timezone if naive
                 if last_act.tzinfo is None:
                     last_act = last_act.replace(tzinfo=timezone.utc)
                 inactivity_seconds = (now_utc - last_act).total_seconds()
-                if inactivity_seconds > 1800 and conv.current_state not in ["START", "CANCELLED", "BOOKING_CONFIRMED"]:
-                    logger.info(f"[WhatsApp Session] Session for {clean_phone} expired after {inactivity_seconds:.0f}s inactivity.")
+                if inactivity_seconds > timeout_seconds and conv.current_state not in ["START", "CANCELLED", "BOOKING_CONFIRMED"]:
+                    logger.info(f"[WhatsApp Session] Session expired for {clean_phone} after {inactivity_seconds:.0f}s inactivity.")
                     conv = cls._reset_conversation_fields(conv)
                     conv.current_state = "START"
                     conv.updated_at = now_utc
                     db.commit()
                     db.refresh(conv)
                     is_expired = True
+                else:
+                    logger.info(f"[WhatsApp Session] Existing session for {clean_phone} (state: {conv.current_state})")
+            else:
+                logger.info(f"[WhatsApp Session] Existing session for {clean_phone} (state: {conv.current_state})")
 
         return conv, is_expired
 
@@ -125,6 +142,12 @@ class WhatsAppBookingStateMachine:
         """
         Main entry point for processing customer inputs against current conversation state.
         Strictly enforces ONE MESSAGE = ONE STATE TRANSITION = ONE RESPONSE.
+        Checked in strict order:
+        1. Log inbound message
+        2. Session Expiration Handling
+        3. Global Restart Commands ("hi", "hello", "hey", "start", "menu", "restart", "main menu", "0")
+        4. Global Interrupts (Cancel, Help, Back)
+        5. State-specific Handlers
         """
         conv, session_expired = cls.get_or_create_conversation(db, from_phone)
 
@@ -143,28 +166,41 @@ class WhatsAppBookingStateMachine:
         conv.updated_at = datetime.now(timezone.utc)
         db.commit()
 
-        text_upper = (user_input or "").strip().upper()
+        text_clean = (user_input or "").strip()
+        text_lower = text_clean.lower()
+        text_upper = text_clean.upper()
 
         # Handle expired session notification
         if session_expired:
+            logger.info(f"[WhatsApp Session] Expired session restarted for {conv.phone_number}")
+            conv = cls._reset_conversation_fields(conv)
+            cls._transition_state(db, conv, "CATEGORY_SELECTION")
             return cls._send_category_menu(db, conv, prefix_notice="Your previous session has expired. Let's start again.\n\n")
 
-        # ── INTERRUPT COMMANDS (CANCEL, RESTART, BACK, HELP) ──
+        # ── 1. GLOBAL RESTART COMMANDS (HI, HELLO, HEY, START, MENU, RESTART, MAIN MENU, 0) ──
+        # Checked BEFORE any state-specific handlers. "Hi" MUST ALWAYS WIN.
+        RESTART_COMMANDS = {
+            "hi", "hello", "hey", "start", "menu", "restart", "main menu", "0",
+            "reset", "start over"
+        }
+        RESTART_BUTTON_IDS = {"btn_restart", "btn_menu", "btn_main_menu"}
 
-        if text_upper in ["CANCEL", "STOP", "ABORT"] or input_id == "btn_cancel":
-            conv.current_state = "CANCELLED"
-            db.commit()
+        if text_lower in RESTART_COMMANDS or input_id in RESTART_BUTTON_IDS:
+            logger.info(f"[WhatsApp Session] Restart command detected for {conv.phone_number} (input: '{user_input}')")
+            conv = cls._reset_conversation_fields(conv)
+            cls._transition_state(db, conv, "CATEGORY_SELECTION")
+            return cls._send_category_menu(db, conv)
+
+        # ── 2. GLOBAL INTERRUPT COMMANDS (CANCEL, HELP, BACK) ──
+        CANCEL_COMMANDS = {"cancel", "stop", "abort"}
+        if text_lower in CANCEL_COMMANDS or input_id == "btn_cancel":
+            cls._transition_state(db, conv, "CANCELLED")
             msg = "Your booking process has been cancelled. Type *Hi* anytime to start a new booking with Shafsky Aviation."
             whatsapp_client.send_text_message(conv.phone_number, msg)
             return {"status": "cancelled", "state": conv.current_state}
 
-        if text_upper in ["RESTART", "START OVER", "RESET"] or input_id == "btn_restart":
-            conv = cls._reset_conversation_fields(conv)
-            conv.current_state = "START"
-            db.commit()
-            return cls._send_category_menu(db, conv)
-
-        if text_upper in ["HELP", "SUPPORT", "INFO"]:
+        HELP_COMMANDS = {"help", "support", "info"}
+        if text_lower in HELP_COMMANDS:
             help_msg = (
                 "ℹ️ *Shafsky Aviation Assistance*\n\n"
                 "You are using our automated booking system.\n"
@@ -176,11 +212,11 @@ class WhatsAppBookingStateMachine:
             whatsapp_client.send_text_message(conv.phone_number, help_msg)
             return {"status": "help_sent", "state": conv.current_state}
 
-        if text_upper == "BACK" or input_id == "btn_back":
+        if text_lower == "back" or input_id == "btn_back":
             cls._handle_back_action(db, conv)
             return {"status": "back", "state": conv.current_state}
 
-        # ── ROUTE BY STATE ──
+        # ── 3. ROUTE BY STATE ──
         state = conv.current_state
 
         if state in ["START", "CANCELLED", "BOOKING_CONFIRMED"]:
@@ -261,60 +297,48 @@ class WhatsAppBookingStateMachine:
         elif curr == "JOURNEY_TYPE_SELECTION":
             cls._send_category_menu(db, conv)
         elif curr == "AIRPORT_SELECTION":
-            conv.current_state = "JOURNEY_TYPE_SELECTION"
-            db.commit()
+            cls._transition_state(db, conv, "JOURNEY_TYPE_SELECTION")
             cls._prompt_journey_type(conv)
         elif curr == "AIRPORT_CONFIRMATION":
             conv.selected_airport_iata = None
             conv.selected_airport_name = None
-            conv.current_state = "AIRPORT_SELECTION"
-            db.commit()
+            cls._transition_state(db, conv, "AIRPORT_SELECTION")
             whatsapp_client.send_text_message(conv.phone_number, "Please enter your Airport Name, City, or IATA Code (e.g., Delhi, DEL):")
         elif curr == "SERVICE_SELECTION":
             if conv.requires_airport:
-                conv.current_state = "AIRPORT_SELECTION"
-                db.commit()
+                cls._transition_state(db, conv, "AIRPORT_SELECTION")
                 whatsapp_client.send_text_message(conv.phone_number, "Please enter your Airport Name, City, or IATA Code (e.g., Delhi, DEL):")
             else:
                 cls._send_category_menu(db, conv)
         elif curr in ["FLIGHT_INPUT", "FLIGHT_CONFIRMATION"]:
             conv.flight_num = None
             conv.flight_details_json = None
-            conv.current_state = "SERVICE_SELECTION"
-            db.commit()
+            cls._transition_state(db, conv, "SERVICE_SELECTION")
             cls._send_service_menu(db, conv, conv.selected_category or "Airport Services")
         elif curr == "DATE_SELECTION":
             if conv.requires_flight:
-                conv.current_state = "FLIGHT_INPUT"
-                db.commit()
+                cls._transition_state(db, conv, "FLIGHT_INPUT")
                 whatsapp_client.send_text_message(conv.phone_number, "Please enter your Flight Number (e.g., *EK501*, *AI2424*):")
             else:
-                conv.current_state = "SERVICE_SELECTION"
-                db.commit()
+                cls._transition_state(db, conv, "SERVICE_SELECTION")
                 cls._send_service_menu(db, conv, conv.selected_category or "Airport Services")
         elif curr == "PASSENGER_COUNT":
-            conv.current_state = "DATE_SELECTION"
-            db.commit()
+            cls._transition_state(db, conv, "DATE_SELECTION")
             whatsapp_client.send_text_message(conv.phone_number, "Please enter your Date of Travel (DD/MM/YYYY or YYYY-MM-DD):")
         elif curr == "CUSTOMER_NAME":
-            conv.current_state = "PASSENGER_COUNT"
-            db.commit()
+            cls._transition_state(db, conv, "PASSENGER_COUNT")
             whatsapp_client.send_text_message(conv.phone_number, "How many passengers will be travelling? (Enter a number, e.g., 2):")
         elif curr == "CUSTOMER_EMAIL":
-            conv.current_state = "CUSTOMER_NAME"
-            db.commit()
+            cls._transition_state(db, conv, "CUSTOMER_NAME")
             whatsapp_client.send_text_message(conv.phone_number, "May I have your full name?")
         elif curr == "CUSTOMER_PHONE":
-            conv.current_state = "CUSTOMER_EMAIL"
-            db.commit()
+            cls._transition_state(db, conv, "CUSTOMER_EMAIL")
             whatsapp_client.send_text_message(conv.phone_number, "Please provide your email address for booking confirmation:")
         elif curr == "ADDITIONAL_REQUIREMENTS":
-            conv.current_state = "CUSTOMER_PHONE"
-            db.commit()
+            cls._transition_state(db, conv, "CUSTOMER_PHONE")
             whatsapp_client.send_text_message(conv.phone_number, "Please provide your contact phone number (or type 'Same'):")
         elif curr == "BOOKING_REVIEW":
-            conv.current_state = "ADDITIONAL_REQUIREMENTS"
-            db.commit()
+            cls._transition_state(db, conv, "ADDITIONAL_REQUIREMENTS")
             whatsapp_client.send_text_message(conv.phone_number, "Do you have any special requirements or notes? (Type *None* if no special requests):")
         else:
             cls._send_category_menu(db, conv)
@@ -325,15 +349,13 @@ class WhatsAppBookingStateMachine:
     def _state_start(cls, db: Session, conv: WhatsAppConversation, user_input: str) -> Dict[str, Any]:
         """Greeting and display of final 4-option main menu."""
         conv = cls._reset_conversation_fields(conv)
-        conv.current_state = "CATEGORY_SELECTION"
-        db.commit()
+        cls._transition_state(db, conv, "CATEGORY_SELECTION")
         return cls._send_category_menu(db, conv)
 
     @classmethod
     def _send_category_menu(cls, db: Session, conv: WhatsAppConversation, prefix_notice: str = "") -> Dict[str, Any]:
         """Sends the exact 4-option main menu."""
-        conv.current_state = "CATEGORY_SELECTION"
-        db.commit()
+        cls._transition_state(db, conv, "CATEGORY_SELECTION")
 
         body_text = (
             f"{prefix_notice}"
@@ -413,27 +435,23 @@ class WhatsAppBookingStateMachine:
         if matched_category == "Airport Services":
             conv.requires_airport = True
             conv.requires_flight = True
-            conv.current_state = "JOURNEY_TYPE_SELECTION"
-            db.commit()
+            cls._transition_state(db, conv, "JOURNEY_TYPE_SELECTION")
             return cls._prompt_journey_type(conv)
 
         elif matched_category == "Travel Services":
             conv.requires_airport = False
             conv.requires_flight = False
-            conv.current_state = "SERVICE_SELECTION"
-            db.commit()
+            cls._transition_state(db, conv, "SERVICE_SELECTION")
             return cls._send_service_menu(db, conv, "Travel Services")
 
         elif matched_category == "Private Charter":
             conv.requires_airport = False
             conv.requires_flight = False
-            conv.current_state = "SERVICE_SELECTION"
-            db.commit()
+            cls._transition_state(db, conv, "SERVICE_SELECTION")
             return cls._send_service_menu(db, conv, "Private Charter")
 
         elif matched_category == "Hotel & Transportation":
-            conv.current_state = "HOTEL_TRANSPORT_SUBMENU"
-            db.commit()
+            cls._transition_state(db, conv, "HOTEL_TRANSPORT_SUBMENU")
             return cls._prompt_hotel_transport_submenu(conv)
 
         return {"status": "category_selected"}
@@ -489,8 +507,7 @@ class WhatsAppBookingStateMachine:
 
         # Store journey type in flight_details_json metadata
         conv.flight_details_json = {"journey_type": jt}
-        conv.current_state = "AIRPORT_SELECTION"
-        db.commit()
+        cls._transition_state(db, conv, "AIRPORT_SELECTION")
 
         msg = (
             f"Journey Type: *{jt.title()}*\n\n"
@@ -536,8 +553,7 @@ class WhatsAppBookingStateMachine:
         conv.selected_airport_iata = airport.iata_code
         conv.selected_airport_city = airport.city
         conv.selected_airport_country = airport.country
-        conv.current_state = "AIRPORT_CONFIRMATION"
-        db.commit()
+        cls._transition_state(db, conv, "AIRPORT_CONFIRMATION")
 
         body_text = (
             f"📍 *Airport Resolved*\n\n"
@@ -580,15 +596,13 @@ class WhatsAppBookingStateMachine:
             conv.selected_airport_name = None
             conv.selected_airport_city = None
             conv.selected_airport_country = None
-            conv.current_state = "AIRPORT_SELECTION"
-            db.commit()
+            cls._transition_state(db, conv, "AIRPORT_SELECTION")
             msg = "Please enter your Airport Name, City, or IATA Code (e.g., Delhi, DEL):"
             whatsapp_client.send_text_message(conv.phone_number, msg)
             return {"status": "reprompt_airport"}
 
         if "CONFIRM" in text_u or "YES" in text_u or text_u == "1" or text_u == "btn_confirm_airport":
-            conv.current_state = "SERVICE_SELECTION"
-            db.commit()
+            cls._transition_state(db, conv, "SERVICE_SELECTION")
             return cls._send_airport_services_menu(db, conv)
 
         whatsapp_client.send_text_message(conv.phone_number, "Please select *Confirm* or *Change Airport*.")
@@ -628,68 +642,52 @@ class WhatsAppBookingStateMachine:
                     "description": svc.description or "VIP Airport Service"
                 })
 
-        # Fallback to standard active catalog if no specific mapping found
         if not available_services:
-            try:
-                admin_cats = ServiceConfigService.get_admin_catalog(db)
-                for s in admin_cats:
-                    if s.get("category") in ["Airport Assistance", "Airport Services"] and s.get("is_active"):
-                        available_services.append({
-                            "id": str(s.get("id")),
-                            "title": str(s.get("title", s.get("name"))),
-                            "price": float(s.get("base_price", s.get("price", 2500))),
-                            "description": s.get("description", "")
-                        })
-            except Exception:
-                for s in DEFAULT_SERVICE_CATALOG:
-                    if s.get("category") == "Airport Assistance":
-                        available_services.append({
-                            "id": str(s.get("id")),
-                            "title": s["title"],
-                            "price": float(s.get("base_price", 2500)),
-                            "description": s.get("description", "")
-                        })
-
-        list_rows = []
-        for s in available_services[:10]:
-            list_rows.append({
-                "id": f"svc_id_{s['id']}",
-                "title": s["title"][:24],
-                "description": f"₹{int(s['price']):,} | {s['description'][:45]}"
-            })
+            available_services = [
+                {"id": "default_silver", "title": "Silver Meet & Assist", "price": 2500.0, "description": "Escort from curb/gate"},
+                {"id": "default_gold", "title": "Gold VIP Package", "price": 4500.0, "description": "Dedicated porter & lounge access"}
+            ]
 
         body_text = (
-            f"Airport: *{conv.selected_airport_name} ({conv.selected_airport_iata})*\n"
-            f"Journey Type: *{jt.title()}*\n\n"
-            "Please select your desired VIP service/package:"
+            f"✨ *Available Services at {conv.selected_airport_name}*\n"
+            f"• *Journey Type*: {jt.title()}\n\n"
+            "Please select a service package:"
         )
-        sections = [{"title": "Available Services", "rows": list_rows}]
+
+        rows = []
+        for svc in available_services[:10]:
+            rows.append({
+                "id": f"svc_id_{svc['id']}",
+                "title": svc["title"][:24],
+                "description": f"₹{int(svc['price']):,} - {svc['description'][:40]}"
+            })
+
+        sections = [{"title": "Select Package", "rows": rows}]
 
         res = whatsapp_client.send_interactive_list(
             to_phone=conv.phone_number,
             body_text=body_text,
-            button_title="Select Service",
+            button_title="View Packages",
             sections=sections,
-            header_text="Available Packages"
+            header_text="Service Packages"
         )
         if not res.get("success"):
-            lines = [f"Airport: *{conv.selected_airport_name} ({conv.selected_airport_iata})*\nJourney Type: *{jt.title()}*\n\nPlease reply with the service number:"]
-            for idx, s in enumerate(available_services, 1):
-                lines.append(f"{idx}. *{s['title']}* — ₹{int(s['price']):,}\n   _{s['description']}_")
-            whatsapp_client.send_text_message(conv.phone_number, "\n".join(lines))
+            fallback = body_text + "\n\n"
+            for i, svc in enumerate(available_services, 1):
+                fallback += f"{i}. *{svc['title']}* — ₹{int(svc['price']):,}\n"
+            fallback += "\nPlease reply with the number of your choice (e.g. 1)."
+            whatsapp_client.send_text_message(conv.phone_number, fallback)
 
-        return {"status": "airport_services_sent"}
+        return {"status": "services_menu_sent"}
 
-    # ── 2. TRAVEL SERVICES & PRIVATE CHARTER & HOTEL FLOW ──
+    # ── 2. HOTEL & TRANSPORTATION / CHARTER / TRAVEL FLOWS ──
 
     @classmethod
     def _prompt_hotel_transport_submenu(cls, conv: WhatsAppConversation) -> Dict[str, Any]:
-        """Prompts submenu for Hotel & Transportation."""
+        """Submenu for Hotel & Transportation."""
         body_text = (
-            "🏨 *Hotel & Transportation*\n\n"
-            "Please select an option:\n"
-            "1️⃣ Hotel Booking\n"
-            "2️⃣ Transportation"
+            "🏨🚗 *Hotel & Transportation Services*\n\n"
+            "Please choose a service:"
         )
         buttons = [
             {"id": "btn_sub_hotel", "title": "Hotel Booking"},
@@ -713,8 +711,7 @@ class WhatsAppBookingStateMachine:
             conv.selected_service_name = "Luxury Hotel Booking"
             conv.requires_airport = False
             conv.requires_flight = False
-            conv.current_state = "HOTEL_CITY"
-            db.commit()
+            cls._transition_state(db, conv, "HOTEL_CITY")
             whatsapp_client.send_text_message(conv.phone_number, "🏨 *Hotel Booking*\n\nPlease enter your destination city or preferred hotel:")
             return {"status": "hotel_city_prompt_sent"}
 
@@ -722,8 +719,7 @@ class WhatsAppBookingStateMachine:
             conv.selected_service_name = "Premium Ground Transport"
             conv.requires_airport = False
             conv.requires_flight = False
-            conv.current_state = "TRANSPORT_PICKUP"
-            db.commit()
+            cls._transition_state(db, conv, "TRANSPORT_PICKUP")
             whatsapp_client.send_text_message(conv.phone_number, "🚗 *Transportation*\n\nPlease enter your pickup location:")
             return {"status": "transport_pickup_prompt_sent"}
 
@@ -734,8 +730,7 @@ class WhatsAppBookingStateMachine:
     def _state_hotel_city(cls, db: Session, conv: WhatsAppConversation, user_text: str) -> Dict[str, Any]:
         city = user_text.strip()
         conv.selected_airport_city = city
-        conv.current_state = "HOTEL_NIGHTS"
-        db.commit()
+        cls._transition_state(db, conv, "HOTEL_NIGHTS")
         whatsapp_client.send_text_message(conv.phone_number, f"City: *{city}*\n\nHow many nights will you be staying? (e.g. 2):")
         return {"status": "hotel_nights_prompt"}
 
@@ -743,8 +738,7 @@ class WhatsAppBookingStateMachine:
     def _state_hotel_nights(cls, db: Session, conv: WhatsAppConversation, user_text: str) -> Dict[str, Any]:
         digits = "".join(filter(str.isdigit, user_text)) or "1"
         conv.additional_requirements = f"Hotel in {conv.selected_airport_city}, {digits} nights"
-        conv.current_state = "DATE_SELECTION"
-        db.commit()
+        cls._transition_state(db, conv, "DATE_SELECTION")
         whatsapp_client.send_text_message(conv.phone_number, "Please enter your Check-in Date (DD/MM/YYYY or YYYY-MM-DD):")
         return {"status": "hotel_date_prompt"}
 
@@ -752,8 +746,7 @@ class WhatsAppBookingStateMachine:
     def _state_transport_pickup(cls, db: Session, conv: WhatsAppConversation, user_text: str) -> Dict[str, Any]:
         pickup = user_text.strip()
         conv.selected_airport_city = pickup
-        conv.current_state = "TRANSPORT_DROPOFF"
-        db.commit()
+        cls._transition_state(db, conv, "TRANSPORT_DROPOFF")
         whatsapp_client.send_text_message(conv.phone_number, f"Pickup: *{pickup}*\n\nPlease enter your drop-off destination:")
         return {"status": "transport_dropoff_prompt"}
 
@@ -761,8 +754,7 @@ class WhatsAppBookingStateMachine:
     def _state_transport_dropoff(cls, db: Session, conv: WhatsAppConversation, user_text: str) -> Dict[str, Any]:
         dropoff = user_text.strip()
         conv.additional_requirements = f"Route: {conv.selected_airport_city} to {dropoff}"
-        conv.current_state = "DATE_SELECTION"
-        db.commit()
+        cls._transition_state(db, conv, "DATE_SELECTION")
         whatsapp_client.send_text_message(conv.phone_number, "Please enter your Date of Travel (DD/MM/YYYY or YYYY-MM-DD):")
         return {"status": "transport_date_prompt"}
 
@@ -770,8 +762,7 @@ class WhatsAppBookingStateMachine:
     def _state_charter_origin(cls, db: Session, conv: WhatsAppConversation, user_text: str) -> Dict[str, Any]:
         origin = user_text.strip()
         conv.selected_airport_city = origin
-        conv.current_state = "CHARTER_DESTINATION"
-        db.commit()
+        cls._transition_state(db, conv, "CHARTER_DESTINATION")
         whatsapp_client.send_text_message(conv.phone_number, f"Departure: *{origin}*\n\nPlease enter your destination city / airport:")
         return {"status": "charter_destination_prompt"}
 
@@ -779,8 +770,7 @@ class WhatsAppBookingStateMachine:
     def _state_charter_destination(cls, db: Session, conv: WhatsAppConversation, user_text: str) -> Dict[str, Any]:
         destination = user_text.strip()
         conv.additional_requirements = f"Private Charter: {conv.selected_airport_city} to {destination}"
-        conv.current_state = "DATE_SELECTION"
-        db.commit()
+        cls._transition_state(db, conv, "DATE_SELECTION")
         whatsapp_client.send_text_message(conv.phone_number, "Please enter your Date of Travel (DD/MM/YYYY or YYYY-MM-DD):")
         return {"status": "charter_date_prompt"}
 
@@ -798,74 +788,96 @@ class WhatsAppBookingStateMachine:
         if not cat_services:
             cat_services = [s for s in DEFAULT_SERVICE_CATALOG if s.get("category") in valid_db_cats or s.get("category") == category_name]
 
+        if not cat_services:
+            cat_services = [
+                {"id": f"{category_name.lower()}_std", "title": f"Standard {category_name}", "price": 5000.0, "description": f"Full assistance with {category_name}"}
+            ]
+
+        body_text = f"✨ *{category_name}*\n\nPlease select an option:"
         rows = []
-        for i, s in enumerate(cat_services[:10]):
-            svc_id = s.get("id", f"svc_{i}")
-            svc_name = s.get("title", s.get("name", "Service"))
-            price = s.get("base_price", s.get("price", 0))
-            price_display = f"₹{int(price):,}" if price > 0 else "Quote on Request"
+        for svc in cat_services[:10]:
+            title = svc.get("title", svc.get("name", "Service"))
+            price = float(svc.get("base_price", svc.get("price", 5000)))
+            desc = svc.get("description", "")
             rows.append({
-                "id": f"svc_id_{svc_id}",
-                "title": svc_name[:24],
-                "description": f"{price_display} | {s.get('description', '')[:45]}"
+                "id": f"svc_id_{svc.get('id')}",
+                "title": str(title)[:24],
+                "description": f"₹{int(price):,} - {str(desc)[:40]}"
             })
 
-        body_text = f"Category: *{category_name}*\n\nPlease select the service you wish to request:"
-        sections = [{"title": f"{category_name} Catalogue", "rows": rows}]
+        sections = [{"title": category_name, "rows": rows}]
 
         res = whatsapp_client.send_interactive_list(
             to_phone=conv.phone_number,
             body_text=body_text,
-            button_title="Select Service",
+            button_title="Select Option",
             sections=sections,
-            header_text="Service Catalogue"
+            header_text=category_name
         )
         if not res.get("success"):
-            lines = [f"Category: *{category_name}*\n\nPlease reply with the service number:"]
-            for idx, s in enumerate(cat_services, 1):
-                p = s.get("base_price", s.get("price", 0))
-                p_str = f"₹{int(p):,}" if p > 0 else "Quote on Request"
-                lines.append(f"{idx}. *{s.get('title', s.get('name'))}* — {p_str}\n   _{s.get('description', '')}_")
-            whatsapp_client.send_text_message(conv.phone_number, "\n".join(lines))
+            fallback = body_text + "\n\n"
+            for i, svc in enumerate(cat_services, 1):
+                t = svc.get("title", svc.get("name", "Service"))
+                p = float(svc.get("base_price", svc.get("price", 5000)))
+                fallback += f"{i}. *{t}* — ₹{int(p):,}\n"
+            fallback += "\nPlease reply with the number of your choice (e.g. 1)."
+            whatsapp_client.send_text_message(conv.phone_number, fallback)
 
         return {"status": "service_menu_sent"}
 
     @classmethod
     def _state_service_selection(cls, db: Session, conv: WhatsAppConversation, user_text: str, input_id: Optional[str]) -> Dict[str, Any]:
-        """Handles selection of a specific service/package."""
+        """Handles service package selection from list reply or text reply."""
         category_name = conv.selected_category or "Airport Services"
         selected_svc = None
 
-        # Check Airport Services from DB if category is Airport Services
-        if category_name == "Airport Services" and conv.selected_airport_iata:
-            airport = db.execute(select(SupportedAirport).where(SupportedAirport.iata_code == conv.selected_airport_iata)).scalar_one_or_none()
+        if category_name == "Airport Services":
+            iata = conv.selected_airport_iata
+            jt = (conv.flight_details_json or {}).get("journey_type", "DEPARTURE").upper() if isinstance(conv.flight_details_json, dict) else "DEPARTURE"
+            airport = db.execute(select(SupportedAirport).where(SupportedAirport.iata_code == iata)).scalar_one_or_none()
+
+            available_services = []
             if airport:
-                jt = (conv.flight_details_json or {}).get("journey_type", "DEPARTURE").upper() if isinstance(conv.flight_details_json, dict) else "DEPARTURE"
-                stmt = select(AirportService, Service).join(Service, AirportService.service_id == Service.id).where(
-                    AirportService.airport_id == airport.id,
-                    AirportService.journey_type == jt,
-                    AirportService.is_available == True
+                stmt = (
+                    select(AirportService, Service)
+                    .join(Service, AirportService.service_id == Service.id)
+                    .where(
+                        AirportService.airport_id == airport.id,
+                        AirportService.journey_type == jt,
+                        AirportService.is_available == True,
+                        Service.is_active == True
+                    )
+                    .order_by(Service.display_order)
                 )
-                rows = db.execute(stmt).all()
-                services_list = [{"id": str(svc.id), "title": svc.name, "price": float(aps.price or 2500.0)} for aps, svc in rows]
+                for aps, svc in db.execute(stmt).all():
+                    available_services.append({
+                        "id": str(svc.id),
+                        "title": svc.name,
+                        "price": float(aps.price or 2500.0)
+                    })
 
-                if input_id and input_id.startswith("svc_id_"):
-                    raw_id = input_id.replace("svc_id_", "")
-                    selected_svc = next((s for s in services_list if str(s["id"]) == raw_id), None)
-                if not selected_svc:
-                    clean = user_text.strip().lower()
-                    if clean.isdigit():
-                        idx = int(clean) - 1
-                        if 0 <= idx < len(services_list):
-                            selected_svc = services_list[idx]
-                    else:
-                        for s in services_list:
-                            if s["title"].lower() in clean or clean in s["title"].lower():
-                                selected_svc = s
-                                break
+            if not available_services:
+                available_services = [
+                    {"id": "default_silver", "title": "Silver Meet & Assist", "price": 2500.0},
+                    {"id": "default_gold", "title": "Gold VIP Package", "price": 4500.0}
+                ]
 
-        # Check General Catalogue
-        if not selected_svc:
+            if input_id:
+                raw_id = input_id.replace("svc_id_", "")
+                selected_svc = next((s for s in available_services if str(s["id"]) == raw_id), None)
+            if not selected_svc:
+                clean = user_text.strip().lower()
+                if clean.isdigit():
+                    idx = int(clean) - 1
+                    if 0 <= idx < len(available_services):
+                        selected_svc = available_services[idx]
+                else:
+                    for s in available_services:
+                        if s["title"].lower() in clean or clean in s["title"].lower():
+                            selected_svc = s
+                            break
+
+        else:
             category_obj = next((c for c in OFFICIAL_CATEGORIES if c["name"] == category_name), None)
             valid_db_cats = category_obj["db_categories"] if category_obj else [category_name]
             try:
@@ -873,10 +885,8 @@ class WhatsAppBookingStateMachine:
             except Exception:
                 all_services = DEFAULT_SERVICE_CATALOG
             cat_services = [s for s in all_services if s.get("category") in valid_db_cats or s.get("category") == category_name]
-            if not cat_services:
-                cat_services = [s for s in DEFAULT_SERVICE_CATALOG if s.get("category") in valid_db_cats or s.get("category") == category_name]
 
-            if input_id and input_id.startswith("svc_id_"):
+            if input_id:
                 raw_id = input_id.replace("svc_id_", "")
                 selected_svc = next((s for s in cat_services if str(s.get("id")) == raw_id), None)
             if not selected_svc:
@@ -907,21 +917,18 @@ class WhatsAppBookingStateMachine:
 
         # Progression based on category
         if category_name == "Airport Services":
-            conv.current_state = "FLIGHT_INPUT"
-            db.commit()
+            cls._transition_state(db, conv, "FLIGHT_INPUT")
             msg = f"Selected Service: *{svc_title}*\n\nPlease enter your Flight Number (e.g., *EK501*, *AI2424*, *6E224*):"
             whatsapp_client.send_text_message(conv.phone_number, msg)
             return {"status": "flight_prompt_sent"}
 
         elif category_name == "Private Charter":
-            conv.current_state = "CHARTER_ORIGIN"
-            db.commit()
+            cls._transition_state(db, conv, "CHARTER_ORIGIN")
             whatsapp_client.send_text_message(conv.phone_number, f"Selected Charter: *{svc_title}*\n\nPlease enter your departure city / airport:")
             return {"status": "charter_origin_prompt"}
 
         else:
-            conv.current_state = "DATE_SELECTION"
-            db.commit()
+            cls._transition_state(db, conv, "DATE_SELECTION")
             whatsapp_client.send_text_message(conv.phone_number, f"Selected Service: *{svc_title}*\n\nPlease enter your Date of Travel (DD/MM/YYYY or YYYY-MM-DD):" )
             return {"status": "date_prompt_sent"}
 
@@ -983,8 +990,7 @@ class WhatsAppBookingStateMachine:
             "verification_status": "not_verified",
             "status": "flight_number_received"
         }
-        conv.current_state = "FLIGHT_CONFIRMATION"
-        db.commit()
+        cls._transition_state(db, conv, "FLIGHT_CONFIRMATION")
 
         body_text = (
             f"✈️ *Flight Number Received: {norm_flight}*\n\n"
@@ -1022,14 +1028,12 @@ class WhatsAppBookingStateMachine:
 
         if "RE-ENTER" in text_u or "REENTER" in text_u or "CHANGE" in text_u or "NO" in text_u or text_u == "btn_reenter_flight":
             conv.flight_num = None
-            conv.current_state = "FLIGHT_INPUT"
-            db.commit()
+            cls._transition_state(db, conv, "FLIGHT_INPUT")
             whatsapp_client.send_text_message(conv.phone_number, "Please enter your flight number (e.g., *EK501*, *AI2424*, *6E224*):")
             return {"status": "reprompt_flight"}
 
         if "CONFIRM" in text_u or "YES" in text_u or text_u == "1" or text_u == "btn_confirm_flight":
-            conv.current_state = "DATE_SELECTION"
-            db.commit()
+            cls._transition_state(db, conv, "DATE_SELECTION")
             msg = f"Flight Number Received: *{conv.flight_num}*\n\nPlease enter your Date of Travel (DD/MM/YYYY or YYYY-MM-DD):"
             whatsapp_client.send_text_message(conv.phone_number, msg)
             return {"status": "date_prompt_sent"}
@@ -1059,8 +1063,7 @@ class WhatsAppBookingStateMachine:
 
         date_formatted = parsed_dt.strftime("%d %B %Y")
         conv.booking_date = date_formatted
-        conv.current_state = "PASSENGER_COUNT"
-        db.commit()
+        cls._transition_state(db, conv, "PASSENGER_COUNT")
 
         msg = f"Date Saved: *{date_formatted}*\n\nHow many passengers will be travelling? (Enter a number, e.g., 2):"
         whatsapp_client.send_text_message(conv.phone_number, msg)
@@ -1075,8 +1078,7 @@ class WhatsAppBookingStateMachine:
 
         count = int(digits)
         conv.passenger_count = count
-        conv.current_state = "CUSTOMER_NAME"
-        db.commit()
+        cls._transition_state(db, conv, "CUSTOMER_NAME")
 
         msg = f"Passengers: *{count}*\n\nMay I have your full name?"
         whatsapp_client.send_text_message(conv.phone_number, msg)
@@ -1090,8 +1092,7 @@ class WhatsAppBookingStateMachine:
             return {"status": "invalid_name"}
 
         conv.customer_name = clean_name
-        conv.current_state = "CUSTOMER_EMAIL"
-        db.commit()
+        cls._transition_state(db, conv, "CUSTOMER_EMAIL")
 
         msg = f"Name: *{clean_name}*\n\nPlease provide your email address for booking confirmation:"
         whatsapp_client.send_text_message(conv.phone_number, msg)
@@ -1109,8 +1110,7 @@ class WhatsAppBookingStateMachine:
             return {"status": "invalid_email"}
 
         conv.customer_email = clean_email
-        conv.current_state = "CUSTOMER_PHONE"
-        db.commit()
+        cls._transition_state(db, conv, "CUSTOMER_PHONE")
 
         msg = f"Email Saved: *{clean_email}*\n\nPlease provide your contact phone number (or type 'Same' to use this WhatsApp number):"
         whatsapp_client.send_text_message(conv.phone_number, msg)
@@ -1128,8 +1128,7 @@ class WhatsAppBookingStateMachine:
                 return {"status": "invalid_phone"}
             conv.customer_phone = digits
 
-        conv.current_state = "ADDITIONAL_REQUIREMENTS"
-        db.commit()
+        cls._transition_state(db, conv, "ADDITIONAL_REQUIREMENTS")
 
         msg = "Do you have any special requirements or notes? (Type *None* if no special requests):"
         whatsapp_client.send_text_message(conv.phone_number, msg)
@@ -1139,8 +1138,7 @@ class WhatsAppBookingStateMachine:
     def _state_additional_requirements(cls, db: Session, conv: WhatsAppConversation, notes_input: str) -> Dict[str, Any]:
         clean_notes = notes_input.strip()
         conv.additional_requirements = "None" if clean_notes.lower() in ["none", "no", "n/a", "-"] else clean_notes
-        conv.current_state = "BOOKING_REVIEW"
-        db.commit()
+        cls._transition_state(db, conv, "BOOKING_REVIEW")
 
         return cls._send_booking_summary(db, conv)
 
@@ -1203,8 +1201,7 @@ class WhatsAppBookingStateMachine:
         text_u = (input_id or user_text).strip().upper()
 
         if "CHANGE" in text_u or "EDIT" in text_u or text_u == "btn_change_details":
-            conv.current_state = "CUSTOMER_NAME"
-            db.commit()
+            cls._transition_state(db, conv, "CUSTOMER_NAME")
             whatsapp_client.send_text_message(conv.phone_number, "Let's update your details. May I have your full name?")
             return {"status": "edit_prompt"}
 
@@ -1251,10 +1248,8 @@ class WhatsAppBookingStateMachine:
             # 2. Update Conversation Record
             conv.booking_id = new_booking.id
             conv.booking_ref = booking_ref
-            conv.current_state = "BOOKING_CONFIRMED"
             conv.payment_status = "PENDING"
-            conv.updated_at = datetime.now(timezone.utc)
-            db.commit()
+            cls._transition_state(db, conv, "BOOKING_CONFIRMED")
 
         except Exception as db_err:
             db.rollback()
@@ -1363,7 +1358,7 @@ class WhatsAppService:
                     if msg_id:
                         dup = db.execute(select(WhatsAppWebhookEvent).where(WhatsAppWebhookEvent.event_id == msg_id)).scalar_one_or_none()
                         if dup:
-                            logger.info(f"[WhatsApp Idempotency] Event {msg_id} already processed. Skipping.")
+                            logger.info(f"[WhatsApp Webhook] Duplicate message ignored: {msg_id}")
                             continue
 
                         # Store event id
