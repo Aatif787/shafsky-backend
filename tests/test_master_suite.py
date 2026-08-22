@@ -7,12 +7,36 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from fastapi.testclient import TestClient
 from app.main import app
 from app.database import SessionLocal
-from app.models.schema import RefreshToken
+from app.models.schema import RefreshToken, UserAuth, Role
+from app.services.auth_service import AuthService
 from sqlalchemy import select
 
 client = TestClient(app)
 
+
+def _ensure_admin_user():
+    db = SessionLocal()
+    try:
+        admin = db.scalar(select(UserAuth).where(UserAuth.email == "admin@shafskyaviation.com"))
+        if not admin:
+            admin = UserAuth(
+                email="admin@shafskyaviation.com",
+                password_hash=AuthService.hash_password("ShafskyAdmin2026!"),
+                role=Role.SUPER_ADMIN,
+                is_verified=True
+            )
+            db.add(admin)
+        else:
+            admin.password_hash = AuthService.hash_password("ShafskyAdmin2026!")
+            admin.role = Role.SUPER_ADMIN
+            admin.is_verified = True
+        db.commit()
+    finally:
+        db.close()
+
+
 def test_01_authentication_and_hashed_tokens():
+    _ensure_admin_user()
     res = client.post(
         "/api/auth/login",
         json={"email": "admin@shafskyaviation.com", "password": "ShafskyAdmin2026!"},
@@ -32,6 +56,7 @@ def test_01_authentication_and_hashed_tokens():
     for r in records:
         assert r.token_hash != raw_refresh
     db.close()
+
 
 def test_02_health_and_observability():
     # Dedicated Backend Connectivity Endpoint
@@ -60,11 +85,16 @@ def test_02_health_and_observability():
     assert res_live.json()["status"] == "ALIVE"
 
     # Metrics Exporter
-    res_metrics = client.get("/metrics")
+    _ensure_admin_user()
+    login_res = client.post("/api/auth/login", json={"email": "admin@shafskyaviation.com", "password": "ShafskyAdmin2026!"})
+    admin_token = login_res.json()["data"]["accessToken"]
+    res_metrics = client.get("/metrics", headers={"Authorization": f"Bearer {admin_token}"})
     assert res_metrics.status_code == 200
     assert "http_requests_total" in res_metrics.text
 
+
 def test_03_disaster_recovery_backup_and_restore():
+    _ensure_admin_user()
     # Login to get admin token
     login_res = client.post("/api/auth/login", json={"email": "admin@shafskyaviation.com", "password": "ShafskyAdmin2026!"})
     token = login_res.json()["data"]["accessToken"]
@@ -84,6 +114,7 @@ def test_03_disaster_recovery_backup_and_restore():
     ver_res = client.post(f"/api/admin/dr/restore-verify?backup_id={backup_id}", headers=headers)
     assert ver_res.status_code == 200
     assert ver_res.json()["data"]["verified"] is True
+
 
 if __name__ == "__main__":
     test_01_authentication_and_hashed_tokens()

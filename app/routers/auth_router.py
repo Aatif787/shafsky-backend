@@ -113,6 +113,7 @@ async def login(
         success=True,
         data=AuthDataResponse(
             accessToken=access_token,
+            refreshToken=raw_refresh,
             user=UserResponse(
                 id=user_data["user_id"],
                 email=user_data["sub"],

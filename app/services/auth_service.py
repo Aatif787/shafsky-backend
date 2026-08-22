@@ -28,17 +28,21 @@ except Exception:
 class AuthService:
     @staticmethod
     def hash_password(password: str) -> str:
-        if pwd_context:
-            return pwd_context.hash(password)
         import bcrypt
-        return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        pwd_bytes = str(password).encode('utf-8')[:72]
+        return bcrypt.hashpw(pwd_bytes, bcrypt.gensalt()).decode('utf-8')
 
     @staticmethod
     def verify_password(plain_password: str, hashed_password: str) -> bool:
-        if pwd_context:
-            return pwd_context.verify(plain_password, hashed_password)
-        import bcrypt
-        return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
+        if not plain_password or not hashed_password:
+            return False
+        try:
+            import bcrypt
+            pwd_bytes = str(plain_password).encode('utf-8')[:72]
+            hash_bytes = str(hashed_password).encode('utf-8')
+            return bcrypt.checkpw(pwd_bytes, hash_bytes)
+        except Exception:
+            return False
 
     @staticmethod
     def create_access_token(data: Dict[str, Any]) -> str:
@@ -113,11 +117,10 @@ class AuthService:
             last_activity=datetime.now(timezone.utc),
             created_at=datetime.now(timezone.utc)
         )
-        db.add(token_record)
         try:
-            # Use a transaction to ensure atomicity and automatic rollback on failure
-            with db.begin():
-                db.add(token_record)
+            db.add(token_record)
+            db.commit()
+            db.refresh(token_record)
         except Exception:
             db.rollback()
             raise
@@ -152,19 +155,19 @@ class AuthService:
             )
             # Token Family Revocation: Invalidate all tokens sharing the same family_id
             try:
-                with db.begin():
-                    if record.family_id:
-                        db.execute(
-                            update(RefreshToken)
-                            .where(RefreshToken.family_id == record.family_id)
-                            .values(revoked=True)
-                        )
-                    # Comprehensive fallback: Revoke all tokens for the user
+                if record.family_id:
                     db.execute(
                         update(RefreshToken)
-                        .where(RefreshToken.user_id == user.id)
+                        .where(RefreshToken.family_id == record.family_id)
                         .values(revoked=True)
                     )
+                # Comprehensive fallback: Revoke all tokens for the user
+                db.execute(
+                    update(RefreshToken)
+                    .where(RefreshToken.user_id == user.id)
+                    .values(revoked=True)
+                )
+                db.commit()
             except Exception:
                 db.rollback()
                 raise
@@ -175,15 +178,14 @@ class AuthService:
         if record.expires_at < now:
             record.revoked = True
             try:
-                with db.begin():
-                    db.add(record)
+                db.add(record)
+                db.commit()
             except Exception:
                 db.rollback()
                 raise
             raise ValueError("REFRESH_TOKEN_EXPIRED")
 
         # 4. Atomically Revoke Old Token (Single-Use Policy)
-        # Atomically revoke old token and create new token record
         record.revoked = True
         record.last_activity = now
 
@@ -206,9 +208,10 @@ class AuthService:
             created_at=now
         )
         try:
-            with db.begin():
-                db.add(record)
-                db.add(new_record)
+            db.add(record)
+            db.add(new_record)
+            db.commit()
+            db.refresh(new_record)
         except Exception:
             db.rollback()
             raise
@@ -238,8 +241,8 @@ class AuthService:
             record.revoked = True
             record.last_activity = datetime.now(timezone.utc)
             try:
-                with db.begin():
-                    db.add(record)
+                db.add(record)
+                db.commit()
             except Exception:
                 db.rollback()
                 raise
