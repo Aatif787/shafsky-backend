@@ -9,7 +9,7 @@ import re
 import uuid
 import logging
 from typing import Dict, Any, Optional, List, Tuple
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 from sqlalchemy.orm import Session
 from sqlalchemy import select, or_, and_
 
@@ -348,7 +348,7 @@ class WhatsAppBookingStateMachine:
                     cls._send_service_menu(db, conv, conv.selected_category or "Airport Services")
         elif curr == "PASSENGER_COUNT":
             cls._transition_state(db, conv, "DATE_SELECTION")
-            whatsapp_client.send_text_message(conv.phone_number, "Please enter your Date of Travel (DD/MM/YYYY or YYYY-MM-DD):")
+            whatsapp_client.send_text_message(conv.phone_number, "Please enter your Date of Travel in DD/MM/YYYY format (e.g., 25/08/2026):")
         elif curr == "CUSTOMER_NAME":
             cls._transition_state(db, conv, "PASSENGER_COUNT")
             whatsapp_client.send_text_message(conv.phone_number, "How many passengers will be travelling? (Enter a number, e.g., 2):")
@@ -937,7 +937,7 @@ class WhatsAppBookingStateMachine:
         digits = "".join(filter(str.isdigit, user_text)) or "1"
         conv.additional_requirements = f"Hotel in {conv.selected_airport_city}, {digits} nights"
         cls._transition_state(db, conv, "DATE_SELECTION")
-        whatsapp_client.send_text_message(conv.phone_number, "Please enter your Check-in Date (DD/MM/YYYY or YYYY-MM-DD):")
+        whatsapp_client.send_text_message(conv.phone_number, "Please enter your Check-in Date in DD/MM/YYYY format (e.g., 25/08/2026):")
         return {"status": "hotel_date_prompt"}
 
     @classmethod
@@ -953,7 +953,7 @@ class WhatsAppBookingStateMachine:
         dropoff = user_text.strip()
         conv.additional_requirements = f"Route: {conv.selected_airport_city} to {dropoff}"
         cls._transition_state(db, conv, "DATE_SELECTION")
-        whatsapp_client.send_text_message(conv.phone_number, "Please enter your Date of Travel (DD/MM/YYYY or YYYY-MM-DD):")
+        whatsapp_client.send_text_message(conv.phone_number, "Please enter your Date of Travel in DD/MM/YYYY format (e.g., 25/08/2026):")
         return {"status": "transport_date_prompt"}
 
     @classmethod
@@ -969,7 +969,7 @@ class WhatsAppBookingStateMachine:
         destination = user_text.strip()
         conv.additional_requirements = f"Private Charter: {conv.selected_airport_city} to {destination}"
         cls._transition_state(db, conv, "DATE_SELECTION")
-        whatsapp_client.send_text_message(conv.phone_number, "Please enter your Date of Travel (DD/MM/YYYY or YYYY-MM-DD):")
+        whatsapp_client.send_text_message(conv.phone_number, "Please enter your Date of Travel in DD/MM/YYYY format (e.g., 25/08/2026):")
         return {"status": "charter_date_prompt"}
 
     @classmethod
@@ -1176,7 +1176,7 @@ class WhatsAppBookingStateMachine:
 
         else:
             cls._transition_state(db, conv, "DATE_SELECTION")
-            whatsapp_client.send_text_message(conv.phone_number, f"Selected Service: *{svc_title}*\n\nPlease enter your Date of Travel (DD/MM/YYYY or YYYY-MM-DD):" )
+            whatsapp_client.send_text_message(conv.phone_number, f"Selected Service: *{svc_title}*\n\nPlease enter your Date of Travel in DD/MM/YYYY format (e.g., 25/08/2026):")
             return {"status": "date_prompt_sent"}
 
     # ── 3. FLIGHT LOCAL VALIDATION & PROGRESSION ──
@@ -1284,7 +1284,7 @@ class WhatsAppBookingStateMachine:
 
         if "CONFIRM" in text_u or "YES" in text_u or text_u == "1" or text_u == "btn_confirm_flight":
             cls._transition_state(db, conv, "DATE_SELECTION")
-            msg = f"Flight Number Received: *{conv.flight_num}*\n\nPlease enter your Date of Travel (DD/MM/YYYY or YYYY-MM-DD):"
+            msg = f"Flight Number Received: *{conv.flight_num}*\n\nPlease enter your Date of Travel in DD/MM/YYYY format (e.g., 25/08/2026):"
             whatsapp_client.send_text_message(conv.phone_number, msg)
             return {"status": "date_prompt_sent"}
 
@@ -1294,24 +1294,123 @@ class WhatsAppBookingStateMachine:
     # ── 4. DYNAMIC DETAILS COLLECTION (DATE, PASSENGERS, CUSTOMER DETAILS) ──
 
     @classmethod
-    def _state_date_selection(cls, db: Session, conv: WhatsAppConversation, date_input: str) -> Dict[str, Any]:
-        clean_date = date_input.strip()
+    def _get_service_timezone(cls, tz_name: Optional[str] = None) -> timezone:
+        """
+        Returns timezone for airport/service. Defaults to IST (Asia/Kolkata, UTC+5:30).
+        Safely handles standard named timezones without crashing on Windows if tzdata is absent.
+        """
+        if not tz_name or tz_name in ("Asia/Kolkata", "Asia/Calcutta", "IST"):
+            return timezone(timedelta(hours=5, minutes=30))
+        if tz_name.upper() in ("UTC", "GMT"):
+            return timezone.utc
+        if tz_name.upper() in ("GST", "Asia/Dubai"):
+            return timezone(timedelta(hours=4))
+
+        try:
+            from zoneinfo import ZoneInfo
+            return ZoneInfo(tz_name)
+        except Exception:
+            return timezone(timedelta(hours=5, minutes=30))
+
+    @classmethod
+    def _validate_whatsapp_date(
+        cls,
+        db: Session,
+        conv: WhatsAppConversation,
+        date_input: str
+    ) -> Tuple[bool, Optional[date], Optional[str], str]:
+        """
+        Strict, pure-local validation of WhatsApp booking date.
+        Enforces DD/MM/YYYY as primary format, parses to real date object,
+        and evaluates strictly against backend timezone/current date.
+        Returns: (is_valid, parsed_date, error_message, status_code)
+        """
+        clean_date = (date_input or "").strip()
+        if not clean_date:
+            error_msg = (
+                "Please enter the date in DD/MM/YYYY format.\n"
+                "Example: 25/08/2026"
+            )
+            return False, None, error_msg, "invalid_date_format"
+
+        # 1. Parse date input into real date object
         parsed_dt = None
-        for fmt in ["%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d %b %Y", "%d %B %Y"]:
+        for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d", "%d %b %Y", "%d %B %Y"):
             try:
-                parsed_dt = datetime.strptime(clean_date, fmt)
-                break
-            except Exception:
-                pass
+                dt = datetime.strptime(clean_date, fmt)
+                if 2020 <= dt.year <= 2100:
+                    parsed_dt = dt
+                    break
+            except (ValueError, TypeError):
+                continue
 
         if not parsed_dt:
-            whatsapp_client.send_text_message(
-                conv.phone_number,
-                "Invalid date format. Please enter date in DD/MM/YYYY or YYYY-MM-DD format (e.g., 15/08/2026)."
+            error_msg = (
+                "Please enter the date in DD/MM/YYYY format.\n"
+                "Example: 25/08/2026"
             )
-            return {"status": "invalid_date"}
+            return False, None, error_msg, "invalid_date_format"
 
-        date_formatted = parsed_dt.strftime("%d %B %Y")
+        parsed_date = parsed_dt.date()
+
+        # 2. Get current date dynamically in appropriate airport/service timezone
+        airport_tz_name = None
+        if conv.selected_airport_iata:
+            airport = db.scalar(
+                select(SupportedAirport).where(
+                    SupportedAirport.iata_code == conv.selected_airport_iata.upper()
+                )
+            )
+            if airport and airport.timezone:
+                airport_tz_name = airport.timezone
+
+        service_tz = cls._get_service_timezone(airport_tz_name)
+        now_in_tz = datetime.now(service_tz)
+        today_in_tz = now_in_tz.date()
+
+        # 3. If selected date is before today -> Reject as already passed
+        if parsed_date < today_in_tz:
+            error_msg = (
+                "❌ This date has already passed.\n"
+                "Please enter a valid future date.\n\n"
+                "Example: 25/08/2026"
+            )
+            return False, None, error_msg, "past_date_rejected"
+
+        # 4. If selected date is today -> Validate against minimum booking window / cutoff rule
+        if parsed_date == today_in_tz:
+            metadata = conv.flight_details_json if isinstance(conv.flight_details_json, dict) else {}
+            service_time_str = metadata.get("flight_time") or metadata.get("service_time")
+            if service_time_str:
+                try:
+                    time_parts = [int(p) for p in str(service_time_str).split(":")[:2]]
+                    scheduled_dt = datetime(
+                        parsed_date.year, parsed_date.month, parsed_date.day,
+                        time_parts[0], time_parts[1],
+                        tzinfo=service_tz
+                    )
+                    # Minimum 4 hours lead time required for same-day scheduled services
+                    if scheduled_dt <= now_in_tz or (scheduled_dt - now_in_tz).total_seconds() < 4 * 3600:
+                        error_msg = (
+                            "❌ This booking is too close to the scheduled time.\n"
+                            "Please choose a later available time or another date."
+                        )
+                        return False, None, error_msg, "cutoff_violation"
+                except Exception:
+                    pass
+
+        # 5. Valid date (tomorrow or later, or today with valid notice)
+        return True, parsed_date, None, "valid_date"
+
+    @classmethod
+    def _state_date_selection(cls, db: Session, conv: WhatsAppConversation, date_input: str) -> Dict[str, Any]:
+        """Strict date validation handler for WhatsApp booking flow."""
+        is_valid, parsed_date, err_msg, status_code = cls._validate_whatsapp_date(db, conv, date_input)
+        if not is_valid:
+            whatsapp_client.send_text_message(conv.phone_number, err_msg)
+            return {"status": status_code}
+
+        date_formatted = parsed_date.strftime("%d %B %Y")
         conv.booking_date = date_formatted
         cls._transition_state(db, conv, "PASSENGER_COUNT")
 

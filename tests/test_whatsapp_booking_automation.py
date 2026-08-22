@@ -1155,3 +1155,270 @@ def test_scenario_41_complete_separated_airport_service_booking(mock_text, mock_
     finally:
         db.close()
 
+
+# 42. Date Validation: Yesterday (Past Date) Rejected
+@patch("app.integrations.whatsapp.client.WhatsAppClient.send_text_message")
+def test_scenario_42_whatsapp_date_yesterday_rejected(mock_text):
+    mock_text.return_value = {"success": True, "message_id": "wamid.date_yest"}
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        phone = f"91{uuid.uuid4().int % 10**10:010d}"
+        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
+        conv.selected_service_name = "Platinum Service"
+        conv.selected_airport_iata = "LKO"
+        conv.flight_num = "6E224"
+        conv.current_state = "DATE_SELECTION"
+        db.commit()
+
+        # Calculate yesterday dynamically in IST
+        ist_now = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+        yesterday_str = (ist_now - timedelta(days=1)).strftime("%d/%m/%Y")
+
+        res = WhatsAppBookingStateMachine.process_incoming_event(db, phone, yesterday_str)
+        db.refresh(conv)
+
+        assert res["status"] == "past_date_rejected"
+        assert conv.current_state == "DATE_SELECTION"
+        assert conv.selected_service_name == "Platinum Service"
+        assert mock_text.called
+        sent_body = mock_text.call_args[0][1] if len(mock_text.call_args[0]) > 1 else mock_text.call_args[1].get("message_body", "")
+        assert "❌ This date has already passed" in sent_body
+        assert "Example: 25/08/2026" in sent_body
+    finally:
+        db.close()
+
+
+# 43. Date Validation: 7 Days Ago Rejected
+@patch("app.integrations.whatsapp.client.WhatsAppClient.send_text_message")
+def test_scenario_43_whatsapp_date_7_days_ago_rejected(mock_text):
+    mock_text.return_value = {"success": True, "message_id": "wamid.date_7days"}
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        phone = f"91{uuid.uuid4().int % 10**10:010d}"
+        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
+        conv.selected_service_name = "Elite Service"
+        conv.selected_airport_iata = "DEL"
+        conv.current_state = "DATE_SELECTION"
+        db.commit()
+
+        ist_now = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+        past_7_str = (ist_now - timedelta(days=7)).strftime("%d/%m/%Y")
+
+        res = WhatsAppBookingStateMachine.process_incoming_event(db, phone, past_7_str)
+        db.refresh(conv)
+
+        assert res["status"] == "past_date_rejected"
+        assert conv.current_state == "DATE_SELECTION"
+        assert conv.booking_date is None
+    finally:
+        db.close()
+
+
+# 44. Date Validation: Incomplete Format (e.g. 25/08) Rejected
+@patch("app.integrations.whatsapp.client.WhatsAppClient.send_text_message")
+@pytest.mark.parametrize("bad_date", ["25/08", "25-08", "08/2026", "25.08", "25"])
+def test_scenario_44_whatsapp_date_incomplete_format_rejected(mock_text, bad_date):
+    mock_text.return_value = {"success": True, "message_id": "wamid.date_incomp"}
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        phone = f"91{uuid.uuid4().int % 10**10:010d}"
+        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
+        conv.current_state = "DATE_SELECTION"
+        db.commit()
+
+        res = WhatsAppBookingStateMachine.process_incoming_event(db, phone, bad_date)
+        db.refresh(conv)
+
+        assert res["status"] == "invalid_date_format"
+        assert conv.current_state == "DATE_SELECTION"
+        assert mock_text.called
+        sent_body = mock_text.call_args[0][1] if len(mock_text.call_args[0]) > 1 else mock_text.call_args[1].get("message_body", "")
+        assert "Please enter the date in DD/MM/YYYY format" in sent_body
+    finally:
+        db.close()
+
+
+# 45. Date Validation: Invalid Calendar Days (32/08/2026, 29/02/2025)
+@patch("app.integrations.whatsapp.client.WhatsAppClient.send_text_message")
+@pytest.mark.parametrize("invalid_cal_date", ["32/08/2026", "29/02/2025", "31/04/2026", "00/12/2026", "15/13/2026"])
+def test_scenario_45_whatsapp_date_invalid_calendar_days_rejected(mock_text, invalid_cal_date):
+    mock_text.return_value = {"success": True, "message_id": "wamid.date_inval"}
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        phone = f"91{uuid.uuid4().int % 10**10:010d}"
+        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
+        conv.current_state = "DATE_SELECTION"
+        db.commit()
+
+        res = WhatsAppBookingStateMachine.process_incoming_event(db, phone, invalid_cal_date)
+        db.refresh(conv)
+
+        assert res["status"] == "invalid_date_format"
+        assert conv.current_state == "DATE_SELECTION"
+    finally:
+        db.close()
+
+
+# 46. Date Validation: Malformed Text & Noise
+@patch("app.integrations.whatsapp.client.WhatsAppClient.send_text_message")
+@pytest.mark.parametrize("noise", ["abc", "!@#$%", "tomorrow", "next monday", "2026-99-99", "   "])
+def test_scenario_46_whatsapp_date_malformed_text_rejected(mock_text, noise):
+    mock_text.return_value = {"success": True, "message_id": "wamid.date_noise"}
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        phone = f"91{uuid.uuid4().int % 10**10:010d}"
+        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
+        conv.current_state = "DATE_SELECTION"
+        db.commit()
+
+        res = WhatsAppBookingStateMachine.process_incoming_event(db, phone, noise)
+        db.refresh(conv)
+
+        assert res["status"] == "invalid_date_format"
+        assert conv.current_state == "DATE_SELECTION"
+    finally:
+        db.close()
+
+
+# 47. Date Validation: Same-Day Cutoff / Minimum Booking Window Violation
+@patch("app.integrations.whatsapp.client.WhatsAppClient.send_text_message")
+def test_scenario_47_whatsapp_date_today_cutoff_violation(mock_text):
+    mock_text.return_value = {"success": True, "message_id": "wamid.date_cutoff"}
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        phone = f"91{uuid.uuid4().int % 10**10:010d}"
+        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
+        conv.selected_service_name = "Meet & Assist"
+        conv.selected_airport_iata = "DEL"
+        conv.flight_num = "AI2424"
+        # Set a scheduled time only 1 hour from now
+        ist_now = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+        too_close_time = (ist_now + timedelta(hours=1)).strftime("%H:%M")
+        conv.flight_details_json = {"flight_time": too_close_time, "journey_type": "DEPARTURE"}
+        conv.current_state = "DATE_SELECTION"
+        db.commit()
+
+        today_str = ist_now.strftime("%d/%m/%Y")
+        res = WhatsAppBookingStateMachine.process_incoming_event(db, phone, today_str)
+        db.refresh(conv)
+
+        assert res["status"] == "cutoff_violation"
+        assert conv.current_state == "DATE_SELECTION"
+        assert mock_text.called
+        sent_body = mock_text.call_args[0][1] if len(mock_text.call_args[0]) > 1 else mock_text.call_args[1].get("message_body", "")
+        assert "❌ This booking is too close to the scheduled time" in sent_body
+    finally:
+        db.close()
+
+
+# 48. Date Validation: Tomorrow and Future Dates Allowed
+@patch("app.integrations.whatsapp.client.WhatsAppClient.send_text_message")
+def test_scenario_48_whatsapp_date_tomorrow_and_future_allowed(mock_text):
+    mock_text.return_value = {"success": True, "message_id": "wamid.date_ok"}
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        phone = f"91{uuid.uuid4().int % 10**10:010d}"
+        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
+        conv.selected_service_name = "Platinum Service"
+        conv.selected_airport_iata = "BOM"
+        conv.flight_num = "EK501"
+        conv.current_state = "DATE_SELECTION"
+        db.commit()
+
+        # Tomorrow
+        ist_now = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+        tomorrow_dt = ist_now + timedelta(days=1)
+        tomorrow_str = tomorrow_dt.strftime("%d/%m/%Y")
+
+        res = WhatsAppBookingStateMachine.process_incoming_event(db, phone, tomorrow_str)
+        db.refresh(conv)
+
+        assert res["status"] == "passenger_count_prompt_sent"
+        assert conv.current_state == "PASSENGER_COUNT"
+        assert conv.booking_date == tomorrow_dt.strftime("%d %B %Y")
+        assert mock_text.called
+        sent_body = mock_text.call_args[0][1] if len(mock_text.call_args[0]) > 1 else mock_text.call_args[1].get("message_body", "")
+        assert "Date Saved" in sent_body
+    finally:
+        db.close()
+
+
+# 49. Date Validation: Timezone Boundary Evaluation
+def test_scenario_49_whatsapp_date_timezone_boundary():
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        phone = f"91{uuid.uuid4().int % 10**10:010d}"
+        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
+        conv.selected_airport_iata = "DEL"
+
+        # Resolve timezone for DEL
+        tz = WhatsAppBookingStateMachine._get_service_timezone("Asia/Kolkata")
+        assert tz is not None
+
+        # Verify dynamic date calculation (never hardcoded)
+        now_dt = datetime.now(tz)
+        is_valid, parsed_d, err, status = WhatsAppBookingStateMachine._validate_whatsapp_date(
+            db, conv, now_dt.strftime("%d/%m/%Y")
+        )
+        # Today without cutoff violation is valid
+        assert is_valid is True
+        assert status == "valid_date"
+        assert parsed_d == now_dt.date()
+    finally:
+        db.close()
+
+
+# 50. Date Validation: Session Preservation on Invalid Date Inputs
+@patch("app.integrations.whatsapp.client.WhatsAppClient.send_text_message")
+def test_scenario_50_whatsapp_date_session_preservation_on_errors(mock_text):
+    mock_text.return_value = {"success": True, "message_id": "wamid.preserve"}
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        phone = f"91{uuid.uuid4().int % 10**10:010d}"
+        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
+        conv.selected_category = "Airport Services"
+        conv.selected_service_name = "Elite VIP Assist"
+        conv.selected_airport_iata = "DEL"
+        conv.selected_airport_name = "Indira Gandhi International Airport"
+        conv.flight_num = "UK955"
+        conv.total_amount = 4950.0
+        conv.current_state = "DATE_SELECTION"
+        db.commit()
+
+        # Send 3 invalid dates sequentially
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "10/01/2020")
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "invalid_date")
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "32/12/2026")
+
+        db.refresh(conv)
+
+        # State and all session fields must be completely preserved
+        assert conv.current_state == "DATE_SELECTION"
+        assert conv.selected_category == "Airport Services"
+        assert conv.selected_service_name == "Elite VIP Assist"
+        assert conv.selected_airport_iata == "DEL"
+        assert conv.flight_num == "UK955"
+        assert conv.total_amount == 4950.0
+
+        # Now send a valid future date
+        ist_now = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+        future_str = (ist_now + timedelta(days=15)).strftime("%d/%m/%Y")
+        res = WhatsAppBookingStateMachine.process_incoming_event(db, phone, future_str)
+        db.refresh(conv)
+
+        assert res["status"] == "passenger_count_prompt_sent"
+        assert conv.current_state == "PASSENGER_COUNT"
+        assert conv.booking_date is not None
+    finally:
+        db.close()
+
+
