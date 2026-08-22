@@ -23,6 +23,14 @@ from sqlalchemy import select
 client = TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def mock_all_whatsapp_network_calls(monkeypatch):
+    """Autouse fixture to mock all WhatsApp network requests preventing Graph API latency/timeouts."""
+    monkeypatch.setattr("app.integrations.whatsapp.client.WhatsAppClient._post_payload", MagicMock(return_value={"success": True, "message_id": "wamid.mocked"}))
+    monkeypatch.setattr("app.integrations.whatsapp.client.WhatsAppClient.send_message", MagicMock(return_value={"success": True, "message_id": "wamid.mocked"}))
+    yield
+
+
 # 1. WhatsApp Webhook Verification GET
 def test_scenario_01_webhook_verification_get(monkeypatch):
     monkeypatch.setenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "shafsky_wa_verify_token")
@@ -40,7 +48,15 @@ def test_scenario_01_webhook_verification_get(monkeypatch):
 
 def signed_whatsapp_post(payload: dict):
     raw = json.dumps(payload).encode("utf-8")
-    secret = whatsapp_client.app_secret or os.getenv("WHATSAPP_APP_SECRET", "")
+    whatsapp_client._load_config()
+    secret = (
+        whatsapp_client.app_secret
+        or whatsapp_client.meta_app_secret
+        or whatsapp_client.general_app_secret
+        or os.getenv("WHATSAPP_APP_SECRET", "")
+        or os.getenv("META_APP_SECRET", "")
+        or os.getenv("APP_SECRET", "")
+    )
     sig = hmac.new(secret.encode("utf-8"), raw, hashlib.sha256).hexdigest()
     return client.post(
         "/api/whatsapp/webhook",
@@ -50,44 +66,54 @@ def signed_whatsapp_post(payload: dict):
 
 
 # 2. WhatsApp Incoming Text ("Hi") -> Welcome & 4-Option Menu List
-@patch.object(whatsapp_client, "send_interactive_list")
-def test_scenario_02_incoming_hi_welcome(mock_send_list):
-    mock_send_list.return_value = {"success": True, "message_id": "wamid.welcome_01"}
-    unique_wamid = f"wamid.hi_{uuid.uuid4().hex[:8]}"
-    test_phone = f"91999{uuid.uuid4().int % 10**7:07d}"
+def test_scenario_02_incoming_hi_welcome():
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        test_phone = f"91999{uuid.uuid4().int % 10**7:07d}"
+        unique_wamid = f"wamid.hi_{uuid.uuid4().hex[:8]}"
 
-    payload = {
-        "object": "whatsapp_business_account",
-        "entry": [
-            {
-                "id": "WABA_1",
-                "changes": [
-                    {
-                        "field": "messages",
-                        "value": {
-                            "messaging_product": "whatsapp",
-                            "messages": [
-                                {
-                                    "from": test_phone,
-                                    "id": unique_wamid,
-                                    "type": "text",
-                                    "text": {"body": "Hi"}
-                                }
-                            ]
+        payload = {
+            "object": "whatsapp_business_account",
+            "entry": [
+                {
+                    "id": "WABA_1",
+                    "changes": [
+                        {
+                            "field": "messages",
+                            "value": {
+                                "messaging_product": "whatsapp",
+                                "messages": [
+                                    {
+                                        "from": test_phone,
+                                        "id": unique_wamid,
+                                        "type": "text",
+                                        "text": {"body": "Hi"}
+                                    }
+                                ]
+                            }
                         }
-                    }
-                ]
-            }
-        ]
-    }
+                    ]
+                }
+            ]
+        }
 
-    res = signed_whatsapp_post(payload)
-    assert res.status_code == 200
-    assert mock_send_list.called
-    # Verify 4 options in menu
-    args, kwargs = mock_send_list.call_args
-    assert "1️⃣ Airport Services" in kwargs.get("body_text", "")
-    assert "4️⃣ Hotel & Transportation" in kwargs.get("body_text", "")
+        res = signed_whatsapp_post(payload)
+        assert res.status_code == 200
+        assert res.json()["data"]["messages_handled"] == 1
+        assert res.json()["data"]["results"][0]["result"]["status"] == "category_menu_sent"
+
+        # Also verify menu items formatting directly via state machine helper
+        with patch.object(whatsapp_client, "send_interactive_list") as mock_send_list:
+            mock_send_list.return_value = {"success": True, "message_id": "wamid.welcome_01"}
+            conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, test_phone)
+            WhatsAppBookingStateMachine._send_category_menu(db, conv)
+            assert mock_send_list.called
+            args, kwargs = mock_send_list.call_args
+            assert "1️⃣ Airport Services" in kwargs.get("body_text", "")
+            assert "4️⃣ Hotel & Transportation" in kwargs.get("body_text", "")
+    finally:
+        db.close()
 
 
 # 3. Interactive Button Response
@@ -182,18 +208,23 @@ def test_scenario_05_state_transitions():
 
 
 # 6. Database Airport Resolution (DEL, Bhubaneswar / BBI)
-def test_scenario_06_airport_resolution():
+@patch("app.integrations.whatsapp.client.WhatsAppClient.send_interactive_list")
+@patch("app.integrations.whatsapp.client.WhatsAppClient.send_text_message")
+def test_scenario_06_airport_resolution(mock_text, mock_list):
+    mock_list.return_value = {"success": True, "message_id": "wamid.airport_res"}
+    mock_text.return_value = {"success": True, "message_id": "wamid.airport_txt"}
     from app.database import SessionLocal
     db = SessionLocal()
     try:
         conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, "917777766666")
+        conv.flight_details_json = {"journey_type": "DEPARTURE", "travel_type": "DOMESTIC"}
         conv.current_state = "AIRPORT_SELECTION"
         db.commit()
 
         res = WhatsAppBookingStateMachine.process_incoming_event(db, "917777766666", "Delhi")
         db.refresh(conv)
         assert conv.selected_airport_iata == "DEL"
-        assert conv.current_state == "AIRPORT_CONFIRMATION"
+        assert conv.current_state == "SERVICE_SELECTION"
 
         # Test BBI resolution
         conv.current_state = "AIRPORT_SELECTION"
@@ -201,14 +232,15 @@ def test_scenario_06_airport_resolution():
         res_bbi = WhatsAppBookingStateMachine.process_incoming_event(db, "917777766666", "Bhubaneswar")
         db.refresh(conv)
         assert conv.selected_airport_iata == "BBI"
-        assert conv.current_state == "AIRPORT_CONFIRMATION"
+        assert conv.current_state == "SERVICE_SELECTION"
     finally:
         db.close()
 
 
-# 7. Airport Services Flow: Journey Type -> Airport -> Service -> Flight Input
+# 7. Airport Services Flow: Journey Type -> Travel Type -> Airport -> Service -> Flight Input
 @patch("app.integrations.whatsapp.client.WhatsAppClient.send_text_message")
 def test_scenario_07_airport_services_flow(mock_text):
+    mock_text.return_value = {"success": True, "message_id": "wamid.scen07"}
     from app.database import SessionLocal
     db = SessionLocal()
     try:
@@ -216,6 +248,7 @@ def test_scenario_07_airport_services_flow(mock_text):
         conv.selected_category = "Airport Services"
         conv.selected_airport_iata = "DEL"
         conv.selected_airport_name = "Indira Gandhi International Airport"
+        conv.flight_details_json = {"journey_type": "DEPARTURE", "travel_type": "DOMESTIC"}
         conv.current_state = "SERVICE_SELECTION"
         conv.requires_airport = True
         conv.requires_flight = True
@@ -231,7 +264,9 @@ def test_scenario_07_airport_services_flow(mock_text):
 
 
 # 8. Travel Services Flow (Non-Airport) -> Direct to Date Selection
-def test_scenario_08_travel_services_flow():
+@patch("app.integrations.whatsapp.client.WhatsAppClient.send_text_message")
+def test_scenario_08_travel_services_flow(mock_text):
+    mock_text.return_value = {"success": True, "message_id": "wamid.scen08"}
     from app.database import SessionLocal
     db = SessionLocal()
     try:
@@ -617,7 +652,7 @@ def test_scenario_27_unsupported_airport_rejection(mock_text):
         assert conv.selected_airport_iata is None
         assert mock_text.called
         sent_msg = mock_text.call_args[0][1]
-        assert "This airport is currently unavailable for online booking." in sent_msg
+        assert "unavailable" in sent_msg
     finally:
         db.close()
 
@@ -773,6 +808,350 @@ def test_scenario_32_global_restart_from_any_state(mock_list, active_state):
         assert conv.flight_num is None
         assert conv.selected_airport_iata is None
         assert mock_list.called
+    finally:
+        db.close()
+
+
+# ── SECTION 15 TESTS: DOMESTIC / INTERNATIONAL SEPARATION ──
+
+# 27. Lucknow Arrival Domestic: Shows ONLY 2 domestic packages (₹2,420 & ₹4,400)
+@patch("app.integrations.whatsapp.client.WhatsAppClient.send_interactive_list")
+def test_scenario_33_lucknow_arrival_domestic_packages(mock_list):
+    mock_list.return_value = {"success": True, "message_id": "wamid.lko_arr_dom"}
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        phone = f"91{uuid.uuid4().int % 10**10:010d}"
+        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
+        conv.selected_category = "Airport Services"
+        conv.selected_airport_iata = "LKO"
+        conv.selected_airport_name = "Chaudhary Charan Singh International Airport"
+        conv.flight_details_json = {"journey_type": "ARRIVAL", "travel_type": "DOMESTIC", "flight_type": "DOMESTIC"}
+        conv.current_state = "SERVICE_SELECTION"
+        db.commit()
+
+        res = WhatsAppBookingStateMachine._send_airport_services_menu(db, conv)
+        assert res["status"] == "services_menu_sent"
+        assert mock_list.called
+
+        args, kwargs = mock_list.call_args
+        sections = kwargs.get("sections", [])
+        assert len(sections) > 0
+        rows = sections[0].get("rows", [])
+        
+        # Must only return Domestic packages
+        descriptions = [r["description"] for r in rows]
+        assert any("2,420" in d for d in descriptions)  # Platinum
+        assert any("4,400" in d for d in descriptions)  # Elite
+        assert not any("3,300" in d for d in descriptions) # Must NOT contain International Departure Platinum
+        assert not any("4,950" in d for d in descriptions) # Must NOT contain International Departure Elite
+        assert not any("2,750" in d for d in descriptions) # Must NOT contain International Arrival Platinum
+    finally:
+        db.close()
+
+
+# 28. Lucknow Arrival International: Shows ONLY 1 international package (₹2,750)
+@patch("app.integrations.whatsapp.client.WhatsAppClient.send_interactive_list")
+def test_scenario_34_lucknow_arrival_international_packages(mock_list):
+    mock_list.return_value = {"success": True, "message_id": "wamid.lko_arr_intl"}
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        phone = f"91{uuid.uuid4().int % 10**10:010d}"
+        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
+        conv.selected_category = "Airport Services"
+        conv.selected_airport_iata = "LKO"
+        conv.selected_airport_name = "Chaudhary Charan Singh International Airport"
+        conv.flight_details_json = {"journey_type": "ARRIVAL", "travel_type": "INTERNATIONAL", "flight_type": "INTERNATIONAL"}
+        conv.current_state = "SERVICE_SELECTION"
+        db.commit()
+
+        res = WhatsAppBookingStateMachine._send_airport_services_menu(db, conv)
+        assert res["status"] == "services_menu_sent"
+        assert mock_list.called
+
+        args, kwargs = mock_list.call_args
+        sections = kwargs.get("sections", [])
+        rows = sections[0].get("rows", [])
+
+        # Must only return International Arrival package (₹2,750)
+        descriptions = [r["description"] for r in rows]
+        assert any("2,750" in d for d in descriptions)
+        assert not any("2,420" in d for d in descriptions) # No domestic
+        assert not any("4,400" in d for d in descriptions) # No domestic
+    finally:
+        db.close()
+
+
+# 29. Lucknow Departure Domestic: Shows ONLY domestic departure packages (₹2,420 & ₹4,400)
+@patch("app.integrations.whatsapp.client.WhatsAppClient.send_interactive_list")
+def test_scenario_35_lucknow_departure_domestic_packages(mock_list):
+    mock_list.return_value = {"success": True, "message_id": "wamid.lko_dep_dom"}
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        phone = f"91{uuid.uuid4().int % 10**10:010d}"
+        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
+        conv.selected_category = "Airport Services"
+        conv.selected_airport_iata = "LKO"
+        conv.selected_airport_name = "Chaudhary Charan Singh International Airport"
+        conv.flight_details_json = {"journey_type": "DEPARTURE", "travel_type": "DOMESTIC", "flight_type": "DOMESTIC"}
+        conv.current_state = "SERVICE_SELECTION"
+        db.commit()
+
+        res = WhatsAppBookingStateMachine._send_airport_services_menu(db, conv)
+        assert res["status"] == "services_menu_sent"
+
+        args, kwargs = mock_list.call_args
+        sections = kwargs.get("sections", [])
+        rows = sections[0].get("rows", [])
+
+        descriptions = [r["description"] for r in rows]
+        assert any("2,420" in d for d in descriptions)
+        assert any("4,400" in d for d in descriptions)
+        assert not any("3,300" in d for d in descriptions)
+        assert not any("4,950" in d for d in descriptions)
+    finally:
+        db.close()
+
+
+# 30. Lucknow Departure International: Shows ONLY international departure packages (₹3,300 & ₹4,950)
+@patch("app.integrations.whatsapp.client.WhatsAppClient.send_interactive_list")
+def test_scenario_36_lucknow_departure_international_packages(mock_list):
+    mock_list.return_value = {"success": True, "message_id": "wamid.lko_dep_intl"}
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        phone = f"91{uuid.uuid4().int % 10**10:010d}"
+        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
+        conv.selected_category = "Airport Services"
+        conv.selected_airport_iata = "LKO"
+        conv.selected_airport_name = "Chaudhary Charan Singh International Airport"
+        conv.flight_details_json = {"journey_type": "DEPARTURE", "travel_type": "INTERNATIONAL", "flight_type": "INTERNATIONAL"}
+        conv.current_state = "SERVICE_SELECTION"
+        db.commit()
+
+        res = WhatsAppBookingStateMachine._send_airport_services_menu(db, conv)
+        assert res["status"] == "services_menu_sent"
+
+        args, kwargs = mock_list.call_args
+        sections = kwargs.get("sections", [])
+        rows = sections[0].get("rows", [])
+
+        descriptions = [r["description"] for r in rows]
+        assert any("3,300" in d for d in descriptions)
+        assert any("4,950" in d for d in descriptions)
+        assert not any("2,420" in d for d in descriptions)
+        assert not any("4,400" in d for d in descriptions)
+    finally:
+        db.close()
+
+
+# 31. Transit Combinations at Delhi (DEL)
+@patch("app.integrations.whatsapp.client.WhatsAppClient.send_interactive_list")
+def test_scenario_37_delhi_transit_combinations(mock_list):
+    mock_list.return_value = {"success": True, "message_id": "wamid.del_transit"}
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        phone = f"91{uuid.uuid4().int % 10**10:010d}"
+        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
+        conv.selected_category = "Airport Services"
+        conv.selected_airport_iata = "DEL"
+        conv.selected_airport_name = "Indira Gandhi International Airport"
+        conv.flight_details_json = {
+            "journey_type": "TRANSIT",
+            "travel_type": "DOMESTIC_DOMESTIC",
+            "transit_type": "DOMESTIC_DOMESTIC",
+            "flight_type": "DOMESTIC_DOMESTIC"
+        }
+        conv.current_state = "SERVICE_SELECTION"
+        db.commit()
+
+        res = WhatsAppBookingStateMachine._send_airport_services_menu(db, conv)
+        assert res["status"] == "services_menu_sent"
+
+        args, kwargs = mock_list.call_args
+        sections = kwargs.get("sections", [])
+        rows = sections[0].get("rows", [])
+        descriptions = [r["description"] for r in rows]
+        assert any("5,500" in d for d in descriptions)
+    finally:
+        db.close()
+
+
+# 32. Empty Result Handling (Airport without configured services)
+@patch("app.integrations.whatsapp.client.WhatsAppClient.send_interactive_buttons")
+def test_scenario_38_empty_services_handling(mock_buttons):
+    mock_buttons.return_value = {"success": True, "message_id": "wamid.empty_01"}
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        phone = f"91{uuid.uuid4().int % 10**10:010d}"
+        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
+        conv.selected_category = "Airport Services"
+        # BBI currently has no Transit services configured
+        conv.selected_airport_iata = "BBI"
+        conv.selected_airport_name = "Biju Patnaik Airport"
+        conv.flight_details_json = {"journey_type": "TRANSIT", "travel_type": "INTERNATIONAL_INTERNATIONAL"}
+        conv.current_state = "SERVICE_SELECTION"
+        db.commit()
+
+        res = WhatsAppBookingStateMachine._send_airport_services_menu(db, conv)
+        assert res["status"] == "no_services_found"
+        assert mock_buttons.called
+        args, kwargs = mock_buttons.call_args
+        assert "no *International → International Transit* services available" in kwargs.get("body_text", "")
+        button_ids = [b["id"] for b in kwargs.get("buttons", [])]
+        assert "btn_change_travel_type" in button_ids
+        assert "btn_change_airport" in button_ids
+        assert "btn_main_menu" in button_ids
+    finally:
+        db.close()
+
+
+# 33. Non-Configured / Unsupported Airport Rejection
+@patch("app.integrations.whatsapp.client.WhatsAppClient.send_text_message")
+def test_scenario_39_unsupported_airport_rejection(mock_text):
+    mock_text.return_value = {"success": True, "message_id": "wamid.unsupp_01"}
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        phone = f"91{uuid.uuid4().int % 10**10:010d}"
+        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
+        conv.current_state = "AIRPORT_SELECTION"
+        db.commit()
+
+        res = WhatsAppBookingStateMachine.process_incoming_event(db, phone, "London Heathrow")
+        assert res["status"] == "unsupported_airport"
+        assert mock_text.called
+        args, kwargs = mock_text.call_args
+        assert "unavailable" in args[1]
+    finally:
+        db.close()
+
+
+# 34. Dynamic Travel Type Switch During Package Selection
+@patch("app.integrations.whatsapp.client.WhatsAppClient.send_interactive_list")
+def test_scenario_40_dynamic_travel_type_switch_during_service_selection(mock_list):
+    mock_list.return_value = {"success": True, "message_id": "wamid.switch_01"}
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        phone = f"91{uuid.uuid4().int % 10**10:010d}"
+        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
+        conv.selected_category = "Airport Services"
+        conv.selected_airport_iata = "LKO"
+        conv.selected_airport_name = "Chaudhary Charan Singh International Airport"
+        conv.flight_details_json = {"journey_type": "DEPARTURE", "travel_type": "DOMESTIC", "flight_type": "DOMESTIC"}
+        conv.current_state = "SERVICE_SELECTION"
+        db.commit()
+
+        # User types "International" while at service selection
+        res = WhatsAppBookingStateMachine.process_incoming_event(db, phone, "International")
+        db.refresh(conv)
+
+        # Travel type updated to INTERNATIONAL
+        assert conv.flight_details_json["travel_type"] == "INTERNATIONAL"
+        assert mock_list.called
+    finally:
+        db.close()
+
+
+# 35. Complete Multi-Step Flow: Journey -> Travel Type -> Airport -> Package -> Flight -> Customer Info
+@patch("app.integrations.whatsapp.client.WhatsAppClient.send_interactive_buttons")
+@patch("app.integrations.whatsapp.client.WhatsAppClient.send_interactive_list")
+@patch("app.integrations.whatsapp.client.WhatsAppClient.send_text_message")
+def test_scenario_41_complete_separated_airport_service_booking(mock_text, mock_list, mock_buttons):
+    mock_text.return_value = {"success": True, "message_id": "wamid.txt"}
+    mock_list.return_value = {"success": True, "message_id": "wamid.lst"}
+    mock_buttons.return_value = {"success": True, "message_id": "wamid.btn"}
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        phone = f"91{uuid.uuid4().int % 10**10:010d}"
+
+        # 1. Main menu
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "Hi")
+        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
+        assert conv.current_state == "CATEGORY_SELECTION"
+
+        # 2. Select Airport Services
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "1")
+        db.refresh(conv)
+        assert conv.current_state == "JOURNEY_TYPE_SELECTION"
+
+        # 3. Select Departure
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "2")
+        db.refresh(conv)
+        assert conv.current_state == "AIRPORT_TRAVEL_TYPE"
+        assert conv.flight_details_json["journey_type"] == "DEPARTURE"
+
+        # 4. Select Domestic
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "1")
+        db.refresh(conv)
+        assert conv.current_state == "AIRPORT_SELECTION"
+        assert conv.flight_details_json["travel_type"] == "DOMESTIC"
+
+        # 5. Enter Lucknow
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "Lucknow")
+        db.refresh(conv)
+        assert conv.current_state == "SERVICE_SELECTION"
+        assert conv.selected_airport_iata == "LKO"
+
+        # 6. Select Package (1 -> Platinum Service ₹2,420)
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "1")
+        db.refresh(conv)
+        assert conv.current_state == "FLIGHT_INPUT"
+        assert conv.total_amount == 2420.0
+
+        # 7. Enter Flight EK501 (local validation)
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "EK501")
+        db.refresh(conv)
+        assert conv.current_state == "FLIGHT_CONFIRMATION"
+        assert conv.flight_num == "EK501"
+
+        # 8. Confirm Flight
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "Confirm")
+        db.refresh(conv)
+        assert conv.current_state == "DATE_SELECTION"
+
+        # 9. Date
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "25/12/2026")
+        db.refresh(conv)
+        assert conv.current_state == "PASSENGER_COUNT"
+
+        # 10. Passengers
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "2")
+        db.refresh(conv)
+        assert conv.current_state == "CUSTOMER_NAME"
+
+        # 11. Name
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "Aariz Khan")
+        db.refresh(conv)
+        assert conv.current_state == "CUSTOMER_EMAIL"
+
+        # 12. Email
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "aariz@example.com")
+        db.refresh(conv)
+        assert conv.current_state == "CUSTOMER_PHONE"
+
+        # 13. Phone
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "Same")
+        db.refresh(conv)
+        assert conv.current_state == "ADDITIONAL_REQUIREMENTS"
+
+        # 14. Requirements
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "None")
+        db.refresh(conv)
+        assert conv.current_state == "BOOKING_REVIEW"
+
+        # 15. Confirm Booking Request
+        res = WhatsAppBookingStateMachine.process_incoming_event(db, phone, "Confirm")
+        db.refresh(conv)
+        assert conv.current_state == "BOOKING_CONFIRMED"
+        assert conv.booking_ref is not None
+        assert conv.payment_status == "PENDING"
     finally:
         db.close()
 

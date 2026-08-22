@@ -217,6 +217,7 @@ class WhatsAppBookingStateMachine:
             return {"status": "back", "state": conv.current_state}
 
         # ── 3. ROUTE BY STATE ──
+        # ── 3. ROUTE BY STATE ──
         state = conv.current_state
 
         if state in ["START", "CANCELLED", "BOOKING_CONFIRMED"]:
@@ -225,8 +226,14 @@ class WhatsAppBookingStateMachine:
         elif state == "CATEGORY_SELECTION":
             return cls._state_category_selection(db, conv, user_input, input_id)
 
-        elif state == "JOURNEY_TYPE_SELECTION":
+        elif state in ["JOURNEY_TYPE_SELECTION", "AIRPORT_JOURNEY_TYPE"]:
             return cls._state_journey_type_selection(db, conv, user_input, input_id)
+
+        elif state == "AIRPORT_TRAVEL_TYPE":
+            return cls._state_travel_type_selection(db, conv, user_input, input_id)
+
+        elif state == "AIRPORT_TRANSIT_TYPE":
+            return cls._state_transit_type_selection(db, conv, user_input, input_id)
 
         elif state == "AIRPORT_SELECTION":
             return cls._state_airport_selection(db, conv, user_input)
@@ -234,7 +241,7 @@ class WhatsAppBookingStateMachine:
         elif state == "AIRPORT_CONFIRMATION":
             return cls._state_airport_confirmation(db, conv, user_input, input_id)
 
-        elif state == "SERVICE_SELECTION":
+        elif state in ["SERVICE_SELECTION", "AIRPORT_PACKAGE_SELECTION"]:
             return cls._state_service_selection(db, conv, user_input, input_id)
 
         elif state == "HOTEL_TRANSPORT_SUBMENU":
@@ -294,17 +301,28 @@ class WhatsAppBookingStateMachine:
         curr = conv.current_state
         if curr in ["CATEGORY_SELECTION", "START"]:
             cls._state_start(db, conv, "Hi")
-        elif curr == "JOURNEY_TYPE_SELECTION":
+        elif curr in ["JOURNEY_TYPE_SELECTION", "AIRPORT_JOURNEY_TYPE"]:
             cls._send_category_menu(db, conv)
-        elif curr == "AIRPORT_SELECTION":
+        elif curr == "AIRPORT_TRAVEL_TYPE":
             cls._transition_state(db, conv, "JOURNEY_TYPE_SELECTION")
             cls._prompt_journey_type(conv)
+        elif curr == "AIRPORT_TRANSIT_TYPE":
+            cls._transition_state(db, conv, "JOURNEY_TYPE_SELECTION")
+            cls._prompt_journey_type(conv)
+        elif curr == "AIRPORT_SELECTION":
+            jt = (conv.flight_details_json or {}).get("journey_type", "DEPARTURE") if isinstance(conv.flight_details_json, dict) else "DEPARTURE"
+            if jt == "TRANSIT":
+                cls._transition_state(db, conv, "AIRPORT_TRANSIT_TYPE")
+                cls._prompt_transit_type(conv)
+            else:
+                cls._transition_state(db, conv, "AIRPORT_TRAVEL_TYPE")
+                cls._prompt_travel_type(conv, jt.title())
         elif curr == "AIRPORT_CONFIRMATION":
             conv.selected_airport_iata = None
             conv.selected_airport_name = None
             cls._transition_state(db, conv, "AIRPORT_SELECTION")
             whatsapp_client.send_text_message(conv.phone_number, "Please enter your Airport Name, City, or IATA Code (e.g., Delhi, DEL):")
-        elif curr == "SERVICE_SELECTION":
+        elif curr in ["SERVICE_SELECTION", "AIRPORT_PACKAGE_SELECTION"]:
             if conv.requires_airport:
                 cls._transition_state(db, conv, "AIRPORT_SELECTION")
                 whatsapp_client.send_text_message(conv.phone_number, "Please enter your Airport Name, City, or IATA Code (e.g., Delhi, DEL):")
@@ -314,14 +332,20 @@ class WhatsAppBookingStateMachine:
             conv.flight_num = None
             conv.flight_details_json = None
             cls._transition_state(db, conv, "SERVICE_SELECTION")
-            cls._send_service_menu(db, conv, conv.selected_category or "Airport Services")
+            if conv.requires_airport:
+                cls._send_airport_services_menu(db, conv)
+            else:
+                cls._send_service_menu(db, conv, conv.selected_category or "Airport Services")
         elif curr == "DATE_SELECTION":
             if conv.requires_flight:
                 cls._transition_state(db, conv, "FLIGHT_INPUT")
                 whatsapp_client.send_text_message(conv.phone_number, "Please enter your Flight Number (e.g., *EK501*, *AI2424*):")
             else:
                 cls._transition_state(db, conv, "SERVICE_SELECTION")
-                cls._send_service_menu(db, conv, conv.selected_category or "Airport Services")
+                if conv.requires_airport:
+                    cls._send_airport_services_menu(db, conv)
+                else:
+                    cls._send_service_menu(db, conv, conv.selected_category or "Airport Services")
         elif curr == "PASSENGER_COUNT":
             cls._transition_state(db, conv, "DATE_SELECTION")
             whatsapp_client.send_text_message(conv.phone_number, "Please enter your Date of Travel (DD/MM/YYYY or YYYY-MM-DD):")
@@ -456,18 +480,21 @@ class WhatsAppBookingStateMachine:
 
         return {"status": "category_selected"}
 
-    # ── 1. AIRPORT SERVICES FLOW ──
+    # ── 1. AIRPORT SERVICES FLOW (JOURNEY TYPE -> TRAVEL TYPE -> AIRPORT -> MATCHING SERVICES) ──
 
     @classmethod
     def _prompt_journey_type(cls, conv: WhatsAppConversation) -> Dict[str, Any]:
         """Prompts customer for Arrival / Departure / Transit."""
         body_text = (
             "✈️ *Airport Services*\n\n"
-            "Please select your journey type:"
+            "Please select your journey type:\n\n"
+            "1. Arrival\n"
+            "2. Departure\n"
+            "3. Transit"
         )
         buttons = [
-            {"id": "btn_jt_departure", "title": "Departure"},
             {"id": "btn_jt_arrival", "title": "Arrival"},
+            {"id": "btn_jt_departure", "title": "Departure"},
             {"id": "btn_jt_transit", "title": "Transit"}
         ]
         res = whatsapp_client.send_interactive_buttons(
@@ -480,10 +507,10 @@ class WhatsAppBookingStateMachine:
             fallback = (
                 "✈️ *Airport Services*\n\n"
                 "Please select your journey type:\n"
-                "1. Departure\n"
-                "2. Arrival\n"
+                "1. Arrival\n"
+                "2. Departure\n"
                 "3. Transit\n\n"
-                "Reply *Departure*, *Arrival*, or *Transit*."
+                "Reply *1* (Arrival), *2* (Departure), or *3* (Transit)."
             )
             whatsapp_client.send_text_message(conv.phone_number, fallback)
 
@@ -491,27 +518,174 @@ class WhatsAppBookingStateMachine:
 
     @classmethod
     def _state_journey_type_selection(cls, db: Session, conv: WhatsAppConversation, user_text: str, input_id: Optional[str]) -> Dict[str, Any]:
-        """Processes journey type selection."""
+        """Processes journey type selection and branches to Travel Type or Transit Type."""
         norm = (input_id or user_text).strip().upper()
         jt = None
-        if "DEPARTURE" in norm or norm == "1" or norm == "btn_jt_departure":
-            jt = "DEPARTURE"
-        elif "ARRIVAL" in norm or norm == "2" or norm == "btn_jt_arrival":
+        if norm in ["1", "ARRIVAL", "BTN_JT_ARRIVAL"] or "ARRIVAL" in norm:
             jt = "ARRIVAL"
-        elif "TRANSIT" in norm or norm == "3" or norm == "btn_jt_transit":
+        elif norm in ["2", "DEPARTURE", "BTN_JT_DEPARTURE"] or "DEPARTURE" in norm:
+            jt = "DEPARTURE"
+        elif norm in ["3", "TRANSIT", "BTN_JT_TRANSIT"] or "TRANSIT" in norm:
             jt = "TRANSIT"
 
         if not jt:
-            whatsapp_client.send_text_message(conv.phone_number, "Please select *Departure*, *Arrival*, or *Transit*.")
+            whatsapp_client.send_text_message(
+                conv.phone_number,
+                "Please select a valid journey type:\n1. Arrival\n2. Departure\n3. Transit"
+            )
             return {"status": "invalid_journey_type"}
 
         # Store journey type in flight_details_json metadata
         conv.flight_details_json = {"journey_type": jt}
+        db.commit()
+
+        if jt == "TRANSIT":
+            cls._transition_state(db, conv, "AIRPORT_TRANSIT_TYPE")
+            return cls._prompt_transit_type(conv)
+        else:
+            cls._transition_state(db, conv, "AIRPORT_TRAVEL_TYPE")
+            return cls._prompt_travel_type(conv, jt.title())
+
+    @classmethod
+    def _prompt_travel_type(cls, conv: WhatsAppConversation, journey_name: str) -> Dict[str, Any]:
+        """Prompts customer for Domestic or International travel type for Arrival/Departure."""
+        body_text = (
+            f"*{journey_name}* selected.\n\n"
+            "Please select your travel type:\n\n"
+            "1. Domestic\n"
+            "2. International"
+        )
+        buttons = [
+            {"id": "btn_travel_domestic", "title": "Domestic"},
+            {"id": "btn_travel_international", "title": "International"}
+        ]
+        res = whatsapp_client.send_interactive_buttons(
+            to_phone=conv.phone_number,
+            body_text=body_text,
+            buttons=buttons,
+            header_text=f"{journey_name} Travel Type"
+        )
+        if not res.get("success"):
+            fallback = (
+                f"*{journey_name}* selected.\n\n"
+                "Please select your travel type:\n"
+                "1. Domestic\n"
+                "2. International\n\n"
+                "Reply *1* for Domestic or *2* for International."
+            )
+            whatsapp_client.send_text_message(conv.phone_number, fallback)
+
+        return {"status": "travel_type_prompt_sent"}
+
+    @classmethod
+    def _state_travel_type_selection(cls, db: Session, conv: WhatsAppConversation, user_text: str, input_id: Optional[str]) -> Dict[str, Any]:
+        """Processes Domestic vs International travel type selection."""
+        norm = (input_id or user_text).strip().upper()
+        tt = None
+        if norm in ["1", "DOMESTIC", "BTN_TRAVEL_DOMESTIC"] or "DOMESTIC" in norm:
+            tt = "DOMESTIC"
+        elif norm in ["2", "INTERNATIONAL", "INTL", "BTN_TRAVEL_INTERNATIONAL"] or "INTERNATIONAL" in norm or "INTL" in norm:
+            tt = "INTERNATIONAL"
+
+        if not tt:
+            whatsapp_client.send_text_message(
+                conv.phone_number,
+                "Please select a valid travel type:\n1. Domestic\n2. International"
+            )
+            return {"status": "invalid_travel_type"}
+
+        jt = (conv.flight_details_json or {}).get("journey_type", "DEPARTURE") if isinstance(conv.flight_details_json, dict) else "DEPARTURE"
+        conv.flight_details_json = {
+            "journey_type": jt,
+            "travel_type": tt,
+            "flight_type": tt
+        }
+        db.commit()
+
         cls._transition_state(db, conv, "AIRPORT_SELECTION")
 
         msg = (
-            f"Journey Type: *{jt.title()}*\n\n"
-            "Please enter your Airport Name, City, or IATA Code (e.g., *Delhi*, *DEL*, *Indira Gandhi*):"
+            f"*{tt.title()}* selected.\n\n"
+            "Please enter your Airport Name, City, or IATA Code (e.g., *Delhi*, *DEL*, *Lucknow*):"
+        )
+        whatsapp_client.send_text_message(conv.phone_number, msg)
+        return {"status": "airport_prompt_sent"}
+
+    @classmethod
+    def _prompt_transit_type(cls, conv: WhatsAppConversation) -> Dict[str, Any]:
+        """Prompts customer for Transit combinations."""
+        body_text = (
+            "🔄 *Airport Transit Services*\n\n"
+            "Please select your transit type:\n\n"
+            "1. Domestic → Domestic\n"
+            "2. Domestic → International\n"
+            "3. International → Domestic\n"
+            "4. International → International"
+        )
+        rows = [
+            {"id": "btn_transit_dom_dom", "title": "Domestic → Domestic", "description": "Domestic flight to domestic flight"},
+            {"id": "btn_transit_dom_intl", "title": "Domestic → Intl", "description": "Domestic flight connecting to international"},
+            {"id": "btn_transit_intl_dom", "title": "Intl → Domestic", "description": "International flight connecting to domestic"},
+            {"id": "btn_transit_intl_intl", "title": "Intl → Intl", "description": "International to international transfer"}
+        ]
+        sections = [{"title": "Transit Options", "rows": rows}]
+
+        res = whatsapp_client.send_interactive_list(
+            to_phone=conv.phone_number,
+            body_text=body_text,
+            button_title="Select Transit",
+            sections=sections,
+            header_text="Transit Options"
+        )
+        if not res.get("success"):
+            fallback = (
+                "🔄 *Airport Transit Services*\n\n"
+                "Please select your transit type:\n"
+                "1. Domestic → Domestic\n"
+                "2. Domestic → International\n"
+                "3. International → Domestic\n"
+                "4. International → International\n\n"
+                "Reply with *1*, *2*, *3*, or *4*."
+            )
+            whatsapp_client.send_text_message(conv.phone_number, fallback)
+
+        return {"status": "transit_type_prompt_sent"}
+
+    @classmethod
+    def _state_transit_type_selection(cls, db: Session, conv: WhatsAppConversation, user_text: str, input_id: Optional[str]) -> Dict[str, Any]:
+        """Processes Transit Type selection."""
+        norm = (input_id or user_text).strip().upper()
+        tt = None
+        if norm in ["1", "BTN_TRANSIT_DOM_DOM", "DOMESTIC_DOMESTIC", "DOMESTIC TO DOMESTIC", "DOMESTIC -> DOMESTIC", "DOMESTIC - DOMESTIC", "DOM_DOM"] or ("DOMESTIC" in norm and "INT" not in norm):
+            tt = "DOMESTIC_DOMESTIC"
+        elif norm in ["2", "BTN_TRANSIT_DOM_INTL", "DOMESTIC_INTERNATIONAL", "DOMESTIC TO INTERNATIONAL", "DOMESTIC -> INTL", "DOMESTIC -> INTERNATIONAL", "DOM_INTL"]:
+            tt = "DOMESTIC_INTERNATIONAL"
+        elif norm in ["3", "BTN_TRANSIT_INTL_DOM", "INTERNATIONAL_DOMESTIC", "INTERNATIONAL TO DOMESTIC", "INTL -> DOMESTIC", "INTL_DOM"]:
+            tt = "INTERNATIONAL_DOMESTIC"
+        elif norm in ["4", "BTN_TRANSIT_INTL_INTL", "INTERNATIONAL_INTERNATIONAL", "INTERNATIONAL TO INTERNATIONAL", "INTL -> INTL", "INTL_INTL"]:
+            tt = "INTERNATIONAL_INTERNATIONAL"
+
+        if not tt:
+            whatsapp_client.send_text_message(
+                conv.phone_number,
+                "Please select a valid transit type (1-4):\n1. Domestic → Domestic\n2. Domestic → International\n3. International → Domestic\n4. International → International"
+            )
+            return {"status": "invalid_transit_type"}
+
+        display_label = tt.replace("_", " → ").title()
+        conv.flight_details_json = {
+            "journey_type": "TRANSIT",
+            "travel_type": tt,
+            "transit_type": tt,
+            "flight_type": tt
+        }
+        db.commit()
+
+        cls._transition_state(db, conv, "AIRPORT_SELECTION")
+
+        msg = (
+            f"Transit Type: *{display_label}*\n\n"
+            "Please enter your Airport Name, City, or IATA Code (e.g., *Delhi*, *DEL*, *Mumbai*):"
         )
         whatsapp_client.send_text_message(conv.phone_number, msg)
         return {"status": "airport_prompt_sent"}
@@ -525,7 +699,7 @@ class WhatsAppBookingStateMachine:
         """
         query_clean = query.strip()
         if not query_clean:
-            whatsapp_client.send_text_message(conv.phone_number, "Please enter an Airport Name, City, or IATA Code (e.g. Delhi, DEL).")
+            whatsapp_client.send_text_message(conv.phone_number, "Please enter an Airport Name, City, or IATA Code (e.g. Delhi, DEL, Lucknow).")
             return {"status": "empty_airport_query"}
 
         # Search exclusively in database SupportedAirport table where is_supported=True and is_active=True
@@ -545,7 +719,7 @@ class WhatsAppBookingStateMachine:
             airport = None
 
         if not airport:
-            msg = "This airport is currently unavailable for online booking."
+            msg = "Sorry, Airport Services are currently unavailable at this airport."
             whatsapp_client.send_text_message(conv.phone_number, msg)
             return {"status": "unsupported_airport"}
 
@@ -553,38 +727,9 @@ class WhatsAppBookingStateMachine:
         conv.selected_airport_iata = airport.iata_code
         conv.selected_airport_city = airport.city
         conv.selected_airport_country = airport.country
-        cls._transition_state(db, conv, "AIRPORT_CONFIRMATION")
+        cls._transition_state(db, conv, "SERVICE_SELECTION")
 
-        body_text = (
-            f"📍 *Airport Resolved*\n\n"
-            f"{airport.airport_name}\n"
-            f"{airport.iata_code}\n"
-            f"{airport.city}\n\n"
-            "Please confirm if this is correct:"
-        )
-
-        buttons = [
-            {"id": "btn_confirm_airport", "title": "Confirm"},
-            {"id": "btn_change_airport", "title": "Change Airport"}
-        ]
-
-        res = whatsapp_client.send_interactive_buttons(
-            to_phone=conv.phone_number,
-            body_text=body_text,
-            buttons=buttons,
-            header_text="Confirm Airport"
-        )
-        if not res.get("success"):
-            fallback = (
-                f"📍 *Airport Resolved*\n\n"
-                f"{airport.airport_name}\n"
-                f"{airport.iata_code}\n"
-                f"{airport.city}\n\n"
-                "Reply *Confirm* or *Change Airport*."
-            )
-            whatsapp_client.send_text_message(conv.phone_number, fallback)
-
-        return {"status": "airport_confirmation_prompt"}
+        return cls._send_airport_services_menu(db, conv)
 
     @classmethod
     def _state_airport_confirmation(cls, db: Session, conv: WhatsAppConversation, user_text: str, input_id: Optional[str]) -> Dict[str, Any]:
@@ -597,7 +742,7 @@ class WhatsAppBookingStateMachine:
             conv.selected_airport_city = None
             conv.selected_airport_country = None
             cls._transition_state(db, conv, "AIRPORT_SELECTION")
-            msg = "Please enter your Airport Name, City, or IATA Code (e.g., Delhi, DEL):"
+            msg = "Please enter your Airport Name, City, or IATA Code (e.g., Delhi, DEL, Lucknow):"
             whatsapp_client.send_text_message(conv.phone_number, msg)
             return {"status": "reprompt_airport"}
 
@@ -611,58 +756,111 @@ class WhatsAppBookingStateMachine:
     @classmethod
     def _send_airport_services_menu(cls, db: Session, conv: WhatsAppConversation) -> Dict[str, Any]:
         """
-        Queries and presents ONLY services/packages configured for the selected airport and journey type in the database.
+        Queries and presents ONLY services/packages configured for the selected:
+        airport + journey_type + travel_type / transit_type
+        from the database source of truth.
         """
         iata = conv.selected_airport_iata
-        jt = (conv.flight_details_json or {}).get("journey_type", "DEPARTURE").upper() if isinstance(conv.flight_details_json, dict) else "DEPARTURE"
+        metadata = conv.flight_details_json if isinstance(conv.flight_details_json, dict) else {}
+        jt = metadata.get("journey_type", "DEPARTURE").upper()
+        tt = metadata.get("travel_type", "DOMESTIC").upper()
 
         # Query database SupportedAirport
         airport = db.execute(select(SupportedAirport).where(SupportedAirport.iata_code == iata)).scalar_one_or_none()
+        if not airport:
+            whatsapp_client.send_text_message(conv.phone_number, "Sorry, Airport Services are currently unavailable at this airport.")
+            return {"status": "unsupported_airport"}
 
-        available_services = []
-        if airport:
-            # Query AirportService mappings for this airport and journey type
-            stmt = (
-                select(AirportService, Service)
-                .join(Service, AirportService.service_id == Service.id)
-                .where(
-                    AirportService.airport_id == airport.id,
-                    AirportService.journey_type == jt,
-                    AirportService.is_available == True,
-                    Service.is_active == True
-                )
-                .order_by(Service.display_order)
+        # Determine matching flight_types in AirportService
+        if jt == "TRANSIT":
+            if tt in ["DOMESTIC_DOMESTIC", "DOMESTIC"]:
+                flight_types = ["DOMESTIC_DOMESTIC", "DOMESTIC", "ALL"]
+            elif tt == "DOMESTIC_INTERNATIONAL":
+                flight_types = ["DOMESTIC_INTERNATIONAL", "ALL"]
+            elif tt == "INTERNATIONAL_DOMESTIC":
+                flight_types = ["INTERNATIONAL_DOMESTIC", "ALL"]
+            elif tt in ["INTERNATIONAL_INTERNATIONAL", "INTERNATIONAL"]:
+                flight_types = ["INTERNATIONAL_INTERNATIONAL", "INTERNATIONAL", "ALL"]
+            else:
+                flight_types = [tt, "ALL"]
+        else:
+            if tt == "DOMESTIC":
+                flight_types = ["DOMESTIC", "ALL"]
+            elif tt == "INTERNATIONAL":
+                flight_types = ["INTERNATIONAL", "ALL"]
+            else:
+                flight_types = [tt, "ALL"]
+
+        stmt = (
+            select(AirportService, Service)
+            .join(Service, AirportService.service_id == Service.id)
+            .where(
+                AirportService.airport_id == airport.id,
+                AirportService.journey_type == jt,
+                AirportService.flight_type.in_(flight_types),
+                AirportService.is_available.is_(True),
+                Service.is_active.is_(True)
             )
-            rows = db.execute(stmt).all()
-            for aps, svc in rows:
-                available_services.append({
-                    "id": str(svc.id),
-                    "title": svc.name,
-                    "price": float(aps.price or 2500.0),
-                    "description": svc.description or "VIP Airport Service"
-                })
+            .order_by(AirportService.display_priority, Service.display_order)
+        )
+        rows = db.execute(stmt).all()
 
-        if not available_services:
-            available_services = [
-                {"id": "default_silver", "title": "Silver Meet & Assist", "price": 2500.0, "description": "Escort from curb/gate"},
-                {"id": "default_gold", "title": "Gold VIP Package", "price": 4500.0, "description": "Dedicated porter & lounge access"}
+        if not rows:
+            tt_label = "Domestic" if tt == "DOMESTIC" else ("International" if tt == "INTERNATIONAL" else tt.replace("_", " → ").title())
+            jt_label = jt.title()
+            empty_msg = (
+                f"Sorry, there are currently no *{tt_label} {jt_label}* services available at *{airport.airport_name}*.\n\n"
+                "Please choose an option to continue:"
+            )
+            buttons = [
+                {"id": "btn_change_travel_type", "title": "Change Travel Type"},
+                {"id": "btn_change_airport", "title": "Change Airport"},
+                {"id": "btn_main_menu", "title": "Main Menu"}
             ]
+            res = whatsapp_client.send_interactive_buttons(
+                to_phone=conv.phone_number,
+                body_text=empty_msg,
+                buttons=buttons,
+                header_text="No Services Found"
+            )
+            if not res.get("success"):
+                fallback = (
+                    f"{empty_msg}\n\n"
+                    "1. Change Travel Type\n"
+                    "2. Change Airport\n"
+                    "3. Main Menu\n\n"
+                    "Reply *1*, *2*, or *3*."
+                )
+                whatsapp_client.send_text_message(conv.phone_number, fallback)
+            return {"status": "no_services_found"}
+
+        tt_display = "Domestic" if tt == "DOMESTIC" else ("International" if tt == "INTERNATIONAL" else tt.replace("_", " → ").title())
 
         body_text = (
-            f"✨ *Available Services at {conv.selected_airport_name}*\n"
-            f"• *Journey Type*: {jt.title()}\n\n"
+            f"✨ *Available Services at {airport.airport_name}*\n\n"
+            f"• *Journey Type*: {jt.title()}\n"
+            f"• *Travel Type*: {tt_display}\n\n"
             "Please select a service package:"
         )
 
-        rows = []
+        available_services = []
+        for aps, svc in rows:
+            available_services.append({
+                "id": str(svc.id),
+                "title": svc.name,
+                "price": float(aps.price),
+                "description": aps.short_description or svc.description or "VIP Airport Service"
+            })
+
+        list_rows = []
         for svc in available_services[:10]:
-            rows.append({
+            list_rows.append({
                 "id": f"svc_id_{svc['id']}",
                 "title": svc["title"][:24],
                 "description": f"₹{int(svc['price']):,} - {svc['description'][:40]}"
             })
 
-        sections = [{"title": "Select Package", "rows": rows}]
+        sections = [{"title": "Select Package", "rows": list_rows}]
 
         res = whatsapp_client.send_interactive_list(
             to_phone=conv.phone_number,
@@ -829,11 +1027,61 @@ class WhatsAppBookingStateMachine:
     def _state_service_selection(cls, db: Session, conv: WhatsAppConversation, user_text: str, input_id: Optional[str]) -> Dict[str, Any]:
         """Handles service package selection from list reply or text reply."""
         category_name = conv.selected_category or "Airport Services"
+        text_u = (input_id or user_text).strip().upper()
+
+        # Section 13 & 14: Handle quick actions / navigation switches
+        if text_u in ["BTN_CHANGE_TRAVEL_TYPE", "CHANGE TRAVEL TYPE", "TRAVEL TYPE"]:
+            metadata = conv.flight_details_json if isinstance(conv.flight_details_json, dict) else {}
+            jt = metadata.get("journey_type", "DEPARTURE").upper()
+            if jt == "TRANSIT":
+                cls._transition_state(db, conv, "AIRPORT_TRANSIT_TYPE")
+                return cls._prompt_transit_type(conv)
+            else:
+                cls._transition_state(db, conv, "AIRPORT_TRAVEL_TYPE")
+                return cls._prompt_travel_type(conv, jt.title())
+
+        if text_u in ["BTN_CHANGE_AIRPORT", "CHANGE AIRPORT"]:
+            cls._transition_state(db, conv, "AIRPORT_SELECTION")
+            whatsapp_client.send_text_message(conv.phone_number, "Please enter your Airport Name, City, or IATA Code (e.g., Delhi, DEL, Lucknow):")
+            return {"status": "airport_prompt_sent"}
+
         selected_svc = None
 
         if category_name == "Airport Services":
+            metadata = conv.flight_details_json if isinstance(conv.flight_details_json, dict) else {}
+            jt = metadata.get("journey_type", "DEPARTURE").upper()
+            tt = metadata.get("travel_type", "DOMESTIC").upper()
+
+            # Handle user switching travel type dynamically during service selection (Section 14)
+            if text_u in ["DOMESTIC", "INTERNATIONAL", "INTL"]:
+                new_tt = "DOMESTIC" if "DOMESTIC" in text_u else "INTERNATIONAL"
+                new_meta = dict(metadata)
+                new_meta["travel_type"] = new_tt
+                new_meta["flight_type"] = new_tt
+                conv.flight_details_json = new_meta
+                db.commit()
+                return cls._send_airport_services_menu(db, conv)
+
+            if jt == "TRANSIT":
+                if tt in ["DOMESTIC_DOMESTIC", "DOMESTIC"]:
+                    flight_types = ["DOMESTIC_DOMESTIC", "DOMESTIC", "ALL"]
+                elif tt == "DOMESTIC_INTERNATIONAL":
+                    flight_types = ["DOMESTIC_INTERNATIONAL", "ALL"]
+                elif tt == "INTERNATIONAL_DOMESTIC":
+                    flight_types = ["INTERNATIONAL_DOMESTIC", "ALL"]
+                elif tt in ["INTERNATIONAL_INTERNATIONAL", "INTERNATIONAL"]:
+                    flight_types = ["INTERNATIONAL_INTERNATIONAL", "INTERNATIONAL", "ALL"]
+                else:
+                    flight_types = [tt, "ALL"]
+            else:
+                if tt == "DOMESTIC":
+                    flight_types = ["DOMESTIC", "ALL"]
+                elif tt == "INTERNATIONAL":
+                    flight_types = ["INTERNATIONAL", "ALL"]
+                else:
+                    flight_types = [tt, "ALL"]
+
             iata = conv.selected_airport_iata
-            jt = (conv.flight_details_json or {}).get("journey_type", "DEPARTURE").upper() if isinstance(conv.flight_details_json, dict) else "DEPARTURE"
             airport = db.execute(select(SupportedAirport).where(SupportedAirport.iata_code == iata)).scalar_one_or_none()
 
             available_services = []
@@ -844,23 +1092,22 @@ class WhatsAppBookingStateMachine:
                     .where(
                         AirportService.airport_id == airport.id,
                         AirportService.journey_type == jt,
-                        AirportService.is_available == True,
-                        Service.is_active == True
+                        AirportService.flight_type.in_(flight_types),
+                        AirportService.is_available.is_(True),
+                        Service.is_active.is_(True)
                     )
-                    .order_by(Service.display_order)
+                    .order_by(AirportService.display_priority, Service.display_order)
                 )
                 for aps, svc in db.execute(stmt).all():
                     available_services.append({
                         "id": str(svc.id),
                         "title": svc.name,
-                        "price": float(aps.price or 2500.0)
+                        "price": float(aps.price),
+                        "description": aps.short_description or svc.description or "VIP Service"
                     })
 
             if not available_services:
-                available_services = [
-                    {"id": "default_silver", "title": "Silver Meet & Assist", "price": 2500.0},
-                    {"id": "default_gold", "title": "Gold VIP Package", "price": 4500.0}
-                ]
+                return cls._send_airport_services_menu(db, conv)
 
             if input_id:
                 raw_id = input_id.replace("svc_id_", "")
@@ -983,10 +1230,13 @@ class WhatsAppBookingStateMachine:
         conv.flight_num = norm_flight
 
         jt = (conv.flight_details_json or {}).get("journey_type", "DEPARTURE") if isinstance(conv.flight_details_json, dict) else "DEPARTURE"
+        tt = (conv.flight_details_json or {}).get("travel_type", "DOMESTIC") if isinstance(conv.flight_details_json, dict) else "DOMESTIC"
         conv.flight_details_json = {
             "flight_number": norm_flight,
             "airline_code": val_res["airline_code"],
             "journey_type": jt,
+            "travel_type": tt,
+            "flight_type": tt,
             "verification_status": "not_verified",
             "status": "flight_number_received"
         }
@@ -1100,13 +1350,9 @@ class WhatsAppBookingStateMachine:
 
     @classmethod
     def _state_customer_email(cls, db: Session, conv: WhatsAppConversation, email_input: str) -> Dict[str, Any]:
-        clean_email = email_input.strip().lower()
-        email_regex = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
-        if not re.match(email_regex, clean_email):
-            whatsapp_client.send_text_message(
-                conv.phone_number,
-                "Invalid email address format. Please provide a valid email address (e.g., name@example.com)."
-            )
+        clean_email = email_input.strip()
+        if "@" not in clean_email or "." not in clean_email or len(clean_email) < 5:
+            whatsapp_client.send_text_message(conv.phone_number, "Please enter a valid email address (e.g. name@example.com).")
             return {"status": "invalid_email"}
 
         conv.customer_email = clean_email
@@ -1119,12 +1365,12 @@ class WhatsAppBookingStateMachine:
     @classmethod
     def _state_customer_phone(cls, db: Session, conv: WhatsAppConversation, phone_input: str) -> Dict[str, Any]:
         clean_p = phone_input.strip().lower()
-        if clean_p in ["same", "yes", "this"]:
+        if clean_p in ["same", "same number", "this", "my number", "yes", "ok"]:
             conv.customer_phone = conv.phone_number
         else:
-            digits = "".join(filter(str.isdigit, clean_p))
-            if len(digits) < 10:
-                whatsapp_client.send_text_message(conv.phone_number, "Invalid phone number. Please provide a valid contact number (min 10 digits).")
+            digits = "".join(filter(str.isdigit, phone_input))
+            if len(digits) < 7:
+                whatsapp_client.send_text_message(conv.phone_number, "Please enter a valid contact phone number with country code (or type 'Same').")
                 return {"status": "invalid_phone"}
             conv.customer_phone = digits
 
@@ -1147,7 +1393,9 @@ class WhatsAppBookingStateMachine:
     @classmethod
     def _send_booking_summary(cls, db: Session, conv: WhatsAppConversation) -> Dict[str, Any]:
         """Displays booking summary before creation."""
-        jt = (conv.flight_details_json or {}).get("journey_type") if isinstance(conv.flight_details_json, dict) else None
+        metadata = conv.flight_details_json if isinstance(conv.flight_details_json, dict) else {}
+        jt = metadata.get("journey_type")
+        tt = metadata.get("travel_type")
 
         summary_lines = [
             "📋 *BOOKING SUMMARY — Shafsky Aviation*\n",
@@ -1156,7 +1404,10 @@ class WhatsAppBookingStateMachine:
         if conv.selected_airport_iata:
             summary_lines.append(f"• *Airport*: {conv.selected_airport_name} ({conv.selected_airport_iata})")
         if jt:
-            summary_lines.append(f"• *Travel Type*: {jt.title()}")
+            summary_lines.append(f"• *Journey Type*: {jt.title()}")
+        if tt:
+            tt_display = "Domestic" if tt == "DOMESTIC" else ("International" if tt == "INTERNATIONAL" else tt.replace("_", " → ").title())
+            summary_lines.append(f"• *Travel Type*: {tt_display}")
         if conv.flight_num:
             summary_lines.append(f"• *Flight*: {conv.flight_num}")
 
