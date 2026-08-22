@@ -37,7 +37,8 @@ def test_whatsapp_webhook_verification_failure():
     assert res.status_code == 403
 
 
-def test_whatsapp_incoming_event_ingestion():
+def test_whatsapp_incoming_event_ingestion(monkeypatch):
+    monkeypatch.setenv("WHATSAPP_APP_SECRET", "")
     payload = {
         "object": "whatsapp_business_account",
         "entry": [

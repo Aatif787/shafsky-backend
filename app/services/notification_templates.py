@@ -36,7 +36,7 @@ class NotificationTemplateEngine:
             html = f"""
             <h2>Shafsky Aviation VIP Services</h2>
             <p>Dear <strong>{name}</strong>,</p>
-            <p>Your airport concierge booking <strong>{ref}</strong> has been received and confirmed.</p>
+            <p>Your airport VIP service booking <strong>{ref}</strong> has been received and confirmed.</p>
             <ul>
                 <li><strong>Airport:</strong> {airport}</li>
                 <li><strong>Service type:</strong> {journey or service}</li>

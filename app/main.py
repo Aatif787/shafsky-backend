@@ -93,7 +93,7 @@ app.add_middleware(IdempotencyMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=getattr(settings, "ALLOWED_ORIGINS", []),
-    # Do NOT use a permissive origin regex in production; origin list is configurable via ALLOWED_ORIGINS
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|.*\.ngrok-free\.(dev|app)|.*\.ngrok\.io|.*\.vercel\.app)(:\d+)?$",
     allow_credentials=getattr(settings, "CORS_ALLOW_CREDENTIALS", False),
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],

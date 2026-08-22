@@ -9,21 +9,27 @@ class AlertRuleEngine:
         sub = health["subsystems"]
         res = sub.get("systemResources", {})
 
-        if sub.get("database", {}).get("status") != "HEALTHY":
+        if sub.get("database", {}).get("status") not in ("HEALTHY", "SLOW"):
             alerts.append({
                 "alert": "DatabaseConnectivityFailure",
                 "severity": "CRITICAL",
                 "message": "PostgreSQL database connection check failed!"
             })
 
-        if res.get("memoryUsagePercent", 0) > 90.0:
+        rss = float(res.get("processRssMB") or 0)
+        available = float(res.get("memoryAvailableMB") or 0)
+        if rss >= 1024.0 or (available > 0 and available < 256.0):
             alerts.append({
                 "alert": "HighMemoryUsage",
                 "severity": "WARNING",
-                "message": f"Memory usage exceeded 90%: {res.get('memoryUsagePercent')}%"
+                "message": (
+                    f"Process RSS {rss} MB; host available {available} MB "
+                    f"(host usage {res.get('memoryUsagePercent')}%)"
+                ),
             })
 
-        if res.get("diskFreeGB", 100) < 5.0:
+        disk = res.get("diskFreeGB")
+        if disk is not None and float(disk) < 5.0:
             alerts.append({
                 "alert": "LowDiskSpace",
                 "severity": "CRITICAL",

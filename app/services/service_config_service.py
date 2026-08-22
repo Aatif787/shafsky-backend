@@ -564,8 +564,6 @@ class ServiceConfigService:
                     f_upper = normalize_flight_type(flight_type) or flight_type.strip().upper()
                     stmt_typed = stmt.where(AirportService.flight_type.in_([f_upper, "ALL"]))
                     mappings = list(db.scalars(stmt_typed).all())
-                    if not mappings:
-                        mappings = list(db.scalars(stmt).all())
                 else:
                     mappings = list(db.scalars(stmt).all())
 
@@ -838,15 +836,12 @@ class ServiceConfigService:
         elif journey_type == "transit" and transit_val:
             target_airport_code = transit_val
 
-        if target_airport_code == "GAU":
-            config = cls.get_airport_configuration(
-                target_airport_code,
-                db=db,
-                journey_type=journey_type,
-                flight_type=payload.get("flight_type") or payload.get("flightType"),
-            )
-        else:
-            config = cls.get_airport_configuration(target_airport_code, db=db)
+        config = cls.get_airport_configuration(
+            target_airport_code,
+            db=db,
+            journey_type=journey_type,
+            flight_type=payload.get("flight_type") or payload.get("flightType"),
+        )
 
         # Check coverage in database
         is_covered = True

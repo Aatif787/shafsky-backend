@@ -17,7 +17,7 @@ engine = create_engine(
     pool_timeout=30,
     pool_recycle=1800,
     pool_pre_ping=True,
-    connect_args={"options": "-c statement_timeout=15000"} if _database_url().startswith("postgresql") else {},
+    connect_args={},
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

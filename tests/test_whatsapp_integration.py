@@ -50,6 +50,7 @@ def test_whatsapp_webhook_verification_failure(monkeypatch):
 # 3. Webhook POST Message Event Parsing
 @patch("app.integrations.whatsapp.client.whatsapp_client.send_text_message")
 def test_whatsapp_webhook_post_message_parsing(mock_send, monkeypatch):
+    monkeypatch.setenv("WHATSAPP_APP_SECRET", "")
     mock_send.return_value = {"success": True, "message_id": "wamid.test_reply_123"}
 
     payload = {
@@ -88,7 +89,8 @@ def test_whatsapp_webhook_post_message_parsing(mock_send, monkeypatch):
 
 
 # 4. Webhook POST Status Event Parsing (Sent, Delivered, Read, Failed)
-def test_whatsapp_webhook_post_status_event_parsing():
+def test_whatsapp_webhook_post_status_event_parsing(monkeypatch):
+    monkeypatch.setenv("WHATSAPP_APP_SECRET", "")
     payload = {
         "object": "whatsapp_business_account",
         "entry": [
@@ -239,3 +241,104 @@ def test_whatsapp_integration_status_endpoint(monkeypatch):
     # Never expose access token or secret IDs
     assert "access_token" not in data
     assert "phone_number_id" not in data
+
+
+# 10. Webhook Signature Verification with WHATSAPP_APP_SECRET
+def test_whatsapp_webhook_signature_verification_success(monkeypatch):
+    test_secret = "test_meta_app_secret_12345"
+    monkeypatch.setenv("WHATSAPP_APP_SECRET", test_secret)
+
+    payload = {
+        "object": "whatsapp_business_account",
+        "entry": []
+    }
+    import json, hmac, hashlib
+    payload_bytes = json.dumps(payload).encode("utf-8")
+    sig = hmac.new(test_secret.encode("utf-8"), payload_bytes, hashlib.sha256).hexdigest()
+
+    res = client.post(
+        "/api/whatsapp/webhook",
+        content=payload_bytes,
+        headers={"Content-Type": "application/json", "X-Hub-Signature-256": f"sha256={sig}"}
+    )
+    assert res.status_code == 200
+
+
+def test_whatsapp_webhook_signature_verification_failure(monkeypatch):
+    test_secret = "test_meta_app_secret_12345"
+    monkeypatch.setenv("WHATSAPP_APP_SECRET", test_secret)
+
+    payload = {"object": "whatsapp_business_account", "entry": []}
+    import json
+    payload_bytes = json.dumps(payload).encode("utf-8")
+
+    # 1. Invalid signature
+    res_invalid = client.post(
+        "/api/whatsapp/webhook",
+        content=payload_bytes,
+        headers={"Content-Type": "application/json", "X-Hub-Signature-256": "sha256=invalid_hex_signature"}
+    )
+    assert res_invalid.status_code == 401
+    assert "Invalid WhatsApp webhook signature" in res_invalid.json()["detail"]
+
+    # 2. Missing signature header
+    res_missing = client.post(
+        "/api/whatsapp/webhook",
+        content=payload_bytes,
+        headers={"Content-Type": "application/json"}
+    )
+    assert res_missing.status_code == 401
+
+
+# 11. Webhook Signature with Raw Bytes and Header Variations
+def test_whatsapp_webhook_signature_raw_bytes_and_formats(monkeypatch):
+    test_secret = "meta_32char_secret_0123456789abc"
+    monkeypatch.setenv("WHATSAPP_APP_SECRET", test_secret)
+
+    # Test with precise raw bytes containing whitespace and nested UTF-8 JSON
+    raw_payload_bytes = b'{\n  "object": "whatsapp_business_account",\n  "entry": []\n}'
+    import hmac, hashlib
+    sig_hex = hmac.new(test_secret.encode("utf-8"), raw_payload_bytes, hashlib.sha256).hexdigest()
+
+    # 1. Standard sha256= prefix
+    res1 = client.post(
+        "/api/whatsapp/webhook",
+        content=raw_payload_bytes,
+        headers={"Content-Type": "application/json", "X-Hub-Signature-256": f"sha256={sig_hex}"}
+    )
+    assert res1.status_code == 200
+
+    # 2. Uppercase SHA256= prefix
+    res2 = client.post(
+        "/api/whatsapp/webhook",
+        content=raw_payload_bytes,
+        headers={"Content-Type": "application/json", "X-Hub-Signature-256": f"SHA256={sig_hex}"}
+    )
+    assert res2.status_code == 200
+
+    # 3. Lowercase header key with whitespace
+    res3 = client.post(
+        "/api/whatsapp/webhook",
+        content=raw_payload_bytes,
+        headers={"Content-Type": "application/json", "x-hub-signature-256": f"sha256={sig_hex} "}
+    )
+    assert res3.status_code == 200
+
+
+# 12. Webhook Signature with Quoted Secret in Environment
+def test_whatsapp_webhook_signature_quoted_env_secret(monkeypatch):
+    # Simulate user putting quotes in .env file like WHATSAPP_APP_SECRET="abcdef12345"
+    raw_secret = "quoted_secret_value_999"
+    monkeypatch.setenv("WHATSAPP_APP_SECRET", f'"{raw_secret}"')
+
+    raw_body = b'{"object":"whatsapp_business_account","entry":[]}'
+    import hmac, hashlib
+    sig_hex = hmac.new(raw_secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+
+    res = client.post(
+        "/api/whatsapp/webhook",
+        content=raw_body,
+        headers={"Content-Type": "application/json", "X-Hub-Signature-256": f"sha256={sig_hex}"}
+    )
+    assert res.status_code == 200
+

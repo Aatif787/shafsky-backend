@@ -18,10 +18,6 @@ from app.models.schema import Booking, BookingStatus
 from app.integrations.whatsapp.client import whatsapp_client
 from app.services.service_config_service import ServiceConfigService, DEFAULT_SERVICE_CATALOG
 from app.services.journey_engine import JourneyDetectionEngine
-from app.flight.service import FlightIntelligenceService
-from app.flight.providers.aviation_edge_provider import AviationEdgeProvider
-
-flight_service = FlightIntelligenceService(provider=AviationEdgeProvider())
 from app.services.booking_service import BookingService
 from app.providers.razorpay_provider import razorpay_provider
 
@@ -542,79 +538,119 @@ class WhatsAppBookingStateMachine:
                 return {"status": "date_prompt_sent"}
 
         whatsapp_client.send_text_message(conv.phone_number, "Please select *Confirm* or *Change Airport*.")
-        return {"status": "invalid_confirmation"}
+    @classmethod
+    def _validate_flight_number_local(cls, flight_num_input: str) -> Optional[Dict[str, str]]:
+        """
+        Fast, pure-local validation of flight numbers without calling external flight APIs.
+        1. Normalizes whitespace and uppercase.
+        2. Extracts airline IATA/ICAO code (2-3 alphanumeric chars with letters) and numeric flight number (1-4 digits).
+        3. Validates the basic flight-number format and rejects obviously invalid strings.
+        """
+        if not flight_num_input:
+            return None
+
+        # Normalize whitespace and casing
+        clean = re.sub(r"\s+", "", str(flight_num_input).strip().upper())
+        if not clean or len(clean) < 3 or len(clean) > 8:
+            return None
+
+        # Standard airline flight number pattern:
+        # e.g., EK501, AI2424, 6E224, UK955, BA1, 9W123, UAE501, AIC2424, 6E224A
+        match = re.match(r"^([A-Z0-9]{2,3})(\d{1,4}[A-Z]?)$", clean)
+        if not match:
+            return None
+
+        airline_code = match.group(1)
+        flight_digits = match.group(2)
+
+        # Reject pure numeric airline codes (must have at least one alphabet letter)
+        if not re.search(r"[A-Z]", airline_code):
+            return None
+
+        # Must have digits in the flight number portion
+        if not re.search(r"\d", flight_digits):
+            return None
+
+        normalized_flight = f"{airline_code}{flight_digits}"
+        return {
+            "flight_number": normalized_flight,
+            "airline_code": airline_code,
+            "flight_digits": flight_digits,
+            "verification_status": "not_verified",
+            "status": "flight_number_received",
+        }
 
     @classmethod
     def _state_flight_input(cls, db: Session, conv: WhatsAppConversation, flight_num_input: str) -> Dict[str, Any]:
-        clean_flight = flight_num_input.strip().upper().replace(" ", "")
+        """
+        Processes flight number input using purely local validation without any external API calls.
+        """
+        val_res = cls._validate_flight_number_local(flight_num_input)
 
-        if not clean_flight or len(clean_flight) < 3:
-            whatsapp_client.send_text_message(conv.phone_number, "Please enter a valid flight number (e.g. AI2424, EK505).")
+        if not val_res:
+            whatsapp_client.send_text_message(
+                conv.phone_number,
+                "Please enter a valid flight number (e.g., *EK501*, *AI2424*, *6E224*, *UK955*)."
+            )
             return {"status": "invalid_flight_format"}
 
-        # Validate with live FlightIntelligenceService / Aviation Edge API integration
-        try:
-            val_res = flight_service.validate_flight(
-                flight_num=clean_flight,
-                date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-                airport_code=conv.selected_airport_iata,
+        norm_flight = val_res["flight_number"]
+        conv.flight_num = norm_flight
+        # Store only clean JSON-compatible data, no Python objects or fabricated route data
+        conv.flight_details_json = {
+            "flight_number": norm_flight,
+            "airline_code": val_res["airline_code"],
+            "verification_status": "not_verified",
+            "status": "flight_number_received"
+        }
+        conv.current_state = "FLIGHT_CONFIRMATION"
+        db.commit()
+
+        body_text = (
+            f"✈️ *Flight Number Received: {norm_flight}*\n\n"
+            f"• *Flight Number*: {norm_flight}\n"
+        )
+        if conv.selected_airport_iata:
+            body_text += f"• *Airport*: {conv.selected_airport_name} ({conv.selected_airport_iata})\n"
+
+        body_text += "\nPlease confirm your flight details:"
+
+        buttons = [
+            {"id": "btn_confirm_flight", "title": "Confirm Flight"},
+            {"id": "btn_reenter_flight", "title": "Re-enter Flight"}
+        ]
+
+        res = whatsapp_client.send_interactive_buttons(
+            to_phone=conv.phone_number,
+            body_text=body_text,
+            buttons=buttons,
+            header_text="Flight Details"
+        )
+        if not res.get("success"):
+            fallback_text = (
+                f"✈️ *Flight Number Received: {norm_flight}*\n\n"
+                f"Reply *1* or *Confirm* to proceed, or *Re-enter* to change flight number."
             )
+            whatsapp_client.send_text_message(conv.phone_number, fallback_text)
 
-            if val_res and getattr(val_res, "is_valid", True):
-                conv.flight_num = clean_flight
-                conv.flight_details_json = {
-                    "airline": getattr(val_res, "airline", "Airline"),
-                    "flight_number": clean_flight,
-                    "departure": getattr(val_res, "departure_airport", conv.selected_airport_iata or "ORIGIN"),
-                    "arrival": getattr(val_res, "arrival_airport", "DEST")
-                }
-                conv.current_state = "FLIGHT_CONFIRMATION"
-                db.commit()
-
-                body_text = (
-                    f"✈️ *Verified Flight Details*\n\n"
-                    f"• *Flight Number*: {clean_flight}\n"
-                    f"• *Airline*: {conv.flight_details_json.get('airline')}\n"
-                    f"• *Route*: {conv.flight_details_json.get('departure')} ➔ {conv.flight_details_json.get('arrival')}\n\n"
-                    f"Please confirm your flight details:"
-                )
-
-                buttons = [
-                    {"id": "btn_confirm_flight", "title": "Confirm Flight"},
-                    {"id": "btn_reenter_flight", "title": "Re-enter Flight"}
-                ]
-
-                whatsapp_client.send_interactive_buttons(
-                    to_phone=conv.phone_number,
-                    body_text=body_text,
-                    buttons=buttons,
-                    header_text="Flight Verification"
-                )
-                return {"status": "flight_verified"}
-
-        except Exception as err:
-            logger.warning(f"[WhatsApp Flight Validation] Live flight check exception: {err}")
-
-        # Live Flight API verification failed
-        msg = "Sorry, we couldn't verify this flight. Please check the flight number and try again."
-        whatsapp_client.send_text_message(conv.phone_number, msg)
-        return {"status": "flight_unverified"}
+        return {"status": "flight_number_received"}
 
     @classmethod
     def _state_flight_confirmation(cls, db: Session, conv: WhatsAppConversation, user_text: str, input_id: Optional[str]) -> Dict[str, Any]:
         text_u = user_text.strip().upper()
 
-        if input_id == "btn_reenter_flight" or "RE-ENTER" in text_u or "NO" in text_u:
+        if input_id == "btn_reenter_flight" or "RE-ENTER" in text_u or "REENTER" in text_u or "CHANGE" in text_u or "NO" in text_u:
             conv.flight_num = None
+            conv.flight_details_json = None
             conv.current_state = "FLIGHT_INPUT"
             db.commit()
-            whatsapp_client.send_text_message(conv.phone_number, "Please enter your flight number again:")
+            whatsapp_client.send_text_message(conv.phone_number, "Please enter your flight number (e.g., *EK501*, *AI2424*, *6E224*):")
             return {"status": "reprompt_flight"}
 
-        if input_id == "btn_confirm_flight" or "CONFIRM" in text_u or "YES" in text_u:
+        if input_id == "btn_confirm_flight" or "CONFIRM" in text_u or "YES" in text_u or text_u == "1":
             conv.current_state = "DATE_SELECTION"
             db.commit()
-            msg = f"Flight Confirmed: *{conv.flight_num}*\n\nPlease enter your Date of Travel (DD/MM/YYYY or YYYY-MM-DD):"
+            msg = f"Flight Number Received: *{conv.flight_num}*\n\nPlease enter your Date of Travel (DD/MM/YYYY or YYYY-MM-DD):"
             whatsapp_client.send_text_message(conv.phone_number, msg)
             return {"status": "date_prompt_sent"}
 

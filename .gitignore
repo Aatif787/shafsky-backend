@@ -18,3 +18,6 @@ ENV/
 .pytest_cache/
 *.log
 backups/
+scratch/
+wa_diag.py
+wa_ownership.py

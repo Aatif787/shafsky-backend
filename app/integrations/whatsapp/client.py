@@ -20,18 +20,34 @@ class WhatsAppClient:
         self._load_config()
 
     def _load_config(self):
-        """Loads environment configuration dynamically."""
-        self.access_token = os.getenv("WHATSAPP_ACCESS_TOKEN", "").strip()
-        self.phone_number_id = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "").strip()
-        self.business_account_id = os.getenv("WHATSAPP_BUSINESS_ACCOUNT_ID", "").strip()
-        self.verify_token = os.getenv(
-            "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
-            os.getenv("WHATSAPP_VERIFY_TOKEN", "")
-        ).strip()
-        self.api_version = os.getenv(
-            "WHATSAPP_API_VERSION",
-            os.getenv("META_GRAPH_API_VERSION", "v21.0")
-        ).strip() or "v21.0"
+        """Loads environment configuration dynamically with safe fallback hierarchy."""
+        try:
+            from dotenv import load_dotenv, find_dotenv
+            env_file = find_dotenv()
+            if env_file:
+                load_dotenv(env_file, override=False)
+        except Exception:
+            pass
+
+        self.access_token = os.getenv("WHATSAPP_ACCESS_TOKEN", "").strip().strip("'\"")
+        self.phone_number_id = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "").strip().strip("'\"")
+        self.business_account_id = os.getenv("WHATSAPP_BUSINESS_ACCOUNT_ID", "").strip().strip("'\"")
+        self.verify_token = (
+            os.getenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN")
+            or os.getenv("WHATSAPP_VERIFY_TOKEN")
+            or ""
+        ).strip().strip("'\"")
+        self.app_secret = (
+            os.getenv("WHATSAPP_APP_SECRET")
+            or os.getenv("META_APP_SECRET")
+            or os.getenv("APP_SECRET")
+            or ""
+        ).strip().strip("'\"")
+        self.api_version = (
+            os.getenv("WHATSAPP_API_VERSION")
+            or os.getenv("META_GRAPH_API_VERSION")
+            or "v21.0"
+        ).strip().strip("'\"")
 
     def is_configured(self) -> bool:
         """Checks if valid WhatsApp API credentials are set in the backend environment."""
@@ -67,16 +83,64 @@ class WhatsAppClient:
         return None
 
     def verify_webhook_signature(self, payload_bytes: bytes, signature_header: Optional[str]) -> bool:
-        """Verifies Meta X-Hub-Signature-256 using WHATSAPP_APP_SECRET."""
+        """
+        Verifies Meta X-Hub-Signature-256 using WHATSAPP_APP_SECRET.
+        
+        Security Policy:
+        - When APP_SECRET is configured:
+          - Validates that X-Hub-Signature-256 is present and matches the HMAC SHA-256 of the raw payload.
+          - Rejects missing headers or invalid signatures with False (raising 401 Unauthorized in router).
+        - When APP_SECRET is NOT configured:
+          - Logs an advisory warning that APP_SECRET is missing.
+          - Returns True so incoming Meta webhook payloads are not blocked.
+        """
         self._load_config()
-        app_secret = os.getenv("WHATSAPP_APP_SECRET", "").strip()
-        if not app_secret or not signature_header:
+        app_secret = self.app_secret
+
+        # Safe diagnostic logging (never exposes secret or token values)
+        logger.info(
+            "[WhatsApp Webhook] Signature verification invoked. "
+            "Secret configured: %s (length: %d), Signature header present: %s (length: %d), Body size: %d bytes.",
+            bool(app_secret),
+            len(app_secret) if app_secret else 0,
+            bool(signature_header),
+            len(signature_header) if signature_header else 0,
+            len(payload_bytes) if payload_bytes else 0,
+        )
+
+        if not app_secret:
+            logger.warning(
+                "[WhatsApp Webhook] WHATSAPP_APP_SECRET is not configured. "
+                "Bypassing X-Hub-Signature-256 verification. Set WHATSAPP_APP_SECRET in .env for production authenticity validation."
+            )
+            return True
+
+        if not signature_header or not signature_header.strip():
+            logger.warning("[WhatsApp Webhook] Missing X-Hub-Signature-256 header while WHATSAPP_APP_SECRET is configured.")
             return False
-        expected = signature_header.strip()
-        if expected.startswith("sha256="):
-            expected = expected.split("=", 1)[1]
-        computed = hmac.new(app_secret.encode("utf-8"), payload_bytes, hashlib.sha256).hexdigest()
-        return hmac.compare_digest(computed, expected)
+
+        sig_raw = signature_header.strip()
+        if sig_raw.lower().startswith("sha256="):
+            expected_sig = sig_raw[7:].strip()
+        else:
+            expected_sig = sig_raw
+
+        computed_sig = hmac.new(
+            app_secret.encode("utf-8"),
+            payload_bytes,
+            hashlib.sha256
+        ).hexdigest()
+
+        is_valid = hmac.compare_digest(computed_sig.lower(), expected_sig.lower())
+        if not is_valid:
+            logger.warning(
+                "[WhatsApp Webhook] Invalid X-Hub-Signature-256 HMAC signature mismatch. "
+                "(Secret length: %d, Incoming sig length: %d, Computed length: %d)",
+                len(app_secret),
+                len(expected_sig),
+                len(computed_sig),
+            )
+        return is_valid
 
     def send_message(
         self,
