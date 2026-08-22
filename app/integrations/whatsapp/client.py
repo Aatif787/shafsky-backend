@@ -14,13 +14,29 @@ logger = logging.getLogger(__name__)
 
 
 class WhatsAppClient:
-    """Official Meta WhatsApp Cloud API HTTP Client."""
+    """Official Meta WhatsApp Cloud API HTTP Client with High-Performance Connection Pooling."""
 
     def __init__(self):
+        self._config_loaded = False
+        self._http_client: Optional[httpx.Client] = None
+        self._cached_base_url: Optional[str] = None
+        self._cached_auth_header: Optional[str] = None
         self._load_config()
 
-    def _load_config(self):
-        """Loads environment configuration dynamically with safe fallback hierarchy."""
+    def _get_http_client(self) -> httpx.Client:
+        """Maintains a persistent, warm HTTP keep-alive connection pool to Meta Graph API."""
+        if self._http_client is None or self._http_client.is_closed:
+            self._http_client = httpx.Client(
+                timeout=httpx.Timeout(connect=3.0, read=8.0, write=5.0, pool=5.0),
+                limits=httpx.Limits(max_keepalive_connections=20, max_connections=50, keepalive_expiry=120.0)
+            )
+        return self._http_client
+
+    def _load_config(self, force: bool = False):
+        """Loads environment configuration once into memory for zero filesystem overhead."""
+        if self._config_loaded and not force:
+            return
+
         try:
             from dotenv import load_dotenv, find_dotenv
             env_file = find_dotenv()
@@ -48,6 +64,18 @@ class WhatsAppClient:
             or os.getenv("META_GRAPH_API_VERSION")
             or "v21.0"
         ).strip().strip("'\"")
+        self._cached_base_url = f"https://graph.facebook.com/{self.api_version}/{self.phone_number_id}/messages"
+        self._cached_auth_header = f"Bearer {self.access_token}" if self.access_token else ""
+        self._config_loaded = True
+
+    def reload_config(self):
+        """Forces reload of environment variables."""
+        self._load_config(force=True)
+
+    def close(self):
+        """Gracefully closes persistent connection pool."""
+        if self._http_client and not self._http_client.is_closed:
+            self._http_client.close()
 
     def is_configured(self) -> bool:
         """Checks if valid WhatsApp API credentials are set in the backend environment."""
@@ -62,7 +90,7 @@ class WhatsAppClient:
     @property
     def base_url(self) -> str:
         self._load_config()
-        return f"https://graph.facebook.com/{self.api_version}/{self.phone_number_id}/messages"
+        return self._cached_base_url or f"https://graph.facebook.com/{self.api_version}/{self.phone_number_id}/messages"
 
     def verify_webhook_challenge(
         self,
@@ -85,28 +113,9 @@ class WhatsAppClient:
     def verify_webhook_signature(self, payload_bytes: bytes, signature_header: Optional[str]) -> bool:
         """
         Verifies Meta X-Hub-Signature-256 using WHATSAPP_APP_SECRET.
-        
-        Security Policy:
-        - When APP_SECRET is configured:
-          - Validates that X-Hub-Signature-256 is present and matches the HMAC SHA-256 of the raw payload.
-          - Rejects missing headers or invalid signatures with False (raising 401 Unauthorized in router).
-        - When APP_SECRET is NOT configured:
-          - Logs an advisory warning that APP_SECRET is missing.
-          - Returns True so incoming Meta webhook payloads are not blocked.
         """
         self._load_config()
         app_secret = self.app_secret
-
-        # Safe diagnostic logging (never exposes secret or token values)
-        logger.info(
-            "[WhatsApp Webhook] Signature verification invoked. "
-            "Secret configured: %s (length: %d), Signature header present: %s (length: %d), Body size: %d bytes.",
-            bool(app_secret),
-            len(app_secret) if app_secret else 0,
-            bool(signature_header),
-            len(signature_header) if signature_header else 0,
-            len(payload_bytes) if payload_bytes else 0,
-        )
 
         if not app_secret:
             logger.warning(
@@ -142,6 +151,79 @@ class WhatsAppClient:
             )
         return is_valid
 
+    def _dispatch_http(self, clean_phone: str, payload: Dict[str, Any], label: str = "Message") -> Dict[str, Any]:
+        """High-speed HTTP dispatcher utilizing persistent connection keep-alive."""
+        if not self.is_configured():
+            logger.warning("[WhatsApp] Send skipped: WHATSAPP_ACCESS_TOKEN or WHATSAPP_PHONE_NUMBER_ID is not configured.")
+            return {
+                "success": False,
+                "error": "WhatsApp Cloud API integration is not configured in backend environment.",
+                "status": "unconfigured"
+            }
+
+        headers = {
+            "Authorization": self._cached_auth_header or f"Bearer {self.access_token}",
+            "Content-Type": "application/json"
+        }
+
+        try:
+            client = self._get_http_client()
+            response = client.post(self.base_url, headers=headers, json=payload)
+            masked_phone = f"{clean_phone[:3]}****{clean_phone[-3:]}" if len(clean_phone) > 6 else clean_phone
+
+            if response.status_code in (200, 201):
+                data = response.json()
+                message_id = None
+                if "messages" in data and len(data["messages"]) > 0:
+                    message_id = data["messages"][0].get("id")
+
+                logger.info(f"[WhatsApp] {label} dispatched successfully to {masked_phone}. ID: {message_id}")
+                return {
+                    "success": True,
+                    "message_id": message_id,
+                    "status": "sent",
+                    "response": data
+                }
+
+            # Meta API Error Handling
+            err_data = {}
+            try:
+                err_data = response.json().get("error", {})
+            except Exception:
+                pass
+
+            error_msg = err_data.get("message", response.text)
+            error_code = err_data.get("code", response.status_code)
+            error_subcode = err_data.get("error_subcode")
+
+            if self.access_token and self.access_token in error_msg:
+                error_msg = error_msg.replace(self.access_token, "[REDACTED]")
+
+            logger.error(f"[WhatsApp] Meta API Error (HTTP {response.status_code}, Code {error_code}): {error_msg} for {masked_phone}")
+            return {
+                "success": False,
+                "status_code": response.status_code,
+                "error_code": error_code,
+                "error_subcode": error_subcode,
+                "error": f"Meta API Error ({response.status_code}): {error_msg}",
+                "status": "failed"
+            }
+
+        except httpx.TimeoutException:
+            logger.error(f"[WhatsApp] Network timeout connecting to Meta Graph API at {self.base_url}")
+            return {
+                "success": False,
+                "error": "Timeout connecting to Meta WhatsApp API.",
+                "status": "failed"
+            }
+        except Exception as err:
+            logger.error(f"[WhatsApp] Exception during Graph API request: {err}")
+            return {
+                "success": False,
+                "error": f"Network exception: {str(err)}",
+                "status": "failed"
+            }
+
     def send_message(
         self,
         to_phone: str,
@@ -156,15 +238,6 @@ class WhatsAppClient:
         """
         self._load_config()
 
-        if not self.is_configured():
-            logger.warning("[WhatsApp] Send skipped: WHATSAPP_ACCESS_TOKEN or WHATSAPP_PHONE_NUMBER_ID is not configured.")
-            return {
-                "success": False,
-                "error": "WhatsApp Cloud API integration is not configured in backend environment.",
-                "status": "unconfigured"
-            }
-
-        # Normalize phone number to digits only
         clean_phone = "".join(filter(str.isdigit, str(to_phone)))
         if not clean_phone or len(clean_phone) < 10:
             logger.error(f"[WhatsApp] Invalid recipient phone number format: '{to_phone}'")
@@ -173,11 +246,6 @@ class WhatsAppClient:
                 "error": f"Invalid recipient phone number format: '{to_phone}'",
                 "status": "failed"
             }
-
-        headers = {
-            "Authorization": f"Bearer {self.access_token}",
-            "Content-Type": "application/json"
-        }
 
         if template_name:
             payload = {
@@ -200,66 +268,7 @@ class WhatsAppClient:
                 "text": {"preview_url": False, "body": message_body or ""}
             }
 
-        try:
-            with httpx.Client(timeout=12.0) as client:
-                response = client.post(self.base_url, headers=headers, json=payload)
-                masked_phone = f"{clean_phone[:3]}****{clean_phone[-3:]}" if len(clean_phone) > 6 else clean_phone
-
-                if response.status_code == 200:
-                    data = response.json()
-                    message_id = None
-                    if "messages" in data and len(data["messages"]) > 0:
-                        message_id = data["messages"][0].get("id")
-
-                    logger.info(f"[WhatsApp] Message dispatched successfully to {masked_phone}. Message ID: {message_id}")
-                    return {
-                        "success": True,
-                        "message_id": message_id,
-                        "status": "sent",
-                        "response": data
-                    }
-
-                # Meta API Returned Non-200 Error
-                err_data = {}
-                try:
-                    err_data = response.json().get("error", {})
-                except Exception:
-                    pass
-
-                error_msg = err_data.get("message", response.text)
-                error_code = err_data.get("code", response.status_code)
-                error_subcode = err_data.get("error_subcode")
-
-                # Sanitize error message to ensure token is never exposed
-                if self.access_token and self.access_token in error_msg:
-                    error_msg = error_msg.replace(self.access_token, "[REDACTED]")
-
-                logger.error(
-                    f"[WhatsApp] Meta API Error (HTTP {response.status_code}, Code {error_code}): {error_msg} for recipient {masked_phone}"
-                )
-                return {
-                    "success": False,
-                    "status_code": response.status_code,
-                    "error_code": error_code,
-                    "error_subcode": error_subcode,
-                    "error": f"Meta API Error ({response.status_code}): {error_msg}",
-                    "status": "failed"
-                }
-
-        except httpx.TimeoutException:
-            logger.error(f"[WhatsApp] Network timeout connecting to Meta Graph API at {self.base_url}")
-            return {
-                "success": False,
-                "error": "Timeout connecting to Meta WhatsApp API.",
-                "status": "failed"
-            }
-        except Exception as err:
-            logger.error(f"[WhatsApp] Exception during Graph API request: {err}")
-            return {
-                "success": False,
-                "error": f"Network exception: {str(err)}",
-                "status": "failed"
-            }
+        return self._dispatch_http(clean_phone, payload, "Text/Template")
 
     def send_text_message(self, to_phone: str, message_body: str) -> Dict[str, Any]:
         """Convenience method for text messages."""
@@ -350,61 +359,7 @@ class WhatsAppClient:
 
     def _post_payload(self, clean_phone: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Internal helper for posting arbitrary payload to Graph API."""
-        if not self.is_configured():
-            logger.warning("[WhatsApp] Send skipped: WHATSAPP_ACCESS_TOKEN or WHATSAPP_PHONE_NUMBER_ID is not configured.")
-            return {
-                "success": False,
-                "error": "WhatsApp Cloud API integration is not configured in backend environment.",
-                "status": "unconfigured"
-            }
-
-        headers = {
-            "Authorization": f"Bearer {self.access_token}",
-            "Content-Type": "application/json"
-        }
-
-        try:
-            with httpx.Client(timeout=12.0) as client:
-                response = client.post(self.base_url, headers=headers, json=payload)
-                masked_phone = f"{clean_phone[:3]}****{clean_phone[-3:]}" if len(clean_phone) > 6 else clean_phone
-
-                if response.status_code in (200, 201):
-                    data = response.json()
-                    message_id = None
-                    if "messages" in data and len(data["messages"]) > 0:
-                        message_id = data["messages"][0].get("id")
-
-                    logger.info(f"[WhatsApp] Interactive message dispatched to {masked_phone}. Message ID: {message_id}")
-                    return {
-                        "success": True,
-                        "message_id": message_id,
-                        "status": "sent",
-                        "response": data
-                    }
-
-                err_data = {}
-                try:
-                    err_data = response.json().get("error", {})
-                except Exception:
-                    pass
-
-                error_msg = err_data.get("message", response.text)
-                if self.access_token and self.access_token in error_msg:
-                    error_msg = error_msg.replace(self.access_token, "[REDACTED]")
-
-                return {
-                    "success": False,
-                    "status_code": response.status_code,
-                    "error": f"Meta API Error ({response.status_code}): {error_msg}",
-                    "status": "failed"
-                }
-
-        except Exception as err:
-            return {
-                "success": False,
-                "error": f"Network exception: {str(err)}",
-                "status": "failed"
-            }
+        return self._dispatch_http(clean_phone, payload, "Interactive")
 
 
 # Global Singleton Instance
