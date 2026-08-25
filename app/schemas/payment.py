@@ -85,7 +85,45 @@ class InvoiceResponse(BaseModel):
         from_attributes = True
 
 
+class PaymentVerifyRequest(BaseModel):
+    razorpay_order_id: str = Field(..., description="Razorpay Order ID")
+    razorpay_payment_id: str = Field(..., description="Razorpay Payment ID")
+    razorpay_signature: str = Field(..., description="HMAC SHA256 Signature")
+    booking_ref: Optional[str] = Field(None, description="Optional booking reference")
+
+
+class PaymentRetryRequest(BaseModel):
+    booking_ref: str = Field(..., description="Booking reference to retry payment for")
+
+
+class PaymentLedgerFilterRequest(BaseModel):
+    search: Optional[str] = None
+    provider: Optional[str] = None
+    status: Optional[str] = None
+
+
+class PaymentCustomerHistoryRequest(BaseModel):
+    userId: Optional[str] = None
+
+
 class PaymentApiResponse(BaseModel):
     success: bool
     data: Optional[Any] = None
     error: Optional[str] = None
+
+
+class RazorpayCreateOrderRequest(BaseModel):
+    amount: float = Field(..., description="Amount in paise (minimum 100 paise = INR 1.00)")
+    currency: str = Field("INR", description="Currency code (e.g. INR)")
+    receipt: Optional[str] = Field(None, description="Receipt identifier")
+    notes: Optional[Dict[str, Any]] = None
+
+
+class RazorpayCreateOrderResponse(BaseModel):
+    order_id: str
+    amount: int
+    currency: str
+    key_id: Optional[str] = None
+    receipt: Optional[str] = None
+
+

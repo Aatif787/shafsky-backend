@@ -258,6 +258,7 @@ class NotificationService:
         template_type: str,
         payload: Dict[str, Any],
         booking_ref: str,
+        recipient_phone: Optional[str] = None,
     ) -> Dict[str, Any]:
         if cls._already_notified(db, template_type, booking_ref, recipient_email):
             logger.info(
@@ -270,9 +271,9 @@ class NotificationService:
         record = NotificationRecord(
             id=uuid.uuid4(),
             recipient_email=recipient_email,
-            recipient_phone=None,
+            recipient_phone=recipient_phone,
             template_type=template_type,
-            channel="EMAIL_ONLY",
+            channel="ALL" if recipient_phone else "EMAIL_ONLY",
             payload=payload,
             status=NotificationStatus.SENDING,
             attempts=1,
@@ -284,6 +285,17 @@ class NotificationService:
         db.flush()
 
         result = cls.send_email_resend_sync(recipient_email, rendered["subject"], rendered["html"])
+        
+        wa_sent = False
+        if recipient_phone:
+            try:
+                from app.integrations.whatsapp.client import whatsapp_client
+                wa_res = whatsapp_client.send_text_message(recipient_phone, rendered["whatsapp_text"])
+                if wa_res.get("success"):
+                    wa_sent = True
+            except Exception as e:
+                logger.warning(f"Failed to send WhatsApp notification: {e}")
+
         if result.get("status") == "DELIVERED":
             record.status = NotificationStatus.DELIVERED
             record.delivered_at = datetime.now(timezone.utc)
@@ -295,6 +307,10 @@ class NotificationService:
         else:
             record.status = NotificationStatus.FAILED
             record.error_log = result.get("error") or "delivery_failed"
+            
+        if recipient_phone and not wa_sent and record.status != NotificationStatus.FAILED:
+            record.error_log = (record.error_log or "") + " | WA_FAILED"
+            
         record.updated_at = datetime.now(timezone.utc)
         db.commit()
         return result
@@ -313,6 +329,7 @@ class NotificationService:
             "passengerName": context.get("passenger_name") or context.get("passengerName"),
             "passengerEmail": customer_email,
             "passengerPhone": context.get("passenger_phone") or context.get("passengerPhone"),
+            "passengerCount": context.get("passenger_count") or context.get("passengerCount") or context.get("pax_count") or 1,
             "flightNum": context.get("flight_num") or context.get("flightNum"),
             "originCode": context.get("origin_code") or context.get("originCode"),
             "destCode": context.get("dest_code") or context.get("destCode"),
@@ -322,7 +339,7 @@ class NotificationService:
             "service_name": context.get("service_name") or context.get("package") or context.get("service_type"),
             "departureTime": context.get("departure_time") or context.get("service_date"),
             "terminal": context.get("terminal"),
-            "totalAmount": context.get("total_amount") or context.get("totalAmount"),
+            "totalAmount": float(context.get("total_amount") or context.get("totalAmount") or 0.0),
             "currency": context.get("currency") or "INR",
             "status": context.get("status") or "PENDING",
         }
@@ -335,9 +352,10 @@ class NotificationService:
                 summary["customer"] = cls._record_and_send(
                     db,
                     recipient_email=customer_email,
-                    template_type="BOOKING_CONFIRMATION",
+                    template_type="BOOKING_RECEIVED",
                     payload=payload,
                     booking_ref=booking_ref,
+                    recipient_phone=str(context.get("passenger_phone") or context.get("passengerPhone") or "").strip() or None,
                 )
             else:
                 logger.warning("Customer confirmation skipped: missing email", extra={"booking_ref": booking_ref})
@@ -363,8 +381,69 @@ class NotificationService:
                 )
         except Exception as exc:
             logger.exception("Booking notification failed for %s: %s", booking_ref, type(exc).__name__)
-            try:
-                db.rollback()
-            except Exception:
-                pass
         return summary
+
+    @classmethod
+    def notify_booking_confirmed(cls, db: Session, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Sends the official BOOKING_CONFIRMATION customer and operations notifications
+        only after a payment is verified as successful.
+        Protected by _already_notified idempotency check.
+        """
+        booking_ref = str(context.get("booking_ref") or context.get("bookingRef") or "")
+        customer_email = str(context.get("passenger_email") or context.get("passengerEmail") or "").strip()
+        payload = {
+            "booking_ref": booking_ref,
+            "bookingRef": booking_ref,
+            "passengerName": context.get("passenger_name") or context.get("passengerName"),
+            "passengerEmail": customer_email,
+            "passengerPhone": context.get("passenger_phone") or context.get("passengerPhone"),
+            "passengerCount": context.get("passenger_count") or context.get("passengerCount") or context.get("pax_count") or 1,
+            "flightNum": context.get("flight_num") or context.get("flightNum"),
+            "originCode": context.get("origin_code") or context.get("originCode"),
+            "destCode": context.get("dest_code") or context.get("destCode"),
+            "airportCode": context.get("airport_code") or context.get("airportCode"),
+            "journeyType": context.get("journey_type") or context.get("journeyType"),
+            "service_type": context.get("service_type") or context.get("serviceType"),
+            "service_name": context.get("service_name") or context.get("package") or context.get("service_type"),
+            "departureTime": context.get("departure_time") or context.get("service_date"),
+            "terminal": context.get("terminal"),
+            "totalAmount": float(context.get("total_amount") or context.get("totalAmount") or 0.0),
+            "currency": context.get("currency") or "INR",
+            "status": "CONFIRMED",
+        }
+
+        summary: Dict[str, Any] = {"booking_ref": booking_ref, "customer": None, "admin": []}
+        logger.info("Official booking confirmation notification requested", extra={"booking_ref": booking_ref})
+
+        try:
+            if customer_email:
+                summary["customer"] = cls._record_and_send(
+                    db,
+                    recipient_email=customer_email,
+                    template_type="BOOKING_CONFIRMATION",
+                    payload=payload,
+                    booking_ref=booking_ref,
+                    recipient_phone=str(context.get("passenger_phone") or context.get("passengerPhone") or "").strip() or None,
+                )
+            else:
+                logger.warning("Customer confirmation skipped: missing email", extra={"booking_ref": booking_ref})
+                summary["customer"] = {"status": "FAILED", "error": "missing_recipient"}
+
+            for admin_email in cls.admin_notification_recipients():
+                summary["admin"].append(
+                    {
+                        "recipient_domain": admin_email.split("@")[-1],
+                        **cls._record_and_send(
+                            db,
+                            recipient_email=admin_email,
+                            template_type="ADMIN_NEW_BOOKING",
+                            payload=payload,
+                            booking_ref=booking_ref,
+                        ),
+                    }
+                )
+        except Exception as exc:
+            logger.exception("Booking confirmation notification failed for %s: %s", booking_ref, type(exc).__name__)
+        return summary
+

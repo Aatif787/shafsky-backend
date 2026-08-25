@@ -29,8 +29,19 @@ class BookingService:
     ) -> float:
         from app.models.journey_models import SupportedAirport, Service, AirportService
 
-        code_clean = (airport_code or "DEL").strip().upper()
-        slug_clean = (service_tier_or_slug or "silver").strip().lower()
+        code_clean = (airport_code or "").strip().upper()
+        slug_raw = (service_tier_or_slug or "silver").strip().lower().replace("_", "-").replace(" ", "-")
+        slug_aliases = {
+            "gold-service": "gold",
+            "silver-service": "silver",
+            "elite-service": "elite",
+            "elite-plus-service": "elite-plus",
+            "eliteplus": "elite-plus",
+            "platinum-service": "platinum",
+            "bronze-service": "bronze",
+            "diamond-service": "diamond",
+        }
+        slug_clean = slug_aliases.get(slug_raw, slug_raw)
         j_type_clean = (journey_type or "DEPARTURE").strip().upper()
         f_type_clean = (flight_type or "DOMESTIC").strip().upper()
 
@@ -45,8 +56,15 @@ class BookingService:
             )
 
         # 2. Lookup Service by slug or matching tier name
+        slug_candidates = {slug_clean, slug_clean.replace("-", "_"), slug_raw}
         service = db.scalar(
-            select(Service).where(or_(Service.slug == slug_clean, Service.name.ilike(f"%{slug_clean}%")))
+            select(Service).where(
+                or_(
+                    Service.slug.in_(list(slug_candidates)),
+                    Service.name.ilike(f"%{slug_clean.replace('-', ' ')}%"),
+                    Service.name.ilike(f"%{slug_raw.replace('-', ' ')}%"),
+                )
+            )
         )
 
         # 3. Lookup AirportService relationship in DB
@@ -107,6 +125,30 @@ class BookingService:
     ) -> Booking:
         now = datetime.now(timezone.utc)
 
+        from app.services.service_airport_rules import (
+            normalize_flight_type,
+            normalize_journey_type,
+            resolve_service_airport_iata,
+        )
+
+        metadata_json = payload.metadata_json or payload.metadata or {}
+        journey_type = normalize_journey_type(
+            metadata_json.get("journey_type") or metadata_json.get("direction") or payload.service_category
+        )
+        service_airport = (
+            metadata_json.get("service_airport")
+            or metadata_json.get("airport_code")
+            or ""
+        )
+        service_airport = str(service_airport).strip().upper()
+        if journey_type == "ARRIVAL" and not payload.dest_code and service_airport:
+            payload.dest_code = service_airport
+        if journey_type == "DEPARTURE" and not payload.origin_code and service_airport:
+            payload.origin_code = service_airport
+        if journey_type == "TRANSIT" and not metadata_json.get("transit_code") and service_airport:
+            metadata_json["transit_code"] = service_airport
+            payload.metadata_json = metadata_json
+
         # 1. Dynamic Validation across all service categories
         service_category = ServiceValidator.validate_booking(payload)
 
@@ -118,33 +160,48 @@ class BookingService:
         # 3. Handle Flight Datetimes if present
         dep_time = payload.departure_time
         arr_time = payload.arrival_time
+        if dep_time is not None and dep_time.tzinfo is None:
+            dep_time = dep_time.replace(tzinfo=timezone.utc)
+        if arr_time is not None and arr_time.tzinfo is None:
+            arr_time = arr_time.replace(tzinfo=timezone.utc)
 
-        if dep_time is not None:
-            if dep_time.tzinfo is None:
-                dep_time = dep_time.replace(tzinfo=timezone.utc)
+        early_meta = payload.metadata_json or payload.metadata or {}
+        from app.services.service_airport_rules import normalize_journey_type as _norm_jt
+        early_jt = _norm_jt(
+            (early_meta or {}).get("journey_type")
+            or (early_meta or {}).get("direction")
+            or payload.service_category
+        )
 
-            if arr_time is not None:
-                if arr_time.tzinfo is None:
-                    arr_time = arr_time.replace(tzinfo=timezone.utc)
-                if arr_time <= dep_time:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Flight arrival time must be after departure time."
-                    )
+        # Checkout sends a single service clock. Map it onto the journey type
+        # so arrival bookings are not rejected for a missing arrivalTime field.
+        if early_jt == "ARRIVAL" and arr_time is None and dep_time is not None:
+            arr_time = dep_time
+        elif early_jt == "DEPARTURE" and dep_time is None and arr_time is not None:
+            dep_time = arr_time
 
-            if dep_time < now:
+        service_clock = arr_time if early_jt == "ARRIVAL" else dep_time
+        if early_jt == "TRANSIT":
+            service_clock = dep_time or arr_time
+
+        if service_clock is not None:
+            if service_clock < now:
                 raise HTTPException(
                     status_code=400,
-                    detail="This flight has already departed. Past departures cannot be booked."
+                    detail="This flight time is in the past and cannot be booked."
                 )
-
-            diff_seconds = (dep_time - now).total_seconds()
-            diff_hours = diff_seconds / 3600.0
+            diff_hours = (service_clock - now).total_seconds() / 3600.0
             if diff_hours < 6.0:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Bookings require at least 6 hours advance notice. Departure is in {round(diff_hours, 1)} hours."
+                    detail=f"Bookings require at least 6 hours advance notice. Service time is in {round(diff_hours, 1)} hours."
                 )
+
+        if dep_time is not None and arr_time is not None and arr_time < dep_time:
+            raise HTTPException(
+                status_code=400,
+                detail="Flight arrival time must be after departure time."
+            )
 
         # 4. Resolve valid profile_id against profiles table
         valid_profile_id = None
@@ -162,18 +219,15 @@ class BookingService:
 
         # 5. Calculate server-side authoritative price from Database (Ignore untrusted client price)
         pax_count = 1
-        if metadata_json and "pax_adults" in metadata_json:
-            try:
-                pax_count = max(1, int(metadata_json.get("pax_adults", 1)))
-            except (ValueError, TypeError):
-                pax_count = 1
+        for pax_key in ("pax_adults", "guest_count", "guestCount", "passenger_count", "passengers"):
+            if metadata_json and pax_key in metadata_json:
+                try:
+                    pax_count = max(1, int(metadata_json.get(pax_key, 1)))
+                    break
+                except (ValueError, TypeError):
+                    pax_count = 1
 
         from app.models.journey_models import SupportedAirport
-        from app.services.service_airport_rules import (
-            normalize_flight_type,
-            normalize_journey_type,
-            resolve_service_airport_iata,
-        )
 
         meta = metadata_json or {}
         journey_type = normalize_journey_type(
@@ -219,6 +273,18 @@ class BookingService:
             pax_count=pax_count
         )
 
+        # Charge the same GST-inclusive total shown on the review screen.
+        subtotal = round(float(authoritative_price), 2)
+        taxes = round(subtotal * 0.18, 2) if service_category == "Airport Assistance" else 0.0
+        charge_amount = round(subtotal + taxes, 2)
+        metadata_json = dict(metadata_json or {})
+        metadata_json["subtotal"] = subtotal
+        metadata_json["taxes"] = taxes
+        metadata_json["tax_rate"] = 0.18 if taxes else 0.0
+        metadata_json["journey_type"] = journey_type
+        metadata_json["flight_type"] = flight_type
+        metadata_json["service_airport"] = target_airport
+
         # 6. Generate unique booking reference with retry on concurrency collision
         max_attempts = 5
         for attempt in range(max_attempts):
@@ -243,7 +309,7 @@ class BookingService:
                 selected_services=selected_services,
                 service_options=service_options,
                 metadata_json=metadata_json,
-                total_amount=authoritative_price,
+                total_amount=charge_amount,
                 currency=payload.currency or "INR",
                 status=BookingStatus.PENDING,
                 version=1,
@@ -264,6 +330,7 @@ class BookingService:
                         "passenger_name": new_booking.passenger_name,
                         "passenger_email": new_booking.passenger_email,
                         "passenger_phone": new_booking.passenger_phone,
+                        "passenger_count": pax_count,
                         "flight_num": new_booking.flight_num,
                         "origin_code": new_booking.origin_code,
                         "dest_code": new_booking.dest_code,
@@ -273,7 +340,7 @@ class BookingService:
                         "service_name": meta.get("package") or new_booking.service_type,
                         "departure_time": new_booking.departure_time.isoformat() if new_booking.departure_time else None,
                         "terminal": meta.get("terminal"),
-                        "total_amount": new_booking.total_amount,
+                        "total_amount": float(new_booking.total_amount) if new_booking.total_amount is not None else 0.0,
                         "currency": new_booking.currency,
                         "status": new_booking.status.value if hasattr(new_booking.status, "value") else str(new_booking.status),
                     })

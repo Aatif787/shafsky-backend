@@ -18,27 +18,52 @@ from app.providers.base import MockEmailProvider, MockWhatsAppProvider, MockSMSP
 client = TestClient(app)
 
 
-@pytest.fixture(autouse=True)
+from app.models.schema import Booking, BookingStatus
+from app.database import get_db
+
+@pytest.fixture(scope="session", autouse=True)
 def setup_db():
     Base.metadata.create_all(bind=engine)
     yield
 
 
 def test_payment_initiation_webhook_and_invoice():
+    db = next(get_db())
+    booking_ref = f"SHF-COMM-{uuid.uuid4().hex[:6].upper()}"
+    booking = Booking(
+        id=uuid.uuid4(),
+        booking_ref=booking_ref,
+        passenger_name="John Payee",
+        passenger_email="john@shafsky.com",
+        passenger_phone="+919876543210",
+        service_category="Airport Assistance",
+        service_type="Meet & Assist",
+        origin_code="DEL",
+        dest_code="DXB",
+        total_amount=15000.0,
+        currency="INR",
+        status=BookingStatus.PENDING
+    )
+    db.add(booking)
+    db.commit()
+
+    user_id = str(uuid.uuid4())
     user_email = f"pay_user_{uuid.uuid4().hex[:6]}@shafsky.com"
-    token = AuthService.create_access_token({"sub": user_email, "user_id": str(uuid.uuid4()), "role": "CUSTOMER"})
+    token = AuthService.create_access_token({"sub": user_email, "user_id": user_id, "role": "CUSTOMER"})
     headers = {"Authorization": f"Bearer {token}"}
 
     # 1. Initiate Payment
     init_payload = {
         "entity_type": "AIRPORT_BOOKING",
-        "entity_id": str(uuid.uuid4()),
+        "entity_id": booking_ref,
+        "customer_id": user_id,
         "customer_name": "John Payee",
         "customer_email": user_email,
         "amount": 15000.0,
         "currency": "INR",
         "payment_method": "CREDIT_CARD"
     }
+
 
     res = client.post("/api/payments/initiate", json=init_payload, headers=headers)
     assert res.status_code == 201, res.text
@@ -65,13 +90,32 @@ def test_payment_initiation_webhook_and_invoice():
 
 
 def test_payment_refund_flow():
+    db = next(get_db())
+    booking_ref = f"SHF-COMM-{uuid.uuid4().hex[:6].upper()}"
+    booking = Booking(
+        id=uuid.uuid4(),
+        booking_ref=booking_ref,
+        passenger_name="Jane Refundee",
+        passenger_email="jane@shafsky.com",
+        passenger_phone="+919876543210",
+        service_category="Airport Assistance",
+        service_type="Meet & Assist",
+        origin_code="DEL",
+        dest_code="DXB",
+        total_amount=5000.0,
+        currency="INR",
+        status=BookingStatus.PENDING
+    )
+    db.add(booking)
+    db.commit()
+
     admin_token = AuthService.create_access_token({"sub": "admin@shafsky.com", "user_id": str(uuid.uuid4()), "role": "SUPER_ADMIN"})
     admin_headers = {"Authorization": f"Bearer {admin_token}"}
 
     # 1. Initiate & Succeed Payment
     init_payload = {
         "entity_type": "AIRPORT_BOOKING",
-        "entity_id": str(uuid.uuid4()),
+        "entity_id": booking_ref,
         "customer_name": "Jane Refundee",
         "customer_email": "jane@shafsky.com",
         "amount": 5000.0,
@@ -79,6 +123,7 @@ def test_payment_refund_flow():
         "payment_method": "UPI"
     }
     res = client.post("/api/payments/initiate", json=init_payload, headers=admin_headers)
+    assert res.status_code == 201, res.text
     tx_id = res.json()["data"]["id"]
     tx_ref = res.json()["data"]["transaction_ref"]
 
@@ -88,6 +133,7 @@ def test_payment_refund_flow():
         "transaction_ref": tx_ref,
         "gateway_payment_id": "pay_mock_123"
     })
+
 
     # 2. Refund
     ref_res = client.post("/api/payments/refund", json={

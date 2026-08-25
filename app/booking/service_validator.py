@@ -128,8 +128,50 @@ class ServiceValidator:
             raise HTTPException(status_code=400, detail="Airport Assistance requires a flight number.")
         if not getattr(payload, "origin_code", None) or not getattr(payload, "dest_code", None):
             raise HTTPException(status_code=400, detail="Airport Assistance requires origin and destination IATA codes.")
-        if not getattr(payload, "departure_time", None) or not getattr(payload, "arrival_time", None):
-            raise HTTPException(status_code=400, detail="Airport Assistance requires departure and arrival times.")
+
+        metadata = getattr(payload, "metadata_json", None) or getattr(payload, "metadata", None) or {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        if not isinstance(options, dict):
+            options = {}
+
+        raw_jt = (
+            getattr(payload, "journey_type", None)
+            or getattr(payload, "journeyType", None)
+            or metadata.get("journey_type")
+            or metadata.get("journeyType")
+            or metadata.get("direction")
+            or options.get("journey_type")
+            or options.get("journeyType")
+            or options.get("direction")
+        )
+
+        dep_time = getattr(payload, "departure_time", None)
+        arr_time = getattr(payload, "arrival_time", None)
+
+        if raw_jt:
+            from app.services.service_airport_rules import normalize_journey_type
+            jt = normalize_journey_type(str(raw_jt))
+        else:
+            # Infer from timestamps if journey_type was not explicitly provided
+            if dep_time and not arr_time:
+                jt = "DEPARTURE"
+            elif arr_time and not dep_time:
+                jt = "ARRIVAL"
+            elif dep_time and arr_time:
+                jt = "TRANSIT"
+            else:
+                jt = "DEPARTURE"
+
+        if jt == "DEPARTURE":
+            if not dep_time and not arr_time:
+                raise HTTPException(status_code=400, detail="Departure airport assistance requires a departure time.")
+        elif jt == "ARRIVAL":
+            if not arr_time and not dep_time:
+                raise HTTPException(status_code=400, detail="Arrival airport assistance requires an arrival time.")
+        elif jt == "TRANSIT":
+            if not dep_time and not arr_time:
+                raise HTTPException(status_code=400, detail="Transit airport assistance requires a service date and time.")
 
     @classmethod
     def _validate_ground_transport(cls, payload: Any, options: Dict[str, Any]) -> None:

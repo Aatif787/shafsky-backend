@@ -1308,24 +1308,7 @@ async def create_checkout_session(
     db: Session = Depends(get_db),
     user: Dict[str, Any] = Depends(_decode_token),
 ):
-    try:
-        bid = uuid.UUID(body.bookingId)
-        booking = db.scalar(select(Booking).where(Booking.id == bid))
-    except ValueError:
-        booking = db.scalar(select(Booking).where(Booking.booking_ref == body.bookingId))
-
-    if not booking:
-        raise HTTPException(404, "Booking not found")
-
-    # Real production checkout session generation logic
-    order_ref = booking.booking_ref
-    checkout_url = f"/?payment=success&ref={order_ref}&provider={body.provider}&amount={body.amount}"
-
-    _audit(db, actor_id=user.get("userId", ""), actor_email=user.get("email", ""),
-           action=f"payment.{body.provider}_session_created", resource_type="booking",
-           resource_id=str(booking.id), details={"amount": body.amount})
-
-    return _ApiOk(data={"url": checkout_url, "provider": body.provider, "bookingRef": order_ref})
+    raise HTTPException(status_code=501, detail="Legacy mock checkout endpoint disabled for security. Use native Razorpay flow.")
 
 
 class ConfirmPaymentRequest(BaseModel):
@@ -1340,41 +1323,14 @@ async def confirm_payment(
     db: Session = Depends(get_db),
     user: Dict[str, Any] = Depends(_decode_token),
 ):
-    try:
-        bid = uuid.UUID(body.bookingId)
-        booking = db.scalar(select(Booking).where(Booking.id == bid))
-    except ValueError:
-        booking = db.scalar(select(Booking).where(Booking.booking_ref == body.bookingId))
-
-    if not booking:
-        raise HTTPException(404, "Booking not found")
-
-    booking.status = BookingStatus.CONFIRMED
-    booking.total_amount = body.amount
-    booking.updated_at = datetime.now(timezone.utc)
-
-    # Insert ORM Payment ledger record
-    pymt = Payment(
-        id=uuid.uuid4(),
-        booking_id=booking.id,
-        user_id=booking.user_id,
-        provider=body.provider,
-        provider_payment_id=body.transactionId,
-        provider_order_id=booking.booking_ref,
-        amount=body.amount,
-        currency=booking.currency or "INR",
-        status="completed",
-        receipt_number=f"RECEIPT-{booking.booking_ref}",
-        transaction_time=datetime.now(timezone.utc),
+    """
+    DEPRECATED & DISABLED: Direct client-side payment confirmation without cryptographic verification is prohibited.
+    All payments must be verified via POST /api/payments/verify or official Razorpay webhooks.
+    """
+    raise HTTPException(
+        status_code=403,
+        detail="Direct client payment confirmation is disabled. Use POST /api/payments/verify with HMAC signature verification."
     )
-    db.add(pymt)
-    db.commit()
-
-    _audit(db, actor_id=user.get("userId", ""), actor_email=user.get("email", ""),
-           action="payment.confirmed", resource_type="booking", resource_id=str(booking.id),
-           details={"amount": body.amount, "transactionId": body.transactionId})
-
-    return _ApiOk(data={"success": True, "bookingId": str(booking.id), "receiptNumber": pymt.receipt_number})
 
 
 @router.post("/api/payments/ledger", response_model=_ApiOk)

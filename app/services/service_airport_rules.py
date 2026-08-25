@@ -36,6 +36,13 @@ def normalize_flight_type(flight_type: Optional[str]) -> Optional[str]:
         return "DOMESTIC"
     if ft in ("INTERNATIONAL", "INTL", "INT", "I"):
         return "INTERNATIONAL"
+    if ft in (
+        "DOMESTIC_DOMESTIC",
+        "DOMESTIC_INTERNATIONAL",
+        "INTERNATIONAL_DOMESTIC",
+        "INTERNATIONAL_INTERNATIONAL",
+    ):
+        return ft
     return None
 
 

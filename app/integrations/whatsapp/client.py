@@ -7,6 +7,7 @@ import os
 import hmac
 import hashlib
 import logging
+import time
 from typing import Dict, Any, Optional, List
 import httpx
 
@@ -152,7 +153,7 @@ class WhatsAppClient:
         return is_valid
 
     def _dispatch_http(self, clean_phone: str, payload: Dict[str, Any], label: str = "Message") -> Dict[str, Any]:
-        """High-speed HTTP dispatcher utilizing persistent connection keep-alive."""
+        """HTTP dispatcher with keep-alive plus bounded retry on timeout / 429 / 5xx."""
         if not self.is_configured():
             logger.warning("[WhatsApp] Send skipped: WHATSAPP_ACCESS_TOKEN or WHATSAPP_PHONE_NUMBER_ID is not configured.")
             return {
@@ -165,64 +166,101 @@ class WhatsAppClient:
             "Authorization": self._cached_auth_header or f"Bearer {self.access_token}",
             "Content-Type": "application/json"
         }
+        masked_phone = f"{clean_phone[:3]}****{clean_phone[-3:]}" if len(clean_phone) > 6 else clean_phone
+        retryable_status = {429, 500, 502, 503, 504}
+        max_attempts = 3
+        last_error: Dict[str, Any] = {
+            "success": False,
+            "error": "Meta WhatsApp API request failed.",
+            "status": "failed"
+        }
 
-        try:
-            client = self._get_http_client()
-            response = client.post(self.base_url, headers=headers, json=payload)
-            masked_phone = f"{clean_phone[:3]}****{clean_phone[-3:]}" if len(clean_phone) > 6 else clean_phone
+        for attempt in range(1, max_attempts + 1):
+            try:
+                client = self._get_http_client()
+                response = client.post(self.base_url, headers=headers, json=payload)
 
-            if response.status_code in (200, 201):
-                data = response.json()
-                message_id = None
-                if "messages" in data and len(data["messages"]) > 0:
-                    message_id = data["messages"][0].get("id")
+                if response.status_code in (200, 201):
+                    data = response.json()
+                    message_id = None
+                    if "messages" in data and len(data["messages"]) > 0:
+                        message_id = data["messages"][0].get("id")
 
-                logger.info(f"[WhatsApp] {label} dispatched successfully to {masked_phone}. ID: {message_id}")
-                return {
-                    "success": True,
-                    "message_id": message_id,
-                    "status": "sent",
-                    "response": data
+                    logger.info(f"[WhatsApp] {label} dispatched successfully to {masked_phone}. ID: {message_id}")
+                    return {
+                        "success": True,
+                        "message_id": message_id,
+                        "status": "sent",
+                        "response": data
+                    }
+
+                err_data = {}
+                try:
+                    err_data = response.json().get("error", {})
+                except Exception:
+                    pass
+
+                error_msg = err_data.get("message", response.text)
+                error_code = err_data.get("code", response.status_code)
+                error_subcode = err_data.get("error_subcode")
+
+                if self.access_token and self.access_token in str(error_msg):
+                    error_msg = str(error_msg).replace(self.access_token, "[REDACTED]")
+
+                last_error = {
+                    "success": False,
+                    "status_code": response.status_code,
+                    "error_code": error_code,
+                    "error_subcode": error_subcode,
+                    "error": f"Meta API Error ({response.status_code}): {error_msg}",
+                    "status": "failed"
                 }
 
-            # Meta API Error Handling
-            err_data = {}
-            try:
-                err_data = response.json().get("error", {})
-            except Exception:
-                pass
+                if response.status_code in retryable_status and attempt < max_attempts:
+                    delay = min(2 ** attempt, 8)
+                    retry_after = response.headers.get("Retry-After")
+                    if retry_after:
+                        try:
+                            delay = min(int(float(retry_after)), 8)
+                        except (TypeError, ValueError):
+                            pass
+                    logger.warning(
+                        "[WhatsApp] Retryable Meta API error HTTP %s for %s (attempt %s/%s); waiting %ss",
+                        response.status_code, masked_phone, attempt, max_attempts, delay
+                    )
+                    time.sleep(delay)
+                    continue
 
-            error_msg = err_data.get("message", response.text)
-            error_code = err_data.get("code", response.status_code)
-            error_subcode = err_data.get("error_subcode")
+                logger.error(
+                    f"[WhatsApp] Meta API Error (HTTP {response.status_code}, Code {error_code}): {error_msg} for {masked_phone}"
+                )
+                return last_error
 
-            if self.access_token and self.access_token in error_msg:
-                error_msg = error_msg.replace(self.access_token, "[REDACTED]")
+            except httpx.TimeoutException:
+                last_error = {
+                    "success": False,
+                    "error": "Timeout connecting to Meta WhatsApp API.",
+                    "status": "failed"
+                }
+                if attempt < max_attempts:
+                    delay = min(2 ** attempt, 8)
+                    logger.warning(
+                        "[WhatsApp] Graph API timeout for %s (attempt %s/%s); waiting %ss",
+                        masked_phone, attempt, max_attempts, delay
+                    )
+                    time.sleep(delay)
+                    continue
+                logger.error(f"[WhatsApp] Network timeout connecting to Meta Graph API at {self.base_url}")
+                return last_error
+            except Exception as err:
+                logger.error(f"[WhatsApp] Exception during Graph API request: {err}")
+                return {
+                    "success": False,
+                    "error": "Network exception contacting Meta WhatsApp API.",
+                    "status": "failed"
+                }
 
-            logger.error(f"[WhatsApp] Meta API Error (HTTP {response.status_code}, Code {error_code}): {error_msg} for {masked_phone}")
-            return {
-                "success": False,
-                "status_code": response.status_code,
-                "error_code": error_code,
-                "error_subcode": error_subcode,
-                "error": f"Meta API Error ({response.status_code}): {error_msg}",
-                "status": "failed"
-            }
-
-        except httpx.TimeoutException:
-            logger.error(f"[WhatsApp] Network timeout connecting to Meta Graph API at {self.base_url}")
-            return {
-                "success": False,
-                "error": "Timeout connecting to Meta WhatsApp API.",
-                "status": "failed"
-            }
-        except Exception as err:
-            logger.error(f"[WhatsApp] Exception during Graph API request: {err}")
-            return {
-                "success": False,
-                "error": f"Network exception: {str(err)}",
-                "status": "failed"
-            }
+        return last_error
 
     def send_message(
         self,
@@ -334,12 +372,27 @@ class WhatsAppClient:
         self._load_config()
         clean_phone = "".join(filter(str.isdigit, str(to_phone)))
 
+        sanitized_sections: List[Dict[str, Any]] = []
+        for section in sections[:10]:
+            rows = []
+            for row in (section.get("rows") or [])[:10]:
+                rows.append({
+                    "id": str(row.get("id", ""))[:200],
+                    "title": str(row.get("title", "Option"))[:24],
+                    "description": str(row.get("description") or "")[:72],
+                })
+            if rows:
+                sanitized_sections.append({
+                    "title": str(section.get("title") or "Options")[:24],
+                    "rows": rows,
+                })
+
         interactive_obj: Dict[str, Any] = {
             "type": "list",
-            "body": {"text": body_text},
+            "body": {"text": (body_text or "")[:1024]},
             "action": {
                 "button": button_title[:20],
-                "sections": sections
+                "sections": sanitized_sections
             }
         }
         if header_text:

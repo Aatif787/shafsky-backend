@@ -60,6 +60,12 @@ async def startup_checks():
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
+            try:
+                conn.execute(text("ALTER TABLE payment_transactions ADD COLUMN IF NOT EXISTS is_duplicate BOOLEAN DEFAULT FALSE"))
+                conn.execute(text("ALTER TABLE payment_transactions ADD COLUMN IF NOT EXISTS notes TEXT"))
+                conn.commit()
+            except Exception:
+                pass
     except Exception as err:
         structured_logger.critical("Database connectivity check failed on startup", extra={"error": str(err)})
         # In production/staging, fail fast
@@ -145,6 +151,15 @@ app.include_router(ai_router.router)
 app.include_router(whatsapp_router)
 app.include_router(journey_router.router)
 app.include_router(operations_router.router)
+
+# Direct Razorpay Standard Checkout Root Endpoints
+@app.post("/api/create-order", tags=["Razorpay Checkout"], status_code=201)
+async def root_create_order(payload: payment_router.RazorpayCreateOrderRequest, db: Session = Depends(get_db)):
+    return await payment_router.create_order_endpoint(payload, db)
+
+@app.post("/api/verify-payment", tags=["Razorpay Checkout"], status_code=200)
+async def root_verify_payment(payload: payment_router.PaymentVerifyRequest, db: Session = Depends(get_db)):
+    return await payment_router.verify_payment_endpoint(payload, db)
 
 
 @app.get("/api/global-airports", tags=["Journey Detection Engine"])

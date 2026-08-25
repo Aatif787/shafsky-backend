@@ -258,3 +258,298 @@ def test_admin_update_service_config(client, admin_token):
     data = response.json()["data"]
     assert data["basePrice"] == 5200.0
     assert data["description"] == "Updated VIP meet and greet description"
+
+
+# ─── TEST JOURNEY-SPECIFIC AIRPORT ASSISTANCE TIME VALIDATION ─────────────────
+
+def test_departure_with_departure_time_only_is_valid(client):
+    """DEPARTURE journey should succeed with only departure_time (arrival_time not required)."""
+    dep_time = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
+    payload = {
+        "passengerName": "Dep Passenger",
+        "passengerEmail": "dep@example.com",
+        "passengerPhone": "+919876543210",
+        "serviceCategory": "Airport Assistance",
+        "serviceType": "silver",
+        "flightNum": "SHF-DEP1",
+        "originCode": "DEL",
+        "destCode": "BOM",
+        "departureTime": dep_time,
+        "metadataJson": {
+            "journey_type": "DEPARTURE",
+            "flight_type": "DOMESTIC",
+            "service_airport": "DEL"
+        },
+        "totalAmount": 4500.0,
+        "currency": "INR"
+    }
+    response = client.post("/api/bookings", json=payload)
+    assert response.status_code == 201
+    body = response.json()
+    assert body["success"] is True
+    assert body["data"]["departureTime"] is not None
+    assert body["data"]["arrivalTime"] is None
+
+
+def test_departure_without_departure_time_is_invalid(client):
+    """DEPARTURE journey must fail if departure_time is missing."""
+    arr_time = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
+    payload = {
+        "passengerName": "Dep Missing",
+        "passengerEmail": "dep_missing@example.com",
+        "passengerPhone": "+919876543210",
+        "serviceCategory": "Airport Assistance",
+        "serviceType": "silver",
+        "flightNum": "SHF-DEP2",
+        "originCode": "DEL",
+        "destCode": "BOM",
+        "arrivalTime": arr_time,
+        "metadataJson": {
+            "journey_type": "DEPARTURE",
+            "flight_type": "DOMESTIC",
+            "service_airport": "DEL"
+        },
+        "totalAmount": 4500.0,
+        "currency": "INR"
+    }
+    response = client.post("/api/bookings", json=payload)
+    assert response.status_code == 400
+    assert "departure" in response.json()["detail"].lower()
+
+
+def test_arrival_with_arrival_time_only_is_valid(client):
+    """ARRIVAL journey should succeed with only arrival_time (departure_time not required)."""
+    arr_time = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
+    payload = {
+        "passengerName": "Arr Passenger",
+        "passengerEmail": "arr@example.com",
+        "passengerPhone": "+919876543210",
+        "serviceCategory": "Airport Assistance",
+        "serviceType": "silver",
+        "flightNum": "SHF-ARR1",
+        "originCode": "BOM",
+        "destCode": "DEL",
+        "arrivalTime": arr_time,
+        "metadataJson": {
+            "journey_type": "ARRIVAL",
+            "flight_type": "DOMESTIC",
+            "service_airport": "DEL"
+        },
+        "totalAmount": 4500.0,
+        "currency": "INR"
+    }
+    response = client.post("/api/bookings", json=payload)
+    assert response.status_code == 201
+    body = response.json()
+    assert body["success"] is True
+    assert body["data"]["arrivalTime"] is not None
+    assert body["data"]["departureTime"] is None
+
+
+def test_arrival_without_arrival_time_is_invalid(client):
+    """ARRIVAL journey must fail if arrival_time is missing."""
+    dep_time = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
+    payload = {
+        "passengerName": "Arr Missing",
+        "passengerEmail": "arr_missing@example.com",
+        "passengerPhone": "+919876543210",
+        "serviceCategory": "Airport Assistance",
+        "serviceType": "silver",
+        "flightNum": "SHF-ARR2",
+        "originCode": "BOM",
+        "destCode": "DEL",
+        "departureTime": dep_time,
+        "metadataJson": {
+            "journey_type": "ARRIVAL",
+            "flight_type": "DOMESTIC",
+            "service_airport": "DEL"
+        },
+        "totalAmount": 4500.0,
+        "currency": "INR"
+    }
+    response = client.post("/api/bookings", json=payload)
+    assert response.status_code == 400
+    assert "arrival" in response.json()["detail"].lower()
+
+
+def test_transit_with_both_times_is_valid(client):
+    """TRANSIT journey succeeds when both arrival_time and departure_time are provided."""
+    dep_time = (datetime.now(timezone.utc) + timedelta(hours=20)).isoformat()
+    arr_time = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
+    payload = {
+        "passengerName": "Transit Passenger",
+        "passengerEmail": "transit@example.com",
+        "passengerPhone": "+919876543210",
+        "serviceCategory": "Airport Assistance",
+        "serviceType": "meet_greet",
+        "flightNum": "SHF-TR1",
+        "originCode": "DEL",
+        "destCode": "DXB",
+        "departureTime": dep_time,
+        "arrivalTime": arr_time,
+        "metadataJson": {
+            "journey_type": "TRANSIT",
+            "flight_type": "DOMESTIC_INTERNATIONAL",
+            "transit_code": "DEL",
+            "service_airport": "DEL"
+        },
+        "totalAmount": 7500.0,
+        "currency": "INR"
+    }
+    response = client.post("/api/bookings", json=payload)
+    assert response.status_code == 201
+    body = response.json()
+    assert body["success"] is True
+
+
+def test_transit_missing_time_is_invalid(client):
+    """TRANSIT journey must fail if either arrival_time or departure_time is missing."""
+    dep_time = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
+    payload = {
+        "passengerName": "Transit Missing",
+        "passengerEmail": "transit_missing@example.com",
+        "passengerPhone": "+919876543210",
+        "serviceCategory": "Airport Assistance",
+        "serviceType": "silver",
+        "flightNum": "SHF-TR2",
+        "originCode": "BOM",
+        "destCode": "DXB",
+        "departureTime": dep_time,
+        "metadataJson": {
+            "journey_type": "TRANSIT",
+            "flight_type": "DOMESTIC_INTERNATIONAL",
+            "transit_code": "DEL",
+            "service_airport": "DEL"
+        },
+        "totalAmount": 4500.0,
+        "currency": "INR"
+    }
+    response = client.post("/api/bookings", json=payload)
+    assert response.status_code == 400
+    assert "transit" in response.json()["detail"].lower()
+
+
+# ─── DIRECT SERVICEVALIDATOR UNIT TESTS ───────────────────────────────────────
+
+def test_service_validator_departure_valid():
+    from app.schemas.booking import BookingCreate
+    payload = BookingCreate(
+        passengerName="Direct Dep",
+        passengerEmail="direct_dep@example.com",
+        passengerPhone="+919876543210",
+        serviceCategory="Airport Assistance",
+        serviceType="silver",
+        flightNum="AI-101",
+        originCode="DEL",
+        destCode="BOM",
+        departureTime=datetime.now(timezone.utc) + timedelta(hours=24),
+        metadataJson={"journey_type": "DEPARTURE"},
+        totalAmount=2500.0
+    )
+    cat = ServiceValidator.validate_booking(payload)
+    assert cat == "Airport Assistance"
+
+
+def test_service_validator_departure_missing_departure_time():
+    from app.schemas.booking import BookingCreate
+    from fastapi import HTTPException
+    payload = BookingCreate(
+        passengerName="Direct Dep Missing",
+        passengerEmail="direct_dep_missing@example.com",
+        passengerPhone="+919876543210",
+        serviceCategory="Airport Assistance",
+        serviceType="silver",
+        flightNum="AI-101",
+        originCode="DEL",
+        destCode="BOM",
+        metadataJson={"journey_type": "DEPARTURE"},
+        totalAmount=2500.0
+    )
+    with pytest.raises(HTTPException) as exc:
+        ServiceValidator.validate_booking(payload)
+    assert exc.value.status_code == 400
+    assert "departure" in exc.value.detail.lower()
+
+
+def test_service_validator_arrival_valid():
+    from app.schemas.booking import BookingCreate
+    payload = BookingCreate(
+        passengerName="Direct Arr",
+        passengerEmail="direct_arr@example.com",
+        passengerPhone="+919876543210",
+        serviceCategory="Airport Assistance",
+        serviceType="silver",
+        flightNum="AI-102",
+        originCode="BOM",
+        destCode="DEL",
+        arrivalTime=datetime.now(timezone.utc) + timedelta(hours=24),
+        metadataJson={"journey_type": "ARRIVAL"},
+        totalAmount=2500.0
+    )
+    cat = ServiceValidator.validate_booking(payload)
+    assert cat == "Airport Assistance"
+
+
+def test_service_validator_arrival_missing_arrival_time():
+    from app.schemas.booking import BookingCreate
+    from fastapi import HTTPException
+    payload = BookingCreate(
+        passengerName="Direct Arr Missing",
+        passengerEmail="direct_arr_missing@example.com",
+        passengerPhone="+919876543210",
+        serviceCategory="Airport Assistance",
+        serviceType="silver",
+        flightNum="AI-102",
+        originCode="BOM",
+        destCode="DEL",
+        metadataJson={"journey_type": "ARRIVAL"},
+        totalAmount=2500.0
+    )
+    with pytest.raises(HTTPException) as exc:
+        ServiceValidator.validate_booking(payload)
+    assert exc.value.status_code == 400
+    assert "arrival" in exc.value.detail.lower()
+
+
+def test_service_validator_transit_valid():
+    from app.schemas.booking import BookingCreate
+    payload = BookingCreate(
+        passengerName="Direct Transit",
+        passengerEmail="direct_tr@example.com",
+        passengerPhone="+919876543210",
+        serviceCategory="Airport Assistance",
+        serviceType="silver",
+        flightNum="AI-103",
+        originCode="BOM",
+        destCode="DXB",
+        arrivalTime=datetime.now(timezone.utc) + timedelta(hours=20),
+        departureTime=datetime.now(timezone.utc) + timedelta(hours=24),
+        metadataJson={"journey_type": "TRANSIT"},
+        totalAmount=2500.0
+    )
+    cat = ServiceValidator.validate_booking(payload)
+    assert cat == "Airport Assistance"
+
+
+def test_service_validator_transit_missing_time():
+    from app.schemas.booking import BookingCreate
+    from fastapi import HTTPException
+    payload = BookingCreate(
+        passengerName="Direct Transit Missing",
+        passengerEmail="direct_tr_missing@example.com",
+        passengerPhone="+919876543210",
+        serviceCategory="Airport Assistance",
+        serviceType="silver",
+        flightNum="AI-103",
+        originCode="BOM",
+        destCode="DXB",
+        departureTime=datetime.now(timezone.utc) + timedelta(hours=24),
+        metadataJson={"journey_type": "TRANSIT"},
+        totalAmount=2500.0
+    )
+    with pytest.raises(HTTPException) as exc:
+        ServiceValidator.validate_booking(payload)
+    assert exc.value.status_code == 400
+    assert "transit" in exc.value.detail.lower()
+
+

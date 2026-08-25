@@ -502,12 +502,37 @@ def seed_amd_production_packages(db: Session, amd_airport: SupportedAirport, ser
     print("  + Created AMD International Arrival Package: Platinum Service (INR 2,750)")
 
 
+HYD_TRANSIT_DOMESTIC_DOMESTIC_FEATURES = [
+    "WELCOME GUEST FROM AEROBRIDGE",
+    "DEDICATED STAFF WITH PLACARD",
+    "PORTER SERVICE WITH DEDICATED STAFF AT ARRIVALS",
+    "WHEELCHAIR SERVICE AVAILABLE (Through Airlines)",
+    "ASSIST IN S.H.A.(TRANSIT AREA)",
+    "LOUNGE ACCESS FOR 2 HOURS (AT DEPARTURE ONLY)",
+    "ASSIST PAX UPTO BOARDING GATE",
+]
+
+HYD_TRANSIT_DOMESTIC_INTERNATIONAL_FEATURES = [
+    "WELCOME GUEST FROM AEROBRIDGE",
+    "DEDICATED STAFF WITH PLACARD",
+    "PORTER SERVICE WITH DEDICATED STAFF AT ARRIVALS",
+    "WHEELCHAIR SERVICE AVAILABLE",
+    "ASSIST IN BAGGAGE BELT AREA",
+    "ASSIST AT SEPARATE CHECKIN PROCESS AT AIRLINES COUNTERS",
+    "GUIDANCE TO THE IMMIGRATION COUNTER",
+    "ASSIST IN S.H.A.(SECURITY HOLD AREA)",
+    "LOUNGE ACCESS FOR 2 HOURS (AT DEPARTURE ONLY)",
+    "ASSIST PAX UPTO BOARDING GATE",
+]
+
+
 def seed_hyd_production_packages(db: Session, hyd_airport: SupportedAirport, service_map: dict[str, Service]):
     """
-    For Hyderabad Airport (HYD) Domestic Departure & Domestic Arrival:
-    Seeds production Silver Service (₹3,000), Gold Service (₹3,500), and Elite Service (₹5,000) packages.
+    For Hyderabad Airport (HYD) Domestic Departure & Domestic Arrival, International Departure & Arrival, and Transit:
+    Seeds production Silver Service (₹3,000), Gold Service (₹3,500), and Elite Service (₹5,000) packages,
+    and Transit Services: Domestic-Domestic (₹5,500) and Domestic-International (₹7,500).
     """
-    print("\n-- Configuring Production Packages for Hyderabad (HYD) Domestic Departure & Domestic Arrival --")
+    print("\n-- Configuring Production Packages for Hyderabad (HYD) All Categories & Transit --")
     
     # 1. Remove old demo services mapped to HYD Domestic Departure
     db.query(AirportService).filter_by(
@@ -891,18 +916,133 @@ def seed_hyd_production_packages(db: Session, hyd_airport: SupportedAirport, ser
         )
         db.add(elite_intl_arr)
 
+    # 1d. Remove old demo services mapped to HYD Transit
+    db.query(AirportService).filter_by(
+        airport_id=hyd_airport.id,
+        journey_type="TRANSIT",
+    ).delete(synchronize_session=False)
+
+    # ── HYD TRANSIT PACKAGES ──
+    transit_svc = service_map.get("meet_greet") or silver_svc
+    if transit_svc:
+        # 1. Domestic → Domestic (₹5,500)
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=hyd_airport.id,
+            service_id=transit_svc.id,
+            journey_type="TRANSIT",
+            flight_type="DOMESTIC_DOMESTIC",
+            short_description="Premium transit assist for passengers connecting from a domestic flight to another domestic flight at Hyderabad Airport.",
+            features=list(HYD_TRANSIT_DOMESTIC_DOMESTIC_FEATURES),
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=1,
+            price=5500.00,
+            currency="INR",
+        ))
+
+        # 2. Domestic → International (₹7,500)
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=hyd_airport.id,
+            service_id=transit_svc.id,
+            journey_type="TRANSIT",
+            flight_type="DOMESTIC_INTERNATIONAL",
+            short_description="Premium transit assist for passengers connecting from a domestic flight to an international flight at Hyderabad Airport.",
+            features=list(HYD_TRANSIT_DOMESTIC_INTERNATIONAL_FEATURES),
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=2,
+            price=7500.00,
+            currency="INR",
+        ))
+
     db.flush()
-    print("  + Created HYD Production Packages (All Categories - Dom Dep/Arr & Intl Dep/Arr): Silver, Gold, and Elite")
+    print("  + Created HYD Production Packages (Dom Dep/Arr, Intl Dep/Arr, and Transit Dom-Dom INR 5500, Dom-Intl INR 7500)")
+
+
+DEL_T3_DOMESTIC_DEPARTURE_SILVER_FEATURES = [
+    "WELCOME GUEST FROM CURB SIDE AREA.",
+    "PORTER SERVICE WITH DEDICATED STAFF.",
+    "WHEELCHAIR SERVICE AVAILABLE (THROUGH AIRLINES).",
+    "ASSIST FROM SEPERATE ENTRY GATE.",
+    "ASSIST SEPARATE BAGGAGE CHECK IN AT AIRLINE COUNTER.",
+    "ASSIST IN S.H.A (SECURITY HOLD AREA).",
+    "BUGGY SERVICE AVAILABLE.",
+    "ASSIST GUEST UPTO BOARDING GATE.",
+]
+
+DEL_T3_DOMESTIC_DEPARTURE_GOLD_FEATURES = [
+    "WELCOME GUEST FROM CURB SIDE AREA.",
+    "PORTER SERVICE WITH DEDICATED STAFF.",
+    "WHEELCHAIR SERVICE AVAILABLE (THROUGH AIRLINES).",
+    "ASSIST FROM SEPERATE ENTRY GATE.",
+    "ASSIST SEPARATE BAGGAGE CHECK IN AT AIRLINE COUNTER.",
+    "ASSIST IN S.H.A (SECURITY HOLD AREA).",
+    "LOUNGE ACCESS FOR 2 HOURS.",
+    "BUGGY SERVICE AVAILABLE.",
+    "ASSIST GUEST UPTO BOARDING GATE.",
+]
+
+DEL_T3_DOMESTIC_DEPARTURE_ELITE_FEATURES = [
+    "WELCOME GUEST FROM CURB SIDE AREA.",
+    "PORTER SERVICE WITH DEDICATED STAFF.",
+    "WHEELCHAIR SERVICE AVAILABLE (THROUGH AIRLINES).",
+    "ASSIST FROM SEPERATE ENTRY GATE.",
+    "ASSIST SEPARATE BAGGAGE CHECK IN AT AIRLINE COUNTER.",
+    "ASSIST IN S.H.A (SECURITY HOLD AREA).",
+    "LOUNGE ACCESS FOR 2 HOURS.",
+    "BUGGY SERVICE AVAILABLE.",
+    "ASSIST GUEST UPTO BOARDING GATE.",
+    "UNLIMITED RESCHEDULING (PRIOR 12 HOURS)",
+    "CANCELLATION BENEFITS UPTO 12 HOURS OF SERVICE TIME.",
+]
+
+DEL_T3_DOMESTIC_ARRIVAL_SILVER_FEATURES = [
+    "WELCOME GUEST FROM AEROBRIDGE.",
+    "DEDICATED STAFF WITH PLACARD.",
+    "PORTER SERVICE WITH DEDICATED STAFF AT ARRIVALS.",
+    "BUGGY SERVICE AVAILABLE. (AS PER THE AVAILABLITY).",
+    "ASSIST IN BAGGAGE BELT AREA.",
+    "ASSIST GUEST TILL THE CAR PARKING AREA.",
+]
+
+DEL_T3_DOMESTIC_ARRIVAL_GOLD_FEATURES = [
+    "WELCOME GUEST FROM AEROBRIDGE.",
+    "DEDICATED STAFF WITH PLACARD.",
+    "PORTER SERVICE WITH DEDICATED STAFF AT ARRIVALS.",
+    "BUGGY SERVICE AVAILABLE. (AS PER THE AVAILABLITY).",
+    "ASSIST IN BAGGAGE BELT AREA.",
+    "LOUNGE ACCESS FOR 2 HOURS.",
+    "ASSIST GUEST TILL THE CAR PARKING AREA.",
+]
+
+DEL_T3_DOMESTIC_ARRIVAL_ELITE_FEATURES = [
+    "WELCOME GUEST FROM AEROBRIDGE.",
+    "DEDICATED STAFF WITH PLACARD.",
+    "PORTER SERVICE WITH DEDICATED STAFF AT ARRIVALS.",
+    "BUGGY SERVICE AVAILABLE. (AS PER THE AVAILABLITY).",
+    "ASSIST IN BAGGAGE BELT AREA.",
+    "LOUNGE ACCESS FOR 2 HOURS.",
+    "ASSIST GUEST TILL THE CAR PARKING AREA.",
+]
 
 
 def seed_del_production_packages(db: Session, del_airport: SupportedAirport, service_map: dict[str, Service]):
     """
-    For Delhi Airport (DEL) Domestic Departure:
-    Seeds terminal-specific production packages for Terminal 1 & 2 and Terminal 3.
-    - Terminal 1 & 2: Silver (₹3,000) and Elite (₹5,000)
-    - Terminal 3: Silver (₹3,000), Gold (₹3,500), and Elite (₹5,000)
+    For Delhi Airport (DEL) Domestic Departure & Arrival (T1 & T2, T3), International Departure & Arrival (T3), and Transit:
+    Seeds terminal-specific production packages:
+    - Domestic Departure Terminal 1 & 2: Silver (₹3,000) and Elite (₹5,000)
+    - Domestic Arrival Terminal 1 & 2: Silver (₹3,000) and Elite (₹5,000)
+    - Domestic Departure Terminal 3: Silver (₹3,000), Gold (₹3,500), and Elite (₹5,000)
+    - Domestic Arrival Terminal 3: Silver (₹3,000), Gold (₹3,500), and Elite (₹5,000)
+    - International Departure Terminal 3: Silver (₹5,500), Gold (₹6,500), and Elite (₹7,000)
+    - International Arrival Terminal 3: Silver (₹5,500), Gold (₹6,000), and Elite (₹7,000)
+    - Transit: 4 Route Types (₹5,500, ₹7,500, ₹7,500, ₹9,500)
     """
-    print("\n-- Configuring Production Packages for Delhi (DEL) Domestic Departure (T1 & T2, T3) --")
+    print("\n-- Configuring Production Packages for Delhi (DEL) (T1 & T2, T3 Dom Dep/Arr, T3 Intl Dep/Arr, Transit) --")
 
     try:
         db.execute(text("ALTER TABLE airport_services ALTER COLUMN flight_type TYPE VARCHAR(50);"))
@@ -910,7 +1050,7 @@ def seed_del_production_packages(db: Session, del_airport: SupportedAirport, ser
     except Exception:
         db.rollback()
 
-    # Remove old services mapped to DEL Domestic Departure, Domestic Arrival T1 & T2, Intl Departure T3, Intl Arrival T3, and Transit
+    # Remove old services mapped to DEL Domestic Departure, Domestic Arrival, Intl Departure T3, Intl Arrival T3, and Transit
     db.query(AirportService).filter_by(
         airport_id=del_airport.id,
         journey_type="DEPARTURE",
@@ -921,7 +1061,6 @@ def seed_del_production_packages(db: Session, del_airport: SupportedAirport, ser
         airport_id=del_airport.id,
         journey_type="ARRIVAL",
         flight_type="DOMESTIC",
-        terminal="Terminal 1 & 2",
     ).delete(synchronize_session=False)
 
     db.query(AirportService).filter_by(
@@ -1065,16 +1204,7 @@ def seed_del_production_packages(db: Session, del_airport: SupportedAirport, ser
             flight_type="DOMESTIC",
             terminal="Terminal 3",
             short_description="Premium domestic departure assist from curbside area to boarding gate (Terminal 3).",
-            features=[
-                "Welcome at the Curbside Area",
-                "Dedicated Porter Service",
-                "Wheelchair Assist (through the airline, if required)",
-                "Assist through the Separate Entry Gate",
-                "Assist with Separate Baggage Check-in at the Airline Counter",
-                "Assist inside the Security Hold Area (SHA)",
-                "Buggy Service (subject to availability)",
-                "Escort to the Boarding Gate",
-            ],
+            features=list(DEL_T3_DOMESTIC_DEPARTURE_SILVER_FEATURES),
             additional_benefits=[],
             min_booking_notice_hours=6,
             is_available=True,
@@ -1092,17 +1222,7 @@ def seed_del_production_packages(db: Session, del_airport: SupportedAirport, ser
             flight_type="DOMESTIC",
             terminal="Terminal 3",
             short_description="Enhanced domestic departure assist with lounge access and airport support (Terminal 3).",
-            features=[
-                "Welcome at the Curbside Area",
-                "Dedicated Porter Service",
-                "Wheelchair Assist (through the airline, if required)",
-                "Assist through the Separate Entry Gate",
-                "Assist with Separate Baggage Check-in at the Airline Counter",
-                "Assist inside the Security Hold Area (SHA)",
-                "Complimentary Lounge Access (up to 2 hours)",
-                "Buggy Service (subject to availability)",
-                "Escort to the Boarding Gate",
-            ],
+            features=list(DEL_T3_DOMESTIC_DEPARTURE_GOLD_FEATURES),
             additional_benefits=[],
             min_booking_notice_hours=6,
             is_available=True,
@@ -1120,21 +1240,63 @@ def seed_del_production_packages(db: Session, del_airport: SupportedAirport, ser
             flight_type="DOMESTIC",
             terminal="Terminal 3",
             short_description="Complete premium domestic departure experience with lounge access and flexible booking benefits (Terminal 3).",
-            features=[
-                "Welcome at the Curbside Area",
-                "Dedicated Porter Service",
-                "Wheelchair Assist (through the airline, if required)",
-                "Assist through the Separate Entry Gate",
-                "Assist with Separate Baggage Check-in at the Airline Counter",
-                "Assist inside the Security Hold Area (SHA)",
-                "Complimentary Lounge Access (up to 2 hours)",
-                "Buggy Service (subject to availability)",
-                "Escort to the Boarding Gate",
-            ],
-            additional_benefits=[
-                "Unlimited Rescheduling (with at least 12 hours' prior notice)",
-                "Free Cancellation up to 12 hours before the scheduled service time",
-            ],
+            features=list(DEL_T3_DOMESTIC_DEPARTURE_ELITE_FEATURES),
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=3,
+            price=5000.00,
+            currency="INR",
+        ))
+
+    # ── Domestic Arrival: Terminal 3 Packages ──
+    if silver_svc:
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=del_airport.id,
+            service_id=silver_svc.id,
+            journey_type="ARRIVAL",
+            flight_type="DOMESTIC",
+            terminal="Terminal 3",
+            short_description="Premium domestic arrival assist from the aerobridge to the car parking area (Terminal 3).",
+            features=list(DEL_T3_DOMESTIC_ARRIVAL_SILVER_FEATURES),
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=1,
+            price=3000.00,
+            currency="INR",
+        ))
+
+    if gold_svc:
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=del_airport.id,
+            service_id=gold_svc.id,
+            journey_type="ARRIVAL",
+            flight_type="DOMESTIC",
+            terminal="Terminal 3",
+            short_description="Enhanced domestic arrival assist with lounge access from the aerobridge to the car parking area (Terminal 3).",
+            features=list(DEL_T3_DOMESTIC_ARRIVAL_GOLD_FEATURES),
+            additional_benefits=[],
+            min_booking_notice_hours=6,
+            is_available=True,
+            display_priority=2,
+            price=3500.00,
+            currency="INR",
+        ))
+
+    if elite_svc:
+        db.add(AirportService(
+            id=uuid.uuid4(),
+            airport_id=del_airport.id,
+            service_id=elite_svc.id,
+            journey_type="ARRIVAL",
+            flight_type="DOMESTIC",
+            terminal="Terminal 3",
+            short_description="Complete premium domestic arrival experience from the aerobridge to the car parking area (Terminal 3).",
+            features=list(DEL_T3_DOMESTIC_ARRIVAL_ELITE_FEATURES),
+            additional_benefits=[],
             min_booking_notice_hours=6,
             is_available=True,
             display_priority=3,
@@ -1341,14 +1503,14 @@ def seed_del_production_packages(db: Session, del_airport: SupportedAirport, ser
             flight_type="DOMESTIC_DOMESTIC",
             short_description="Premium domestic transit assist between connecting domestic flights.",
             features=[
-                "Welcome at the Aerobridge or Bus Gate",
-                "Dedicated Baggage Assist",
-                "Buggy Service (Terminal 3 only, subject to availability)",
-                "Assist at the Baggage Belt Area (if required)",
-                "Assist with Terminal Change (T2 ↔ T3, if required)",
-                "Assist at Airline Counters",
-                "Assist inside the Security Hold Area (SHA)",
-                "Escort to the Boarding Area",
+                "WELCOME GUEST FROM AEROBRIDGE/BUS GATE.",
+                "BAGGAGE ASSISTANT FOR BAGGAGE.",
+                "BUGGY SERVICE AVIALABLE (ONLY AT T3).",
+                "ASSIST IN BAGGAGE BELT AREA (IF REQUIRED).",
+                "ASSIST IN TERMINAL CHANGE (T2-T3) (IF REQUIRED).",
+                "ASSIST IN AIRLINE COUNTERS.",
+                "ASSIST IN S.H.A (SECURITY HOLD AREA).",
+                "ASSIST TILL BOARDING AREA.",
             ],
             additional_benefits=[],
             min_booking_notice_hours=6,
@@ -1367,15 +1529,15 @@ def seed_del_production_packages(db: Session, del_airport: SupportedAirport, ser
             flight_type="DOMESTIC_INTERNATIONAL",
             short_description="Premium transit assist for passengers connecting from a domestic flight to an international flight.",
             features=[
-                "Welcome at the Aerobridge",
-                "Dedicated Baggage Assist",
-                "Buggy Service (Terminal 3 only, subject to availability)",
-                "Assist at the Baggage Belt Area (if required)",
-                "Assist with Terminal Change (T2 ↔ T3, if required)",
-                "Assist at Airline Counters",
-                "Guidance through Immigration",
-                "Assist inside the Security Hold Area (SHA)",
-                "Escort to the Boarding Area",
+                "WELCOME GUEST FROM AEROBRIDGE .",
+                "BAGGAGE ASSISTANT FOR BAGGAGE.",
+                "BUGGY SERVICE AVIALABLE (ONLY AT T3).",
+                "ASSIST IN BAGGAGE BELT AREA (IF REQUIRED).",
+                "ASSIST IN TERMINAL CHANGE (T2-T3) (IF REQUIRED).",
+                "ASSIST IN AIRLINE COUNTERS.",
+                "GUIDANCE FOR IMMIGRATION COUNTERS",
+                "ASSIST IN S.H.A (SECURITY HOLD AREA).",
+                "ASSIST TILL BOARDING AREA.",
             ],
             additional_benefits=[],
             min_booking_notice_hours=6,
@@ -1394,14 +1556,14 @@ def seed_del_production_packages(db: Session, del_airport: SupportedAirport, ser
             flight_type="INTERNATIONAL_DOMESTIC",
             short_description="Premium transit assist for passengers connecting from an international flight to a domestic flight.",
             features=[
-                "Welcome at the Aerobridge",
-                "Dedicated Baggage Assist",
-                "Buggy Service (Terminal 3 only, subject to availability)",
-                "Assist at the Baggage Belt Area",
-                "Assist with Terminal Change (T3 → T2, if required)",
-                "Assist at Airline Counters",
-                "Assist inside the Security Hold Area (SHA)",
-                "Escort to the Boarding Area",
+                "WELCOME GUEST FROM AEROBRIDGE .",
+                "BAGGAGE ASSISTANT FOR BAGGAGE.",
+                "BUGGY SERVICE AVIALABLE (ONLY AT T3).",
+                "ASSIST IN BAGGAGE BELT AREA.",
+                "ASSIST IN TERMINAL CHANGE (T3-T2) IF REQUIRED",
+                "ASSIST IN AIRLINE COUNTERS.",
+                "ASSIST IN S.H.A (SECURITY HOLD AREA).",
+                "ASSIST TILL BOARDING AREA.",
             ],
             additional_benefits=[],
             min_booking_notice_hours=6,
@@ -1420,12 +1582,12 @@ def seed_del_production_packages(db: Session, del_airport: SupportedAirport, ser
             flight_type="INTERNATIONAL_INTERNATIONAL",
             short_description="Premium international-to-international transit assist.",
             features=[
-                "Welcome at the Aerobridge",
-                "Dedicated Baggage Assist",
-                "Buggy Service (subject to availability)",
-                "Assist at Airline Counters (Transit Area)",
-                "Assist inside the Security Hold Area (SHA)",
-                "Escort to the Boarding Area",
+                "WELCOME GUEST FROM AEROBRIDGE .",
+                "BAGGAGE ASSISTANT FOR BAGGAGE.",
+                "BUGGY SERVICE AVIALABLE..",
+                "ASSIST IN AIRLINE COUNTERS.(IN TRANSIT AREA)",
+                "ASSIST IN S.H.A (SECURITY HOLD AREA).",
+                "ASSIST TILL BOARDING AREA.",
             ],
             additional_benefits=[],
             min_booking_notice_hours=6,
@@ -2223,7 +2385,7 @@ def seed_bom_production_packages(db: Session, bom_airport: SupportedAirport, ser
             ],
             additional_benefits=[],
             min_booking_notice_hours=6,
-            is_available=True,
+            is_available=False,
             display_priority=1,
             price=7150.00,
             currency="INR",
@@ -2270,7 +2432,7 @@ def seed_bom_production_packages(db: Session, bom_airport: SupportedAirport, ser
             ],
             additional_benefits=[],
             min_booking_notice_hours=6,
-            is_available=True,
+            is_available=False,
             display_priority=3,
             price=9000.00,
             currency="INR",
@@ -2294,7 +2456,7 @@ def seed_bom_production_packages(db: Session, bom_airport: SupportedAirport, ser
             ],
             additional_benefits=[],
             min_booking_notice_hours=6,
-            is_available=True,
+            is_available=False,
             display_priority=4,
             price=10000.00,
             currency="INR",
@@ -2715,7 +2877,7 @@ def seed_atq_production_packages(db: Session, atq_airport: SupportedAirport, ser
                 "ASSIST FROM SEPARATE ENTRY GATE",
                 "ASSIST TO BAGGAGE WRAPPING FACILITIES",
                 "ASSIST AT SEPARATE CHECKIN PROCESS AT COUNTERS",
-                "ASSIST IN S.H.A. (SECURITY HOLD AREA)",
+                "ASSIST IN S.H.A.(SECURITY HOLD AREA)",
                 "LOUNGE SERVICE FACILITY AVAILABLE (CHARGES APPLICABLE)",
                 "ASSIST GUEST TILL THE BOARDING GATE",
             ],
@@ -2741,6 +2903,7 @@ def seed_atq_production_packages(db: Session, atq_airport: SupportedAirport, ser
                 "PORTER SERVICE WITH DEDICATED STAFF AT ARRIVALS",
                 "WHEELCHAIR SERVICE AVAILABLE (Through Airlines)",
                 "ASSIST IN BAGGAGE BELT AREA",
+                "ASSIST GUEST TILL THE CAR PARKING AREA",
             ],
             additional_benefits=[],
             min_booking_notice_hours=6,
@@ -2750,7 +2913,7 @@ def seed_atq_production_packages(db: Session, atq_airport: SupportedAirport, ser
             currency="INR",
         ))
 
-        # 3. International Departure (₹2,000)
+        # 3. International Departure (₹2,500)
         db.add(AirportService(
             id=uuid.uuid4(),
             airport_id=atq_airport.id,
@@ -2765,7 +2928,7 @@ def seed_atq_production_packages(db: Session, atq_airport: SupportedAirport, ser
                 "ASSIST FROM SEPARATE ENTRY GATE",
                 "ASSIST TO BAGGAGE WRAPPING FACILITIES",
                 "ASSIST AT SEPARATE CHECK IN PROCESS AT COUNTERS",
-                "ASSIST IN S.H.A. (SECURITY HOLD AREA)",
+                "ASSIST IN S.H.A.(SECURITY HOLD AREA)",
                 "LOUNGE SERVICE FACILITY AVAILABLE (CHARGES APPLICABLE)",
                 "ASSIST GUEST TILL THE BOARDING GATE",
             ],
@@ -2773,7 +2936,7 @@ def seed_atq_production_packages(db: Session, atq_airport: SupportedAirport, ser
             min_booking_notice_hours=6,
             is_available=True,
             display_priority=1,
-            price=2000.00,
+            price=2500.00,
             currency="INR",
         ))
 
@@ -3096,18 +3259,18 @@ VTZ_DOMESTIC_ARRIVAL_FEATURES = [
 def seed_vtz_production_packages(db: Session, vtz_airport: SupportedAirport, service_map: dict[str, Service]):
     """
     Visakhapatnam (VTZ) production service and pricing configuration.
-    Departure = INR 2500.00
-    Arrival = INR 2500.00
+    Departure Silver = INR 2500.00
+    Arrival Silver = INR 2500.00
     Verbatim service inclusions stored exactly without alteration.
     Transit and International journey types are deactivated (not supplied by source).
     """
     print("\n-- Configuring Production Packages for Visakhapatnam (VTZ) --")
 
-    meet_greet_svc = service_map.get("meet_greet")
-    if not meet_greet_svc:
-        raise RuntimeError("VTZ requires catalog service slug=meet_greet")
+    silver_svc = service_map.get("silver")
+    if not silver_svc:
+        raise RuntimeError("VTZ requires catalog service slug=silver")
 
-    # Deactivate any existing VTZ services for TRANSIT or INTERNATIONAL or non-meet_greet services
+    # Deactivate any existing VTZ services for TRANSIT or INTERNATIONAL or non-silver services
     unsupported_rows = (
         db.query(AirportService)
         .filter(
@@ -3116,7 +3279,7 @@ def seed_vtz_production_packages(db: Session, vtz_airport: SupportedAirport, ser
         .all()
     )
     for row in unsupported_rows:
-        if row.journey_type not in ("DEPARTURE", "ARRIVAL") or row.flight_type != "DOMESTIC" or row.service_id != meet_greet_svc.id:
+        if row.journey_type not in ("DEPARTURE", "ARRIVAL") or row.flight_type != "DOMESTIC" or row.service_id != silver_svc.id:
             row.is_available = False
 
     def upsert(svc: Service, journey: str, flight: str, price: float, features: list[str], priority: int) -> str:
@@ -3160,11 +3323,11 @@ def seed_vtz_production_packages(db: Session, vtz_airport: SupportedAirport, ser
         target.currency = "INR"
         return action
 
-    upsert(meet_greet_svc, "DEPARTURE", "DOMESTIC", 2500.00, VTZ_DOMESTIC_DEPARTURE_FEATURES, 1)
-    upsert(meet_greet_svc, "ARRIVAL", "DOMESTIC", 2500.00, VTZ_DOMESTIC_ARRIVAL_FEATURES, 1)
+    upsert(silver_svc, "DEPARTURE", "DOMESTIC", 2500.00, VTZ_DOMESTIC_DEPARTURE_FEATURES, 1)
+    upsert(silver_svc, "ARRIVAL", "DOMESTIC", 2500.00, VTZ_DOMESTIC_ARRIVAL_FEATURES, 1)
 
     db.flush()
-    print("  + Configured VTZ production packages (Departure INR 2500.00, Arrival INR 2500.00)")
+    print("  + Configured VTZ production packages (Departure Silver INR 2500.00, Arrival Silver INR 2500.00)")
 
 
 MAA_DOMESTIC_DEPARTURE_FEATURES = [
@@ -3531,48 +3694,234 @@ def seed_cok_production_packages(db: Session, cok_airport: SupportedAirport, ser
     print("  + Configured COK production packages: 4 authoritative mappings active (Dom Dep Silver INR 3500, Dom Dep Elite INR 5500, Dom Arr Silver INR 3500, Dom Arr Elite INR 5500)")
 
 
+BLR_DOMESTIC_DEPARTURE_SILVER_FEATURES = [
+    "WELCOME GUEST FROM CURB SIDE AREA.",
+    "PORTER SERVICE WITH DEDICATED STAFF.",
+    "WHEELCHAIR SERVICE AVAILABLE (Through Airlines).",
+    "ASSIST FROM SEPARATE ENTRY GATE.",
+    "ASSIST SEPARATE BAGGAGE CHECK-IN AT AIRLINE COUNTER.",
+    "ASSIST IN S.H.A.(SECURITY HOLD AREA).",
+    "BUGGY SERVICE AVAILABLE TILL THE BOARDING GATE (SHARING BASIS) & (SUBJECT TO AVAILABILITY).",
+    "ASSIST GUEST UPTO BOARDING GATE.",
+]
+
+BLR_DOMESTIC_ARRIVAL_SHARED_FEATURES = [
+    "WELCOME GUEST FROM AEROBRIDGE.",
+    "DEDICATED STAFF WITH PLACARD.",
+    "PORTER SERVICE WITH DEDICATED STAFF AT ARRIVALS.",
+    "BUGGY SERVICE AVAILABLE FROM END OF THE AEROBRIDGE (SHARING BASIS) & (SUBJECT TO AVAILABILITY).",
+    "WHEELCHAIR SERVICE AVAILABLE (Through Airlines).",
+    "ASSIST IN BAGGAGE BELT AREA.",
+    "ASSIST GUEST TILL THE CAR PARKING AREA.",
+]
+
+
+def seed_blr_production_packages(db: Session, blr_airport: SupportedAirport, service_map: dict[str, Service]):
+    """
+    Configure authoritative production packages for Bengaluru (BLR).
+    Domestic Departure: Silver (INR 4500)
+    Domestic Arrival: Silver (INR 4500), Gold (INR 6500), Elite (INR 8000) - Identical 7 Inclusions.
+    International & Transit: Not configured (is_available = False).
+    """
+    silver_svc = service_map.get("silver")
+    gold_svc = service_map.get("gold")
+    elite_svc = service_map.get("elite")
+
+    if not (silver_svc and gold_svc and elite_svc):
+        print("  ! Skipping BLR: Required services (silver, gold, elite) missing from service_map")
+        return
+
+    # Deactivate all other BLR mappings
+    existing_mappings = db.query(AirportService).filter_by(airport_id=blr_airport.id).all()
+    for m in existing_mappings:
+        m.is_available = False
+
+    def upsert(svc, journey, flight, price, features, priority):
+        existing = (
+            db.query(AirportService)
+            .filter_by(
+                airport_id=blr_airport.id,
+                service_id=svc.id,
+                journey_type=journey,
+                flight_type=flight,
+                terminal=None,
+            )
+            .first()
+        )
+        if existing:
+            target = existing
+            action = "updated"
+        else:
+            target = AirportService(
+                id=uuid.uuid4(),
+                airport_id=blr_airport.id,
+                service_id=svc.id,
+                journey_type=journey,
+                flight_type=flight,
+                terminal=None,
+            )
+            db.add(target)
+            action = "created"
+
+        target.short_description = None
+        target.features = list(features)
+        target.additional_benefits = []
+        target.min_booking_notice_hours = 6
+        target.is_available = True
+        target.display_priority = priority
+        target.price = price
+        target.currency = "INR"
+        target.terminal = None
+        return action
+
+    upsert(silver_svc, "DEPARTURE", "DOMESTIC", 4500.00, BLR_DOMESTIC_DEPARTURE_SILVER_FEATURES, 1)
+    upsert(silver_svc, "ARRIVAL", "DOMESTIC", 4500.00, BLR_DOMESTIC_ARRIVAL_SHARED_FEATURES, 1)
+    upsert(gold_svc, "ARRIVAL", "DOMESTIC", 6500.00, BLR_DOMESTIC_ARRIVAL_SHARED_FEATURES, 2)
+    upsert(elite_svc, "ARRIVAL", "DOMESTIC", 8000.00, BLR_DOMESTIC_ARRIVAL_SHARED_FEATURES, 3)
+
+    db.flush()
+    print("  + Configured BLR production packages: 4 authoritative mappings active (Dom Dep Silver INR 4500, Dom Arr Silver INR 4500, Dom Arr Gold INR 6500, Dom Arr Elite INR 8000)")
+
+
+
+# ==============================================================================
+# IXC — CHANDIGARH AIRPORT PRODUCTION PACKAGES
+# ==============================================================================
+
+IXC_DOMESTIC_DEPARTURE_SILVER_FEATURES = [
+    "WELCOME GUEST AT DEPARTURE CURB SIDE / CAR DROP AREA.",
+    "PORTER SERVICE WITH DEDICATED STAFF.",
+    "WHEELCHAIR SERVICE AVAILABLE (Through Airlines)",
+    "ASSIST SEPARATE BAGGAGE CHECK-IN AT AIRLINE COUNTER.",
+    "ASSIST IN S.H.A.(SECURITY HOLD AREA).",
+    "ASSIST GUEST UPTO BOARDING GATE.",
+]
+
+IXC_DOMESTIC_DEPARTURE_GOLD_FEATURES = [
+    "WELCOME GUEST AT DEPARTURE CURB SIDE / CAR DROP AREA.",
+    "PORTER SERVICE WITH DEDICATED STAFF.",
+    "WHEELCHAIR SERVICE AVAILABLE (Through Airlines)",
+    "ASSIST SEPARATE BAGGAGE CHECK-IN AT AIRLINE COUNTER.",
+    "ASSIST IN S.H.A.(SECURITY HOLD AREA).",
+    "LOUNGE ACCESS FOR 2 HOURS.",
+    "ASSIST GUEST UPTO BOARDING GATE.",
+]
+
+IXC_DOMESTIC_ARRIVAL_SILVER_FEATURES = [
+    "WELCOME GUEST FROM END OF THE AEROBRIDGE.",
+    "DEDICATED STAFF WITH PLACARD.",
+    "PORTER SERVICE WITH DEDICATED STAFF AT ARRIVALS.",
+    "WHEELCHAIR SERVICE AVAILABLE (Through Airlines).",
+    "ASSIST IN BAGGAGE BELT AREA.",
+    "ASSIST GUEST TILL THE CAR PARKING AREA",
+]
+
+IXC_INTERNATIONAL_DEPARTURE_SILVER_FEATURES = [
+    "WELCOME GUEST FROM CURB SIDE AREA/CAR DROP AREA.",
+    "PORTER SERVICE WITH DEDICATED STAFF.",
+    "WHEELCHAIR SERVICE AVAILABLE (THROUGH AIRLINES).",
+    "ASSIST TO MONEY EXCHANGE COUNTER.",
+    "ASSIST TO BAGGAGE WRAPPING FACILITY.",
+    "ASSIST SEPARATE BAGGAGE CHECK-IN AT AIRLINE COUNTER.",
+    "ASSIST FOR IMMIGRATION COUNTERS.",
+    "ASSIST IN S.H.A (SECURITY HOLD AREA).",
+    "ASSIST GUEST UPTO BOARDING GATE.",
+]
+
+IXC_INTERNATIONAL_ARRIVAL_SILVER_FEATURES = [
+    "WELCOME GUEST FROM POST CUSTOMS.",
+    "PORTER SERVICE WITH DEDICATED STAFF. (UP TO 3 BAGS PER PASSENGERS).",
+    "ASSIST AT BAGGAGE BELT AREA.",
+    "COORDINATION TO THE RECEIVING PERSON.",
+    "DROP OFF CAR PARKING AREA",
+]
+
+
+def seed_ixc_production_packages(db: Session, ixc_airport: SupportedAirport, service_map: dict[str, Service]):
+    """
+    Configure authoritative production packages for Chandigarh Airport (IXC).
+    Domestic Departure: Silver (INR 2500), Gold (INR 4000)
+    Domestic Arrival: Silver (INR 2500)
+    International Departure: Silver (INR 3000)
+    International Arrival: Silver (INR 2500)
+    All other tiers and transit: Not configured (is_available = False).
+    """
+    silver_svc = service_map.get("silver")
+    gold_svc = service_map.get("gold")
+
+    if not (silver_svc and gold_svc):
+        print("  ! Skipping IXC: Required services (silver, gold) missing from service_map")
+        return
+
+    # Deactivate all other IXC mappings
+    existing_mappings = db.query(AirportService).filter_by(airport_id=ixc_airport.id).all()
+    for m in existing_mappings:
+        m.is_available = False
+
+    def upsert(svc, journey, flight, price, features, priority):
+        existing = (
+            db.query(AirportService)
+            .filter_by(
+                airport_id=ixc_airport.id,
+                service_id=svc.id,
+                journey_type=journey,
+                flight_type=flight,
+                terminal=None,
+            )
+            .first()
+        )
+        if existing:
+            target = existing
+            action = "updated"
+        else:
+            target = AirportService(
+                id=uuid.uuid4(),
+                airport_id=ixc_airport.id,
+                service_id=svc.id,
+                journey_type=journey,
+                flight_type=flight,
+                terminal=None,
+            )
+            db.add(target)
+            action = "created"
+
+        target.short_description = None
+        target.features = list(features)
+        target.additional_benefits = []
+        target.min_booking_notice_hours = 6
+        target.is_available = True
+        target.display_priority = priority
+        target.price = price
+        target.currency = "INR"
+        target.terminal = None
+        return action
+
+    upsert(silver_svc, "DEPARTURE", "DOMESTIC", 2500.00, IXC_DOMESTIC_DEPARTURE_SILVER_FEATURES, 1)
+    upsert(gold_svc, "DEPARTURE", "DOMESTIC", 4000.00, IXC_DOMESTIC_DEPARTURE_GOLD_FEATURES, 2)
+    upsert(silver_svc, "ARRIVAL", "DOMESTIC", 2500.00, IXC_DOMESTIC_ARRIVAL_SILVER_FEATURES, 1)
+    upsert(silver_svc, "DEPARTURE", "INTERNATIONAL", 3000.00, IXC_INTERNATIONAL_DEPARTURE_SILVER_FEATURES, 1)
+    upsert(silver_svc, "ARRIVAL", "INTERNATIONAL", 2500.00, IXC_INTERNATIONAL_ARRIVAL_SILVER_FEATURES, 1)
+
+    db.flush()
+    print("  + Configured IXC production packages: 5 authoritative mappings active (Dom Dep Silver INR 2500, Dom Dep Gold INR 4000, Dom Arr Silver INR 2500, Int Dep Silver INR 3000, Int Arr Silver INR 2500)")
+
+
 def seed_other_airport_services(db: Session, airport_map: dict[str, SupportedAirport], service_map: dict[str, Service]):
-    """Seed default services for other airports."""
+    """
+    Seed default services for remaining airports without creating unwanted standalone mappings.
+    Idempotent: Preserves existing deactivations and does not pollute package menus.
+    """
     custom_airports = {
         "AMD", "BOM", "GOI", "JAI", "ATQ", "GAU", "BBI", "VTZ", "MAA", "IXE",
-        "DEL", "HYD", "LKO", "CCU", "COK"
+        "DEL", "HYD", "LKO", "CCU", "COK", "CNN", "GOX", "IXC", "IXR", "TRV", "BLR"
     }
+    # All 20 airports have designated authoritative packages or specific configurations.
+    # We do not automatically seed active standalone items (meet_greet, fast_track, lounge)
+    # into the primary package selection catalog.
     for code, airport in airport_map.items():
         if code in custom_airports:
-            continue  # Handled separately
-
-        for slug, svc in service_map.items():
-            if slug in ("platinum", "elite", "silver", "elite_plus"):
-                continue
-            for j_type in JOURNEY_TYPES:
-                for f_type in ["DOMESTIC", "INTERNATIONAL"]:
-                    existing = db.query(AirportService).filter_by(
-                        airport_id=airport.id,
-                        service_id=svc.id,
-                        journey_type=j_type,
-                        flight_type=f_type,
-                    ).first()
-
-                    if not existing:
-                        mapping = AirportService(
-                            id=uuid.uuid4(),
-                            airport_id=airport.id,
-                            service_id=svc.id,
-                            journey_type=j_type,
-                            flight_type=f_type,
-                            short_description=svc.description,
-                            features=[
-                                "Aerobridge exit welcome with placard",
-                                "Priority baggage assist",
-                                "Executive handoff to chauffeur",
-                            ],
-                            min_booking_notice_hours=6,
-                            is_available=True,
-                            display_priority=svc.display_order,
-                            price=2499.00 if slug == "meet_greet" else 1999.00,
-                            currency="INR",
-                        )
-                        db.add(mapping)
+            continue
+        # For any future unconfigured airport, only configure if explicitly defined.
     db.flush()
 
 
@@ -3635,6 +3984,12 @@ def run_seed():
 
         if "COK" in airport_map:
             seed_cok_production_packages(db, airport_map["COK"], service_map)
+
+        if "BLR" in airport_map:
+            seed_blr_production_packages(db, airport_map["BLR"], service_map)
+
+        if "IXC" in airport_map:
+            seed_ixc_production_packages(db, airport_map["IXC"], service_map)
 
         seed_other_airport_services(db, airport_map, service_map)
 

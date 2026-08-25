@@ -20,8 +20,16 @@ class NotificationTemplateEngine:
         origin = _safe(data.get("originCode") or data.get("origin_code"), "Airport")
         dest = _safe(data.get("destCode") or data.get("dest_code"), "Destination")
         date_str = _safe(data.get("departureTime") or data.get("departure_time"), "Scheduled Time")
-        amount = _safe(data.get("totalAmount") or data.get("total_amount"), "0.00")
+        
+        raw_amt = data.get("totalAmount") if data.get("totalAmount") is not None else data.get("total_amount")
+        try:
+            amount_val = float(raw_amt) if raw_amt is not None else 0.0
+            amount = f"{amount_val:,.2f}" if amount_val > 0 else "0.00"
+        except (ValueError, TypeError):
+            amount = _safe(raw_amt, "0.00")
+
         currency = _safe(data.get("currency"), "INR")
+        passengers = _safe(data.get("passengerCount") or data.get("passenger_count") or data.get("passengers"), "")
         
         airport = _safe(data.get("airportCode") or data.get("airport_code") or origin)
         journey = _safe(data.get("journeyType") or data.get("journey_type") or data.get("serviceType") or data.get("service_type"))
@@ -32,9 +40,9 @@ class NotificationTemplateEngine:
         support = _safe(data.get("supportPhone"), "+91 9599087959")
 
         if t_type == "BOOKING_CONFIRMATION":
-            subject = f"Shafsky Aviation — Booking Confirmed ({ref})"
+            subject = f"Shafsky Aviation Services — Booking Confirmed ({ref})"
             html = f"""
-            <h2>Shafsky Aviation VIP Services</h2>
+            <h2>Shafsky Aviation Services VIP Services</h2>
             <p>Dear <strong>{name}</strong>,</p>
             <p>Your airport VIP service booking <strong>{ref}</strong> has been received and confirmed.</p>
             <ul>
@@ -43,13 +51,36 @@ class NotificationTemplateEngine:
                 <li><strong>Package / service:</strong> {service}</li>
                 <li><strong>Flight:</strong> {flight} ({origin} &rarr; {dest})</li>
                 <li><strong>Date / time:</strong> {date_str}</li>
+                {f"<li><strong>Passengers:</strong> {passengers}</li>" if passengers else ""}
                 {f"<li><strong>Terminal:</strong> {terminal}</li>" if terminal else ""}
-                <li><strong>Amount:</strong> {currency} {amount}</li>
+                <li><strong>Total Amount:</strong> {currency} {amount}</li>
                 <li><strong>Status:</strong> {status}</li>
             </ul>
             <p>Our 24/7 command desk: {support}</p>
             """
-            whatsapp = f"✈️ *Shafsky Aviation VIP Desk*\n\nDear *{name}*,\n\nWe are delighted to confirm your VIP service booking.\n\n*Reference:* {ref}\n*Airport:* {airport}\n*Flight:* {flight}\n*Date:* {date_str}\n\nOur 24/7 command desk is at your disposal: {support}."
+            whatsapp = f"✈️ *Shafsky Aviation Services VIP Desk*\n\nDear *{name}*,\n\nWe are delighted to confirm your VIP service booking.\n\n*Reference:* {ref}\n*Airport:* {airport}\n*Flight:* {flight}\n*Date:* {date_str}\n\nOur 24/7 command desk is at your disposal: {support}."
+
+        elif t_type == "BOOKING_RECEIVED":
+            subject = f"Shafsky Aviation Services — Booking Received ({ref})"
+            html = f"""
+            <h2>Shafsky Aviation Services VIP Services</h2>
+            <p>Dear <strong>{name}</strong>,</p>
+            <p>We have received your VIP service booking request <strong>{ref}</strong>.</p>
+            <p>Your booking is currently pending payment confirmation. Please complete the payment to finalize your booking.</p>
+            <ul>
+                <li><strong>Airport:</strong> {airport}</li>
+                <li><strong>Service type:</strong> {journey or service}</li>
+                <li><strong>Package / service:</strong> {service}</li>
+                <li><strong>Flight:</strong> {flight} ({origin} &rarr; {dest})</li>
+                <li><strong>Date / time:</strong> {date_str}</li>
+                {f"<li><strong>Passengers:</strong> {passengers}</li>" if passengers else ""}
+                {f"<li><strong>Terminal:</strong> {terminal}</li>" if terminal else ""}
+                <li><strong>Total Amount:</strong> {currency} {amount}</li>
+                <li><strong>Status:</strong> PENDING PAYMENT</li>
+            </ul>
+            <p>If you have any questions, our 24/7 command desk is available: {support}</p>
+            """
+            whatsapp = f"✈️ *Shafsky Aviation Services VIP Desk*\n\nDear *{name}*,\n\nWe have received your VIP service booking request.\n\n*Reference:* {ref}\n*Airport:* {airport}\n*Flight:* {flight}\n*Date:* {date_str}\n\nYour booking is currently pending payment confirmation. Please complete the payment to finalize your booking.\n\nSupport: {support}."
 
         elif t_type == "ADMIN_NEW_BOOKING":
             subject = f"[Shafsky Ops] New booking {ref} — {airport}"
@@ -65,8 +96,9 @@ class NotificationTemplateEngine:
                 <li><strong>Package / service:</strong> {service}</li>
                 <li><strong>Flight:</strong> {flight} ({origin} &rarr; {dest})</li>
                 <li><strong>Date / time:</strong> {date_str}</li>
+                {f"<li><strong>Passengers:</strong> {passengers}</li>" if passengers else ""}
                 {f"<li><strong>Terminal:</strong> {terminal}</li>" if terminal else ""}
-                <li><strong>Amount:</strong> {currency} {amount}</li>
+                <li><strong>Total Amount:</strong> {currency} {amount}</li>
                 <li><strong>Status:</strong> {status}</li>
             </ul>
             """
@@ -74,79 +106,79 @@ class NotificationTemplateEngine:
 
         elif t_type == "BOOKING_CANCELLED":
             reason = data.get("reason", "Cancelled upon request")
-            subject = f"Shafsky Aviation - Booking Cancelled ({ref})"
+            subject = f"Shafsky Aviation Services - Booking Cancelled ({ref})"
             html = f"""
             <h2>Booking Cancelled</h2>
             <p>Dear <strong>{name}</strong>,</p>
             <p>Your booking <strong>{ref}</strong> for flight {flight} has been cancelled.</p>
             <p><strong>Reason:</strong> {reason}</p>
             """
-            whatsapp = f"🛎️ *Shafsky Aviation Update*\n\nDear *{name}*,\n\nYour booking (*{ref}*) for flight {flight} has been cancelled.\n*Reason:* {reason}\n\nWe look forward to serving you in the future."
+            whatsapp = f"🛎️ *Shafsky Aviation Services Update*\n\nDear *{name}*,\n\nYour booking (*{ref}*) for flight {flight} has been cancelled.\n*Reason:* {reason}\n\nWe look forward to serving you in the future."
 
         elif t_type == "BOOKING_UPDATED":
             status = data.get("status", "UPDATED")
-            subject = f"Shafsky Aviation - Booking Status Update ({ref})"
+            subject = f"Shafsky Aviation Services - Booking Status Update ({ref})"
             html = f"""
             <h2>Booking Status Updated</h2>
             <p>Dear <strong>{name}</strong>,</p>
             <p>Your booking <strong>{ref}</strong> status is now: <strong>{status}</strong>.</p>
             """
-            whatsapp = f"✨ *Shafsky Aviation Update*\n\nDear *{name}*,\n\nYour booking (*{ref}*) status has been updated to: *{status}*.\n\nPlease contact your concierge if you have any questions."
+            whatsapp = f"✨ *Shafsky Aviation Services Update*\n\nDear *{name}*,\n\nYour booking (*{ref}*) status has been updated to: *{status}*.\n\nPlease contact your concierge if you have any questions."
 
         elif t_type == "PAYMENT_SUCCESS":
             txn_id = data.get("transactionId", "TXN-OK")
-            subject = f"Shafsky Aviation - Payment Receipt ({ref})"
+            subject = f"Shafsky Aviation Services - Payment Receipt ({ref})"
             html = f"""
             <h2>Payment Successful</h2>
             <p>Dear <strong>{name}</strong>,</p>
             <p>Payment of <strong>{currency} {amount}</strong> received. Transaction ID: <code>{txn_id}</code>.</p>
             """
-            whatsapp = f"💎 *Shafsky Aviation Billing*\n\nDear *{name}*,\n\nWe have successfully received your payment of *{currency} {amount}* for booking *{ref}*.\n\n*Transaction ID:* {txn_id}"
+            whatsapp = f"💎 *Shafsky Aviation Services Billing*\n\nDear *{name}*,\n\nWe have successfully received your payment of *{currency} {amount}* for booking *{ref}*.\n\n*Transaction ID:* {txn_id}"
 
         elif t_type == "PAYMENT_FAILED":
             err = data.get("error", "Transaction declined")
-            subject = f"Shafsky Aviation - Payment Failed ({ref})"
+            subject = f"Shafsky Aviation Services - Payment Failed ({ref})"
             html = f"""
             <h2>Payment Failed</h2>
             <p>Dear <strong>{name}</strong>,</p>
             <p>We could not process payment for booking <strong>{ref}</strong>. Error: {err}</p>
             """
-            whatsapp = f"⚠️ *Shafsky Aviation Billing*\n\nDear *{name}*,\n\nWe encountered an issue processing the payment for booking *{ref}*.\n*Error:* {err}\n\nPlease kindly retry your payment or contact support."
+            whatsapp = f"⚠️ *Shafsky Aviation Services Billing*\n\nDear *{name}*,\n\nWe encountered an issue processing the payment for booking *{ref}*.\n*Error:* {err}\n\nPlease kindly retry your payment or contact support."
 
         elif t_type == "REMINDER":
-            subject = f"Shafsky Aviation - Pre-Flight Service Reminder ({ref})"
+            subject = f"Shafsky Aviation Services - Pre-Flight Service Reminder ({ref})"
             html = f"""
             <h2>Pre-Flight VIP Reminder</h2>
             <p>Dear <strong>{name}</strong>,</p>
             <p>This is a reminder for your upcoming flight <strong>{flight}</strong> departing at {date_str}.</p>
             """
-            whatsapp = f"⏰ *Shafsky Aviation Concierge*\n\nDear *{name}*,\n\nThis is a gentle reminder for your upcoming flight *{flight}* ({origin} -> {dest}) departing at *{date_str}*.\n\n*Reference:* {ref}\n\nOur team is preparing for your arrival."
+            whatsapp = f"⏰ *Shafsky Aviation Services Concierge*\n\nDear *{name}*,\n\nThis is a gentle reminder for your upcoming flight *{flight}* ({origin} -> {dest}) departing at *{date_str}*.\n\n*Reference:* {ref}\n\nOur team is preparing for your arrival."
 
         elif t_type == "FLIGHT_DELAY":
             new_time = data.get("newDepartureTime", "Updated Time")
-            subject = f"Shafsky Aviation - Flight Schedule Alert ({flight})"
+            subject = f"Shafsky Aviation Services - Flight Schedule Alert ({flight})"
             html = f"""
             <h2>Flight Delay Alert</h2>
             <p>Dear <strong>{name}</strong>,</p>
             <p>Flight <strong>{flight}</strong> schedule has changed. New Estimated Departure: <strong>{new_time}</strong>.</p>
             """
-            whatsapp = f"⚠️ *Shafsky Aviation Flight Alert*\n\nDear *{name}*,\n\nPlease be advised that flight *{flight}* has been delayed.\n*New Departure Time:* {new_time}\n\nOur concierge team will adjust your services accordingly."
+            whatsapp = f"⚠️ *Shafsky Aviation Services Flight Alert*\n\nDear *{name}*,\n\nPlease be advised that flight *{flight}* has been delayed.\n*New Departure Time:* {new_time}\n\nOur concierge team will adjust your services accordingly."
 
         elif t_type == "FLIGHT_GATE_CHANGED":
             gate = data.get("gate", "TBA")
             terminal = data.get("terminal", "TBA")
-            subject = f"Shafsky Aviation - Gate Update ({flight})"
+            subject = f"Shafsky Aviation Services - Gate Update ({flight})"
             html = f"""
             <h2>Gate Change Alert</h2>
             <p>Dear <strong>{name}</strong>,</p>
             <p>Flight <strong>{flight}</strong> departure gate is now: <strong>Gate {gate} (Terminal {terminal})</strong>.</p>
             """
-            whatsapp = f"🚪 *Shafsky Aviation Gate Update*\n\nDear *{name}*,\n\nThe departure gate for flight *{flight}* has been updated.\n*New Gate:* {gate} (Terminal {terminal})\n\nYour representative will guide you accordingly."
+            whatsapp = f"🚪 *Shafsky Aviation Services Gate Update*\n\nDear *{name}*,\n\nThe departure gate for flight *{flight}* has been updated.\n*New Gate:* {gate} (Terminal {terminal})\n\nYour representative will guide you accordingly."
 
         elif t_type == "VIP_WELCOME":
             agent_name = data.get("agentName", "Airport Representative")
             agent_phone = data.get("agentPhone", "Duty Line")
-            subject = f"Shafsky Aviation - Welcome to Airport ({origin})"
+            subject = f"Shafsky Aviation Services - Welcome to Airport ({origin})"
             html = f"""
             <h2>Welcome to {origin} Airport</h2>
             <p>Dear <strong>{name}</strong>,</p>
@@ -156,9 +188,9 @@ class NotificationTemplateEngine:
             whatsapp = f"🌟 *Shafsky VIP Welcome*\n\nDear *{name}*,\n\nWelcome to *{origin}*!\n\nYour dedicated VIP Airport Representative, *{agent_name}*, is awaiting your arrival.\n*Agent Contact:* {agent_phone}"
 
         else:
-            subject = f"Shafsky Aviation Notification ({ref})"
+            subject = f"Shafsky Aviation Services Notification ({ref})"
             html = f"<p>Dear <strong>{name}</strong>,</p><p>Notification regarding your booking <strong>{ref}</strong>.</p>"
-            whatsapp = f"✨ *Shafsky Aviation Update*\n\nDear *{name}*,\n\nThere is an update regarding your booking *{ref}*.\n\nPlease contact our desk for details."
+            whatsapp = f"✨ *Shafsky Aviation Services Update*\n\nDear *{name}*,\n\nThere is an update regarding your booking *{ref}*.\n\nPlease contact our desk for details."
 
         return {
             "subject": subject,

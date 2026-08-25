@@ -1,6 +1,9 @@
+import logging
 from typing import Optional, Dict, Any
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from app.database import get_db
 from app.schemas.booking import (
@@ -35,10 +38,95 @@ async def create_booking(
                 pass
 
     booking = BookingService.create_booking(db, payload, profile_id=profile_id)
+    
+    # Securely initiate payment (creates Razorpay Order server-side)
+    from app.services.payment_service import PaymentService
+    from app.schemas.payment import PaymentInitiateRequest, PaymentMethod
+    
+    init_request = PaymentInitiateRequest(
+        entity_type="AIRPORT_BOOKING",
+        entity_id=str(booking.booking_ref),
+        customer_name=booking.passenger_name or "Valued Guest",
+        customer_email=booking.passenger_email or "guest@shafsky.com",
+        amount=float(booking.total_amount),
+        currency=booking.currency or "INR",
+        payment_method=PaymentMethod.CREDIT_CARD,
+        customer_id=str(profile_id) if profile_id else None
+    )
+    
+    try:
+        transaction = PaymentService.initiate_payment(db, init_request)
+        db.commit()
+    except Exception as e:
+        logger.exception("Payment initiation failed after booking %s was created", booking.booking_ref)
+        from app.providers.razorpay_provider import razorpay_provider
+        booking_dict = BookingService.format_booking_dict(booking)
+        booking_dict["razorpay_order_id"] = None
+        booking_dict["razorpay_key_id"] = razorpay_provider.key_id
+        booking_dict["razorpay_amount_paise"] = int(round(float(booking.total_amount or 0) * 100))
+        booking_dict["payment_init_failed"] = True
+        return BookingApiResponse(
+            success=True,
+            data=booking_dict,
+            error=f"Booking created but payment could not be started. Please retry payment. ({str(e)})",
+        )
+    
+    from app.providers.razorpay_provider import razorpay_provider
+    booking_dict = BookingService.format_booking_dict(booking)
+    booking_dict["razorpay_order_id"] = transaction.gateway_payment_id
+    booking_dict["razorpay_key_id"] = razorpay_provider.key_id
+    raw_intent = transaction.gateway_response if isinstance(transaction.gateway_response, dict) else {}
+    booking_dict["razorpay_amount_paise"] = int(
+        raw_intent.get("amount") or round(float(booking.total_amount or 0) * 100)
+    )
+
     return BookingApiResponse(
         success=True,
-        data=BookingService.format_booking_dict(booking)
+        data=booking_dict
     )
+
+
+@router.get("/{identifier}/status", response_model=BookingApiResponse)
+async def get_booking_status(
+    identifier: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Public, lightweight polling endpoint for booking and payment confirmation status.
+    """
+    booking = BookingService.get_booking_by_ref_or_id(db, identifier)
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found.")
+
+    from app.models.schema import BookingStatus
+    from app.models.payment import PaymentTransaction, PaymentStatus
+    from sqlalchemy import select, or_
+
+    tx = db.scalar(
+        select(PaymentTransaction).where(
+            or_(
+                PaymentTransaction.transaction_ref == booking.booking_ref,
+                PaymentTransaction.entity_id == booking.booking_ref
+            )
+        )
+    )
+
+    is_paid = booking.status == BookingStatus.CONFIRMED or (tx and tx.status == PaymentStatus.SUCCESSFUL)
+
+    return BookingApiResponse(
+        success=True,
+        data={
+            "bookingRef": booking.booking_ref,
+            "status": booking.status.value if hasattr(booking.status, "value") else str(booking.status),
+            "paymentStatus": "PAID" if is_paid else (tx.status.value if tx and hasattr(tx.status, "value") else "PENDING"),
+            "totalAmount": float(booking.total_amount),
+            "currency": booking.currency,
+            "passengerName": booking.passenger_name,
+            "serviceType": booking.service_type,
+            "createdAt": booking.created_at.isoformat() if booking.created_at else None
+        }
+    )
+
 
 @router.get("/my-bookings", response_model=BookingApiResponse)
 async def get_my_bookings(
