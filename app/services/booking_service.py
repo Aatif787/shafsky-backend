@@ -13,6 +13,7 @@ from app.models.schema import Booking, BookingStatus, Profile
 from app.schemas.booking import BookingCreate
 from app.booking.exceptions import ConcurrencyException
 from app.booking.service_validator import ServiceValidator
+from app.utils.customer_email import is_acceptable_customer_email, REAL_EMAIL_HELP
 
 logger = logging.getLogger("shafsky.booking")
 
@@ -124,6 +125,11 @@ class BookingService:
         profile_id: Optional[uuid.UUID] = None
     ) -> Booking:
         now = datetime.now(timezone.utc)
+
+        email_ok, email_reason = is_acceptable_customer_email(payload.passenger_email or "")
+        if not email_ok:
+            detail = REAL_EMAIL_HELP if email_reason == "reserved_or_placeholder" else "Invalid passenger email address."
+            raise HTTPException(status_code=422, detail=detail)
 
         from app.services.service_airport_rules import (
             normalize_flight_type,
@@ -258,9 +264,24 @@ class BookingService:
                 detail=f"Shafsky does not currently operate at {target_airport}.",
             )
 
-        flight_type = normalize_flight_type(
-            meta.get("flight_type") or meta.get("travel_type")
-        ) or "DOMESTIC"
+        # Derive authoritative flight_type from actual route countries.
+        # Client-supplied flight_type is NOT trusted for pricing/package selection.
+        from app.services.service_airport_rules import derive_flight_type_from_route
+        try:
+            derived_ft = derive_flight_type_from_route(
+                db, payload.origin_code, payload.dest_code, journey_type
+            )
+            if derived_ft is not None:
+                # ARRIVAL / DEPARTURE — use backend-derived classification
+                flight_type = derived_ft
+            else:
+                # TRANSIT — preserve existing compound type from client
+                flight_type = normalize_flight_type(
+                    meta.get("flight_type") or meta.get("travel_type")
+                ) or "DOMESTIC"
+        except ValueError as route_err:
+            raise HTTPException(status_code=400, detail=str(route_err))
+
 
         target_service = payload.service_type or "silver"
 

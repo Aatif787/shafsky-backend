@@ -1,7 +1,7 @@
 """
 WhatsApp Integration Service & Persistent Booking State Machine Engine.
 Handles Meta Webhooks, Idempotency, 4-Option Customer Menu, Database-Driven Airport Services,
-Pure Local Flight Validation, Session Expiry (15 mins), and Payment-Free Booking Ingestion.
+Pure Local Flight Validation, Session Expiry (15 mins), and Razorpay Payment Link checkout.
 """
 
 import os
@@ -23,6 +23,11 @@ from app.integrations.whatsapp import delivery as wa_delivery
 from app.services.service_config_service import ServiceConfigService, DEFAULT_SERVICE_CATALOG
 from app.services.journey_engine import JourneyDetectionEngine
 from app.services.booking_service import BookingService
+from app.utils.customer_email import (
+    is_acceptable_customer_email as is_acceptable_whatsapp_customer_email,
+    REAL_EMAIL_HELP as _REAL_EMAIL_HELP,
+    EMAIL_FORMAT_HELP as _EMAIL_FORMAT_HELP,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +82,10 @@ class WhatsAppBookingStateMachine:
         conv.booking_id = None
         conv.booking_ref = None
         conv.payment_status = "PENDING"
+        conv.razorpay_order_id = None
+        conv.razorpay_payment_id = None
+        conv.razorpay_payment_link_id = None
+        conv.razorpay_payment_url = None
         return conv
 
     @classmethod
@@ -120,7 +129,11 @@ class WhatsAppBookingStateMachine:
                 else:
                     inactivity_seconds = (now_utc - last_act).total_seconds()
 
-                if inactivity_seconds > timeout_seconds and conv.current_state not in ["START", "CANCELLED", "BOOKING_CONFIRMED"]:
+                protected_states = {
+                    "START", "CANCELLED", "BOOKING_CONFIRMED",
+                    "WAITING_PAYMENT", "PENDING_PAYMENT", "COMPLETED", "PAYMENT_PROCESSING",
+                }
+                if inactivity_seconds > timeout_seconds and conv.current_state not in protected_states:
                     logger.info(f"[WhatsApp Session] Session expired for {clean_phone} after {inactivity_seconds:.0f}s inactivity.")
                     conv = cls._reset_conversation_fields(conv)
                     conv.current_state = "START"
@@ -190,8 +203,38 @@ class WhatsAppBookingStateMachine:
                     cls._send_fallback_message(conv.phone_number, "Your session has expired. Please type 'Hi' to start again.")
                 return result
 
+            # ── 2. GLOBAL INTERRUPT COMMANDS (CANCEL, HELP, BACK) ──
+            CANCEL_COMMANDS = {"cancel", "stop", "abort"}
+            if text_lower in CANCEL_COMMANDS or input_id == "btn_cancel":
+                cls._transition_state(db, conv, "CANCELLED")
+                msg = (
+                    "*Shafsky Aviation Concierge*\n\n"
+                    "Your booking process has been cancelled.\n\n"
+                    "Type *Hi* anytime to begin a new reservation."
+                )
+                wa_delivery.send_text(conv.phone_number, msg, client=whatsapp_client)
+                return {"status": "cancelled", "state": conv.current_state}
+
+            HELP_COMMANDS = {"help", "support", "info"}
+            if text_lower in HELP_COMMANDS and conv.current_state not in ("WAITING_PAYMENT", "PENDING_PAYMENT"):
+                help_msg = (
+                    "*Shafsky Aviation Concierge*\n\n"
+                    f"{wa_copy.SESSION_TIMEOUT_HINT}\n\n"
+                    "• Type *Hi* to restart your booking.\n"
+                    "• Type *BACK* to return to the previous step.\n"
+                    "• Type *CANCEL* to cancel your current booking.\n"
+                    "• Reply with a number to choose a listed service.\n\n"
+                    "For a representative, call *+91-9599087959*."
+                )
+                wa_delivery.send_text(conv.phone_number, help_msg, client=whatsapp_client)
+                return {"status": "help_sent", "state": conv.current_state}
+
+            # Waiting for payment: do not wipe booking fields; Hi must not start a second booking.
+            if conv.current_state in ("WAITING_PAYMENT", "PENDING_PAYMENT"):
+                return cls._state_waiting_payment(db, conv, user_input, input_id)
+
             # ── 1. GLOBAL RESTART COMMANDS (HI, HELLO, HEY, START, MENU, RESTART, MAIN MENU, 0) ──
-            # Checked BEFORE any state-specific handlers. "Hi" MUST ALWAYS WIN.
+            # Checked BEFORE any other state-specific handlers, but AFTER payment-waiting.
             RESTART_COMMANDS = {
                 "hi", "hello", "hey", "start", "menu", "restart", "main menu", "0",
                 "reset", "start over"
@@ -208,19 +251,6 @@ class WhatsAppBookingStateMachine:
                     cls._send_fallback_message(conv.phone_number, "Welcome to Shafsky Aviation. Please select a service category.")
                 return result
 
-            # ── 2. GLOBAL INTERRUPT COMMANDS (CANCEL, HELP, BACK) ──
-            CANCEL_COMMANDS = {"cancel", "stop", "abort"}
-            if text_lower in CANCEL_COMMANDS or input_id == "btn_cancel":
-                cls._transition_state(db, conv, "CANCELLED")
-                msg = (
-                    "*Shafsky Aviation Concierge*\n\n"
-                    "Your booking process has been cancelled.\n\n"
-                    "Type *Hi* anytime to begin a new reservation."
-                )
-                wa_delivery.send_text(conv.phone_number, msg, client=whatsapp_client)
-                return {"status": "cancelled", "state": conv.current_state}
-
-            HELP_COMMANDS = {"help", "support", "info"}
             if text_lower in HELP_COMMANDS:
                 help_msg = (
                     "*Shafsky Aviation Concierge*\n\n"
@@ -291,6 +321,8 @@ class WhatsAppBookingStateMachine:
                 result = cls._state_additional_requirements(db, conv, user_input)
             elif state == "BOOKING_REVIEW":
                 result = cls._state_booking_review(db, conv, user_input, input_id)
+            elif state in ["WAITING_PAYMENT", "PENDING_PAYMENT"]:
+                result = cls._state_waiting_payment(db, conv, user_input, input_id)
             else:
                 result = cls._state_start(db, conv, user_input)
 
@@ -406,6 +438,9 @@ class WhatsAppBookingStateMachine:
         elif curr == "BOOKING_REVIEW":
             cls._transition_state(db, conv, "ADDITIONAL_REQUIREMENTS")
             whatsapp_client.send_text_message(conv.phone_number, "Do you have any special requirements or notes? (Type *None* if no special requests):")
+        elif curr in ["WAITING_PAYMENT", "PENDING_PAYMENT"]:
+            cls._state_waiting_payment(db, conv, "resend")
+            return
         else:
             cls._send_category_menu(db, conv)
 
@@ -1782,9 +1817,12 @@ class WhatsAppBookingStateMachine:
     @classmethod
     def _state_customer_email(cls, db: Session, conv: WhatsAppConversation, email_input: str) -> Dict[str, Any]:
         clean_email = email_input.strip()
-        if "@" not in clean_email or "." not in clean_email or len(clean_email) < 5:
-            whatsapp_client.send_text_message(conv.phone_number, "Please enter a valid email address (e.g. name@example.com).")
-            return {"status": "invalid_email", "success": False}
+        ok, reason = is_acceptable_whatsapp_customer_email(clean_email)
+        if not ok:
+            help_msg = _EMAIL_FORMAT_HELP if reason == "invalid_syntax" else _REAL_EMAIL_HELP
+            whatsapp_client.send_text_message(conv.phone_number, help_msg)
+            # Stay in CUSTOMER_EMAIL; do not clear other collected booking fields.
+            return {"status": "invalid_email", "success": False, "reason": reason}
 
         conv.customer_email = clean_email
         cls._transition_state(db, conv, "CUSTOMER_PHONE")
@@ -1819,7 +1857,7 @@ class WhatsAppBookingStateMachine:
 
         return cls._send_booking_summary(db, conv)
 
-    # ── 5. BOOKING SUMMARY & CREATION (NO PAYMENT GATEWAY) ──
+    # ── 5. BOOKING SUMMARY & PAYMENT LINK ──
 
     @classmethod
     def _send_booking_summary(cls, db: Session, conv: WhatsAppConversation) -> Dict[str, Any]:
@@ -1894,6 +1932,12 @@ class WhatsAppBookingStateMachine:
             return {"status": "edit_prompt", "success": True}
 
         if "CONFIRM" in text_u or "YES" in text_u or text_u == "1" or text_u == "btn_confirm_booking":
+            # Belt-and-suspenders: never create a booking with a reserved/placeholder email.
+            email_ok, _ = is_acceptable_whatsapp_customer_email(conv.customer_email or "")
+            if not email_ok:
+                cls._transition_state(db, conv, "CUSTOMER_EMAIL")
+                whatsapp_client.send_text_message(conv.phone_number, _REAL_EMAIL_HELP)
+                return {"status": "invalid_email", "success": False, "reason": "reserved_or_placeholder"}
             return cls._create_booking_request(db, conv)
 
         whatsapp_client.send_text_message(conv.phone_number, "Please select *Confirm Booking*, *Change Details*, or *Cancel*.")
@@ -1902,10 +1946,12 @@ class WhatsAppBookingStateMachine:
     @classmethod
     def _create_booking_request(cls, db: Session, conv: WhatsAppConversation) -> Dict[str, Any]:
         """
-        Creates the database Booking record with PENDING status.
-        NO PAYMENT GATEWAY is implemented or called.
-        Informs customer that our team will contact them for payment & final confirmation.
+        Creates the Booking as PENDING, then creates/reuses a Razorpay Payment Link.
+        Does not confirm the booking. Confirmation happens only via PaymentService webhooks.
         """
+        if conv.booking_ref:
+            return cls._issue_or_resend_payment_link(db, conv)
+
         passengers = max(1, conv.passenger_count or 1)
         metadata = conv.flight_details_json if isinstance(conv.flight_details_json, dict) else {}
         unit_price = metadata.get("unit_price") or metadata.get("base_price")
@@ -1918,8 +1964,41 @@ class WhatsAppBookingStateMachine:
 
         booking_ref = BookingService.generate_booking_ref()
 
+        # Derive authoritative flight_type from route when origin/dest are available
+        user_travel_type = metadata.get("travel_type")
+        authoritative_travel_type = user_travel_type
+        jt = metadata.get("journey_type", "DEPARTURE")
+        if jt != "TRANSIT":
+            try:
+                from app.services.service_airport_rules import derive_flight_type_from_route
+                # WhatsApp sets origin_code = selected_airport_iata, dest_code = None
+                # Route classification requires both ends; if dest is missing, keep user selection
+                origin_for_route = conv.selected_airport_iata
+                dest_for_route = None  # WhatsApp flow doesn't currently collect dest separately
+                derived = derive_flight_type_from_route(db, origin_for_route, dest_for_route, jt)
+                if derived is not None:
+                    authoritative_travel_type = derived
+                    if user_travel_type and user_travel_type != derived:
+                        correction_msg = (
+                            f"ℹ️ Based on your route, this flight is classified as "
+                            f"*{derived.title()}*."
+                        )
+                        whatsapp_client.send_text_message(conv.phone_number, correction_msg)
+            except (ValueError, Exception):
+                # Route data insufficient — keep user's manual selection as best-effort
+                pass
+
+        booking_meta = {
+            "channel": "whatsapp",
+            "source": "whatsapp",
+            "journey_type": jt,
+            "travel_type": authoritative_travel_type,
+            "service_airport": conv.selected_airport_iata,
+            "package": conv.selected_service_name,
+            "terminal": metadata.get("terminal"),
+        }
+
         try:
-            # 1. Create DB Booking Record
             new_booking = Booking(
                 id=uuid.uuid4(),
                 booking_ref=booking_ref,
@@ -1935,15 +2014,16 @@ class WhatsAppBookingStateMachine:
                 currency="INR",
                 status=BookingStatus.PENDING,
                 notes=conv.additional_requirements,
+                metadata_json=booking_meta,
                 created_at=datetime.now(timezone.utc),
                 updated_at=datetime.now(timezone.utc)
             )
             db.add(new_booking)
-
-            # 2. Update Conversation state
             conv.booking_ref = booking_ref
+            conv.booking_id = new_booking.id
             conv.total_amount = amount
-            cls._transition_state(db, conv, "BOOKING_CONFIRMED")
+            conv.payment_status = "PENDING"
+            cls._transition_state(db, conv, "WAITING_PAYMENT")
             db.commit()
 
         except Exception as db_err:
@@ -1955,43 +2035,6 @@ class WhatsAppBookingStateMachine:
             )
             return {"status": "error", "error": str(db_err), "success": False}
 
-        # 3. Customer WhatsApp Notification (NO PAYMENT LINK)
-        cust_msg = (
-            f"🎉 *BOOKING REQUEST RECEIVED*\n\n"
-            f"Thank you, *{conv.customer_name}*! We have received your booking request for *{conv.selected_service_name}*.\n\n"
-            f"• *Booking Reference*: *{booking_ref}*\n"
-            f"• *Airport*: {conv.selected_airport_name} ({conv.selected_airport_iata})\n"
-        )
-        if conv.flight_num:
-            cust_msg += f"• *Flight*: {conv.flight_num}\n"
-
-        cust_msg += (
-            f"• *Date*: {conv.booking_date}\n"
-            f"• *Passengers*: {conv.passenger_count}\n"
-            f"• *Passenger Name*: {conv.customer_name}\n\n"
-            "Our team will contact you regarding payment and final confirmation.\n\n"
-            "Thank you for choosing Shafsky Aviation Services."
-        )
-        whatsapp_client.send_text_message(conv.phone_number, cust_msg)
-
-        # 4. Team WhatsApp Notification
-        officer_phone = os.getenv("WHATSAPP_OFFICER_NOTIFY_PHONE", "919599087959").strip()
-        team_msg = (
-            "🚨 *NEW BOOKING REQUEST RECEIVED*\n\n"
-            f"• *Booking Ref*: {booking_ref}\n"
-            f"• *Customer*: {conv.customer_name} ({conv.customer_phone})\n"
-            f"• *Email*: {conv.customer_email}\n"
-            f"• *Service*: {conv.selected_service_name}\n"
-            f"• *Airport*: {conv.selected_airport_iata or 'N/A'}\n"
-            f"• *Flight*: {conv.flight_num or 'N/A'}\n"
-            f"• *Date*: {conv.booking_date}\n"
-            f"• *Passengers*: {conv.passenger_count}\n"
-            f"• *Estimated Amount*: ₹{int(amount):,}\n"
-            "• *Status*: PENDING (Payment & Confirmation Follow-up Required)"
-        )
-        whatsapp_client.send_text_message(officer_phone, team_msg)
-
-        # 5. Customer & Team Email Notifications
         try:
             from app.services.notification_service import NotificationService
             NotificationService.notify_booking_created(db, {
@@ -2004,6 +2047,7 @@ class WhatsAppBookingStateMachine:
                 "origin_code": conv.selected_airport_iata,
                 "dest_code": None,
                 "airport_code": conv.selected_airport_iata,
+                "journey_type": metadata.get("journey_type"),
                 "service_type": conv.selected_service_name,
                 "departure_time": conv.booking_date,
                 "total_amount": amount,
@@ -2013,12 +2057,200 @@ class WhatsAppBookingStateMachine:
         except Exception as email_err:
             logger.warning(f"[WhatsApp Booking Notification] Email notification failed: {email_err}")
 
+        return cls._issue_or_resend_payment_link(db, conv, notify_officer=True)
+
+    @classmethod
+    def _payment_link_customer_message(cls, conv: WhatsAppConversation, short_url: str) -> str:
+        metadata = conv.flight_details_json if isinstance(conv.flight_details_json, dict) else {}
+        jt = metadata.get("journey_type")
+        tt = metadata.get("travel_type")
+        amount = float(conv.total_amount or 0.0)
+        lines = ["✅ *Booking Summary*\n"]
+        lines.append(f"Service: {conv.selected_service_name or 'VIP Service'}")
+        if conv.selected_airport_iata:
+            airport_label = conv.selected_airport_name or conv.selected_airport_iata
+            lines.append(f"Airport: {airport_label} ({conv.selected_airport_iata})")
+        if jt:
+            lines.append(f"Journey: {str(jt).replace('_', ' ').title()}")
+        if tt:
+            tt_display = "Domestic" if tt == "DOMESTIC" else ("International" if tt == "INTERNATIONAL" else str(tt).replace("_", " ").title())
+            lines.append(f"Flight Type: {tt_display}")
+        if conv.booking_date:
+            lines.append(f"Date: {conv.booking_date}")
+        if conv.booking_ref:
+            lines.append(f"Reference: {conv.booking_ref}")
+        lines.append(f"Total: ₹{int(amount):,}")
+        lines.append("")
+        lines.append("Please complete your payment using the secure Razorpay link below:")
+        lines.append("")
+        lines.append(short_url)
+        lines.append("")
+        lines.append("After payment, your booking will be confirmed automatically.")
+        lines.append("")
+        lines.append("Reply *resend* if you need the link again, or *I paid* to check payment status.")
+        return "\n".join(lines)
+
+    @classmethod
+    def _issue_or_resend_payment_link(
+        cls,
+        db: Session,
+        conv: WhatsAppConversation,
+        force_new: bool = False,
+        notify_officer: bool = False,
+    ) -> Dict[str, Any]:
+        from app.services.payment_service import PaymentService
+        from app.models.schema import Booking, BookingStatus
+
+        booking_ref = conv.booking_ref
+        if not booking_ref:
+            whatsapp_client.send_text_message(
+                conv.phone_number,
+                "We could not find your booking. Please type *Hi* to start again."
+            )
+            return {"status": "missing_booking", "success": False}
+
+        booking = db.scalar(select(Booking).where(Booking.booking_ref == booking_ref))
+        if booking and booking.status == BookingStatus.CONFIRMED:
+            conv.payment_status = "SUCCESSFUL"
+            conv.current_state = "COMPLETED"
+            db.commit()
+            whatsapp_client.send_text_message(
+                conv.phone_number,
+                f"✅ Payment received. Booking *{booking_ref}* is confirmed."
+            )
+            return {"status": "already_confirmed", "booking_ref": booking_ref, "success": True}
+
+        if force_new:
+            link_result = PaymentService.replace_whatsapp_payment_link(db, booking_ref)
+        else:
+            link_result = PaymentService.initiate_whatsapp_payment_link(db, booking_ref)
+
+        if not link_result.get("success"):
+            cls._transition_state(db, conv, "WAITING_PAYMENT")
+            conv.payment_status = "PENDING"
+            db.commit()
+            whatsapp_client.send_text_message(
+                conv.phone_number,
+                "Your booking is saved. We could not generate a payment link just now.\n\n"
+                "Please reply *resend* to try again. Your booking will stay pending until payment is completed."
+            )
+            if notify_officer:
+                cls._notify_officer_booking(conv, booking_ref, float(conv.total_amount or 0), link_sent=False)
+            return {
+                "status": "payment_link_failed",
+                "booking_ref": booking_ref,
+                "success": False,
+                "reason": link_result.get("reason") or link_result.get("error"),
+            }
+
+        short_url = link_result.get("short_url")
+        plink_id = link_result.get("payment_link_id")
+        conv.razorpay_payment_link_id = plink_id
+        conv.razorpay_payment_url = short_url
+        conv.payment_status = "PENDING"
+        cls._transition_state(db, conv, "WAITING_PAYMENT")
+        db.commit()
+
+        cust_msg = cls._payment_link_customer_message(conv, short_url)
+        whatsapp_client.send_text_message(conv.phone_number, cust_msg)
+        if notify_officer:
+            cls._notify_officer_booking(conv, booking_ref, float(conv.total_amount or 0), link_sent=True)
+
         return {
-            "status": "booking_request_created",
+            "status": "payment_link_sent" if not link_result.get("reused") else "payment_link_reused",
             "booking_ref": booking_ref,
             "state": conv.current_state,
-            "success": True
+            "reused": bool(link_result.get("reused")),
+            "success": True,
         }
+
+    @classmethod
+    def _notify_officer_booking(cls, conv: WhatsAppConversation, booking_ref: str, amount: float, link_sent: bool) -> None:
+        officer_phone = os.getenv("WHATSAPP_OFFICER_NOTIFY_PHONE", "919599087959").strip()
+        status_line = (
+            "PENDING — payment link sent to customer"
+            if link_sent
+            else "PENDING — payment link not yet issued (customer can retry)"
+        )
+        team_msg = (
+            "🚨 *NEW BOOKING REQUEST RECEIVED*\n\n"
+            f"• *Booking Ref*: {booking_ref}\n"
+            f"• *Customer*: {conv.customer_name} ({conv.customer_phone})\n"
+            f"• *Email*: {conv.customer_email}\n"
+            f"• *Service*: {conv.selected_service_name}\n"
+            f"• *Airport*: {conv.selected_airport_iata or 'N/A'}\n"
+            f"• *Flight*: {conv.flight_num or 'N/A'}\n"
+            f"• *Date*: {conv.booking_date}\n"
+            f"• *Passengers*: {conv.passenger_count}\n"
+            f"• *Amount*: ₹{int(amount):,}\n"
+            f"• *Status*: {status_line}"
+        )
+        try:
+            whatsapp_client.send_text_message(officer_phone, team_msg)
+        except Exception as err:
+            logger.warning("[WhatsApp Booking] Officer notify failed: %s", type(err).__name__)
+
+    @classmethod
+    def _state_waiting_payment(
+        cls,
+        db: Session,
+        conv: WhatsAppConversation,
+        user_text: str,
+        input_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        from app.services.payment_service import PaymentService
+        from app.models.schema import Booking, BookingStatus
+
+        text = (input_id or user_text or "").strip().lower()
+        paid_phrases = {
+            "i paid", "paid", "payment done", "i have paid", "have paid",
+            "payment completed", "done payment", "check payment", "payment status",
+            "status", "i've paid", "already paid",
+        }
+        expired_or_new = {"expired", "new link", "new payment link", "replace"}
+
+        booking = None
+        if conv.booking_ref:
+            booking = db.scalar(select(Booking).where(Booking.booking_ref == conv.booking_ref))
+
+        if booking and booking.status == BookingStatus.CONFIRMED:
+            conv.payment_status = "SUCCESSFUL"
+            conv.current_state = "COMPLETED"
+            db.commit()
+            whatsapp_client.send_text_message(
+                conv.phone_number,
+                f"✅ Payment received. Booking *{conv.booking_ref}* is confirmed."
+            )
+            return {"status": "already_confirmed", "success": True}
+
+        if text in paid_phrases:
+            if not conv.booking_ref:
+                whatsapp_client.send_text_message(
+                    conv.phone_number,
+                    "We could not find a booking to check. Please type *Hi* to start again."
+                )
+                return {"status": "missing_booking", "success": False}
+            recon = PaymentService.reconcile_whatsapp_payment_link(db, conv.booking_ref)
+            db.refresh(conv)
+            if booking:
+                db.refresh(booking)
+            if recon.get("paid") or (booking and booking.status == BookingStatus.CONFIRMED):
+                whatsapp_client.send_text_message(
+                    conv.phone_number,
+                    f"✅ Payment confirmed. Booking *{conv.booking_ref}* is now active."
+                )
+                return {"status": "payment_reconciled", "success": True}
+            whatsapp_client.send_text_message(
+                conv.phone_number,
+                "We have not received payment confirmation yet. Please complete payment using the Razorpay link. "
+                "Your booking will confirm automatically after payment — we cannot mark it paid from this chat."
+            )
+            return cls._issue_or_resend_payment_link(db, conv)
+
+        if conv.payment_status in ("EXPIRED", "CANCELLED") or text in expired_or_new:
+            return cls._issue_or_resend_payment_link(db, conv, force_new=conv.payment_status in ("EXPIRED", "CANCELLED"))
+
+        return cls._issue_or_resend_payment_link(db, conv)
 
     @classmethod
     def handle_payment_success(cls, db: Session, booking_ref: str, payment_id: Optional[str] = None) -> Dict[str, Any]:

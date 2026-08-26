@@ -31,6 +31,39 @@ def mock_all_whatsapp_network_calls(monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def mock_razorpay_payment_link(monkeypatch):
+    """WhatsApp booking now issues a Razorpay Payment Link; keep tests off the live API."""
+    def fake_create(*args, **kwargs):
+        ref = kwargs.get("booking_ref") or kwargs.get("reference_id") or "x"
+        return {
+            "success": True,
+            "payment_link_id": f"plink_test_{uuid.uuid4().hex[:10]}",
+            "short_url": f"https://rzp.io/i/wa_{uuid.uuid4().hex[:8]}",
+            "order_id": None,
+            "amount": kwargs.get("amount"),
+            "currency": kwargs.get("currency", "INR"),
+            "expire_by": kwargs.get("expire_by"),
+            "status": "created",
+            "simulated": False,
+            "notes": {"booking_ref": ref, "channel": "whatsapp"},
+        }
+
+    monkeypatch.setattr(
+        "app.providers.razorpay_provider.razorpay_provider.create_payment_link",
+        fake_create,
+    )
+    monkeypatch.setattr(
+        "app.providers.razorpay_provider.razorpay_provider.list_payment_links_by_reference",
+        lambda reference_id: {"success": True, "items": []},
+    )
+    monkeypatch.setattr(
+        "app.services.notification_service.NotificationService.notify_booking_created",
+        lambda *a, **k: {"status": "mocked"},
+    )
+    yield
+
+
 # 1. WhatsApp Webhook Verification GET
 def test_scenario_01_webhook_verification_get(monkeypatch):
     monkeypatch.setenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "shafsky_wa_verify_token")
@@ -334,10 +367,11 @@ def test_scenario_10_booking_request_creation_no_payment_gateway(mock_text):
         res = WhatsAppBookingStateMachine.process_incoming_event(db, phone, "CONFIRM", input_id="btn_confirm_booking")
         db.refresh(conv)
 
-        assert conv.current_state == "BOOKING_CONFIRMED"
+        assert conv.current_state == "WAITING_PAYMENT"
         assert conv.payment_status == "PENDING"
         assert conv.booking_ref is not None
         assert conv.booking_ref.startswith("SHF-")
+        assert conv.razorpay_payment_url and conv.razorpay_payment_url.startswith("https://")
 
         # Verify DB booking record
         db_booking = db.execute(select(Booking).where(Booking.booking_ref == conv.booking_ref)).scalar_one_or_none()
@@ -405,9 +439,10 @@ def test_scenario_15_customer_whatsapp_notification(mock_send):
         mock_send.reset_mock()
         WhatsAppBookingStateMachine.process_incoming_event(db, phone, "Confirm", input_id="btn_confirm_booking")
         assert mock_send.called
-        # Check confirmation message mentions team will contact regarding payment
-        sent_text = mock_send.call_args_list[0][0][1]
-        assert "Our team will contact you regarding payment" in sent_text
+        sent_text = " ".join(str(c[0][1]) for c in mock_send.call_args_list if len(c[0]) > 1)
+        assert "Please complete your payment" in sent_text
+        assert "https://" in sent_text
+        assert "Our team will contact you regarding payment" not in sent_text
     finally:
         db.close()
 
@@ -1132,7 +1167,7 @@ def test_scenario_41_complete_separated_airport_service_booking(mock_text, mock_
         assert conv.current_state == "CUSTOMER_EMAIL"
 
         # 12. Email
-        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "aariz@example.com")
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "aariz.khan@gmail.com")
         db.refresh(conv)
         assert conv.current_state == "CUSTOMER_PHONE"
 
@@ -1149,7 +1184,7 @@ def test_scenario_41_complete_separated_airport_service_booking(mock_text, mock_
         # 15. Confirm Booking Request
         res = WhatsAppBookingStateMachine.process_incoming_event(db, phone, "Confirm")
         db.refresh(conv)
-        assert conv.current_state == "BOOKING_CONFIRMED"
+        assert conv.current_state == "WAITING_PAYMENT"
         assert conv.booking_ref is not None
         assert conv.payment_status == "PENDING"
     finally:

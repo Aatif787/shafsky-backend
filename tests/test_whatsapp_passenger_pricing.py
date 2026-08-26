@@ -7,6 +7,36 @@ from app.models.schema import Booking
 from app.integrations.whatsapp.service import WhatsAppBookingStateMachine
 
 
+@pytest.fixture(autouse=True)
+def mock_razorpay_payment_link(monkeypatch):
+    def fake_create(*args, **kwargs):
+        ref = kwargs.get("booking_ref") or kwargs.get("reference_id") or "x"
+        return {
+            "success": True,
+            "payment_link_id": f"plink_test_{uuid.uuid4().hex[:10]}",
+            "short_url": f"https://rzp.io/i/wa_{uuid.uuid4().hex[:8]}",
+            "order_id": None,
+            "amount": kwargs.get("amount"),
+            "currency": kwargs.get("currency", "INR"),
+            "simulated": False,
+            "notes": {"booking_ref": ref, "channel": "whatsapp"},
+        }
+
+    monkeypatch.setattr(
+        "app.providers.razorpay_provider.razorpay_provider.create_payment_link",
+        fake_create,
+    )
+    monkeypatch.setattr(
+        "app.providers.razorpay_provider.razorpay_provider.list_payment_links_by_reference",
+        lambda reference_id: {"success": True, "items": []},
+    )
+    monkeypatch.setattr(
+        "app.services.notification_service.NotificationService.notify_booking_created",
+        lambda *a, **k: {"status": "mocked"},
+    )
+    yield
+
+
 @pytest.fixture(scope="module", autouse=True)
 def setup_db():
     Base.metadata.create_all(bind=engine)
@@ -50,9 +80,9 @@ def test_whatsapp_multiple_passengers_scales_price(mock_notify, mock_text, mock_
         assert conv.current_state == "CUSTOMER_EMAIL"
 
         # 4. Enter Customer Email
-        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "john@example.com")
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "john.doe@gmail.com")
         db.refresh(conv)
-        assert conv.customer_email == "john@example.com"
+        assert conv.customer_email == "john.doe@gmail.com"
         assert conv.current_state == "CUSTOMER_PHONE"
 
         # 5. Enter Customer Phone
@@ -76,7 +106,7 @@ def test_whatsapp_multiple_passengers_scales_price(mock_notify, mock_text, mock_
         # 7. User Confirms Booking
         WhatsAppBookingStateMachine.process_incoming_event(db, phone, "CONFIRM", input_id="btn_confirm_booking")
         db.refresh(conv)
-        assert conv.current_state == "BOOKING_CONFIRMED"
+        assert conv.current_state == "WAITING_PAYMENT"
 
         # Verify DB Booking record has total_amount = 9000.0
         booking = db.query(Booking).filter(Booking.booking_ref == conv.booking_ref).first()
@@ -123,7 +153,7 @@ def test_whatsapp_single_passenger_keeps_base_price(mock_notify, mock_text, mock
 
         # Name, email, phone, notes
         WhatsAppBookingStateMachine.process_incoming_event(db, phone, "Single Traveler")
-        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "single@example.com")
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "single.traveler@gmail.com")
         WhatsAppBookingStateMachine.process_incoming_event(db, phone, "Same")
         WhatsAppBookingStateMachine.process_incoming_event(db, phone, "None")
         db.refresh(conv)

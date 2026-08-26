@@ -38,8 +38,21 @@ class NotificationTemplateEngine:
         terminal = _safe(data.get("terminal"))
         status = _safe(data.get("status"), "PENDING")
         support = _safe(data.get("supportPhone"), "+91 9599087959")
+        invoice_number = _safe(data.get("invoice_number") or data.get("invoiceNumber"))
+        invoice_attached = bool(data.get("invoice_attached") or data.get("invoiceAttached"))
+        raw_invoice_url = str(data.get("invoice_url") or data.get("invoiceUrl") or "").strip()
+        invoice_url = raw_invoice_url if raw_invoice_url.startswith("https://") and not any(c in raw_invoice_url for c in '<>"\' \n\r\t') else ""
 
         if t_type == "BOOKING_CONFIRMATION":
+            invoice_html = ""
+            if invoice_attached:
+                invoice_html = "<p>Your tax invoice is attached to this email.</p>"
+                if invoice_number:
+                    invoice_html = f"<p>Your tax invoice <strong>{invoice_number}</strong> is attached to this email.</p>"
+            elif invoice_url:
+                label = f"tax invoice {invoice_number}".strip() if invoice_number else "tax invoice"
+                invoice_html = f'<p>Your tax invoice is available: <a href="{invoice_url}">Download {label}</a></p>'
+            invoice_wa = f"\n\nYour tax invoice is available: {invoice_url}" if invoice_url else ""
             subject = f"Shafsky Aviation Services — Booking Confirmed ({ref})"
             html = f"""
             <h2>Shafsky Aviation Services VIP Services</h2>
@@ -56,9 +69,10 @@ class NotificationTemplateEngine:
                 <li><strong>Total Amount:</strong> {currency} {amount}</li>
                 <li><strong>Status:</strong> {status}</li>
             </ul>
+            {invoice_html}
             <p>Our 24/7 command desk: {support}</p>
             """
-            whatsapp = f"✈️ *Shafsky Aviation Services VIP Desk*\n\nDear *{name}*,\n\nWe are delighted to confirm your VIP service booking.\n\n*Reference:* {ref}\n*Airport:* {airport}\n*Flight:* {flight}\n*Date:* {date_str}\n\nOur 24/7 command desk is at your disposal: {support}."
+            whatsapp = f"✈️ *Shafsky Aviation Services VIP Desk*\n\nDear *{name}*,\n\nWe are delighted to confirm your VIP service booking.\n\n*Reference:* {ref}\n*Airport:* {airport}\n*Flight:* {flight}\n*Date:* {date_str}\n\nOur 24/7 command desk is at your disposal: {support}.{invoice_wa}"
 
         elif t_type == "BOOKING_RECEIVED":
             subject = f"Shafsky Aviation Services — Booking Received ({ref})"

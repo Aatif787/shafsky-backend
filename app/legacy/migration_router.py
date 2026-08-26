@@ -1546,9 +1546,9 @@ async def get_active_branding(db: Session = Depends(get_db)):
         }
         return _ApiOk(data=res)
     return _ApiOk(data={
-        "company_name": "Shafsky Aviation",
-        "company_tagline": "Premier Aviation & Concierge Services",
-        "tagline": "Premier Aviation & Concierge Services",
+        "company_name": "Shafsky Aviation Services",
+        "company_tagline": "Shafsky Aviation Services",
+        "tagline": "Shafsky Aviation Services",
         "primary_color": "#5ed3ff",
         "secondary_color": "#06090f",
         "is_active": True,
@@ -1557,7 +1557,7 @@ async def get_active_branding(db: Session = Depends(get_db)):
 
 class BrandingUpsert(BaseModel):
     id: Optional[str] = None
-    company_name: Optional[str] = "Shafsky Aviation"
+    company_name: Optional[str] = "Shafsky Aviation Services"
     company_tagline: Optional[str] = None
     tagline: Optional[str] = None
     logo_url: Optional[str] = None
@@ -1584,8 +1584,8 @@ async def upsert_branding(
     if not bp:
         bp = db.scalar(select(BrandingProfile).where(BrandingProfile.is_active == True))
 
-    company_name = body.get("company_name") or "Shafsky Aviation"
-    tagline = body.get("company_tagline") or body.get("tagline") or "Premier Aviation & Concierge Services"
+    company_name = body.get("company_name") or "Shafsky Aviation Services"
+    tagline = body.get("company_tagline") or body.get("tagline") or "Shafsky Aviation Services"
     logo_url = body.get("logo_url")
     primary_color = body.get("primary_color") or "#5ed3ff"
     secondary_color = body.get("secondary_color") or "#06090f"

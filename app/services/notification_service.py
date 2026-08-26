@@ -1,4 +1,5 @@
 import uuid
+import re
 import httpx
 import logging
 from datetime import datetime, timezone
@@ -38,7 +39,13 @@ class NotificationService:
         return emails
 
     @classmethod
-    def send_email_resend_sync(cls, recipient_email: str, subject: str, html_content: str) -> Dict[str, Any]:
+    def send_email_resend_sync(
+        cls,
+        recipient_email: str,
+        subject: str,
+        html_content: str,
+        attachments: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
         recipient = (recipient_email or "").strip()
         if not recipient:
             logger.warning("Email skipped: missing recipient")
@@ -63,9 +70,28 @@ class NotificationService:
         reply_to = (settings.EMAIL_REPLY_TO or "").strip()
         if reply_to:
             body["reply_to"] = reply_to
+        if attachments:
+            import base64
+            encoded = []
+            for item in attachments:
+                raw = item.get("content")
+                name = str(item.get("filename") or "invoice.pdf")
+                if not raw:
+                    continue
+                if isinstance(raw, str):
+                    encoded.append({"filename": name, "content": raw})
+                else:
+                    raw_bytes = bytes(raw)
+                    if len(raw_bytes) > 4_500_000:
+                        logger.error("Email attachment skipped: PDF exceeds safe size")
+                        continue
+                    encoded.append({"filename": name, "content": base64.b64encode(raw_bytes).decode("ascii")})
+            if encoded:
+                body["attachments"] = encoded
 
         try:
-            with httpx.Client(timeout=15.0) as client:
+            timeout = 30.0 if body.get("attachments") else 15.0
+            with httpx.Client(timeout=timeout) as client:
                 resp = client.post(url, json=body, headers=headers)
             if resp.status_code in (200, 201):
                 message_id = ""
@@ -82,7 +108,14 @@ class NotificationService:
                 "Resend rejected email",
                 extra={"http_status": resp.status_code, "provider_error": (resp.text or "")[:400]},
             )
-            return {"status": "FAILED", "error": f"provider_rejected:{resp.status_code}"}
+            raw = (resp.text or "")[:300]
+            # Persist a safe truncated provider hint (no API keys / bearer tokens / emails).
+            raw = re.sub(r"(?i)bearer\s+\S+", "Bearer ***", raw)
+            raw = re.sub(r"re_[A-Za-z0-9_]+", "re_***", raw)
+            raw = re.sub(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", "[email]", raw)
+            raw = raw.replace("\n", " ").strip()
+            detail = f":{raw}" if raw else ""
+            return {"status": "FAILED", "error": f"provider_rejected:{resp.status_code}{detail}"}
         except Exception as exc:
             logger.error("Resend request failed: %s", type(exc).__name__)
             return {"status": "FAILED", "error": "request_failed"}
@@ -259,6 +292,7 @@ class NotificationService:
         payload: Dict[str, Any],
         booking_ref: str,
         recipient_phone: Optional[str] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         if cls._already_notified(db, template_type, booking_ref, recipient_email):
             logger.info(
@@ -284,7 +318,12 @@ class NotificationService:
         db.add(record)
         db.flush()
 
-        result = cls.send_email_resend_sync(recipient_email, rendered["subject"], rendered["html"])
+        result = cls.send_email_resend_sync(
+            recipient_email,
+            rendered["subject"],
+            rendered["html"],
+            attachments=attachments if template_type == "BOOKING_CONFIRMATION" else None,
+        )
         
         wa_sent = False
         if recipient_phone:
@@ -384,7 +423,12 @@ class NotificationService:
         return summary
 
     @classmethod
-    def notify_booking_confirmed(cls, db: Session, context: Dict[str, Any]) -> Dict[str, Any]:
+    def notify_booking_confirmed(
+        cls,
+        db: Session,
+        context: Dict[str, Any],
+        attachments: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
         """
         Sends the official BOOKING_CONFIRMATION customer and operations notifications
         only after a payment is verified as successful.
@@ -411,6 +455,9 @@ class NotificationService:
             "totalAmount": float(context.get("total_amount") or context.get("totalAmount") or 0.0),
             "currency": context.get("currency") or "INR",
             "status": "CONFIRMED",
+            "invoice_number": context.get("invoice_number"),
+            "invoice_url": context.get("invoice_url") or "",
+            "invoice_attached": bool(context.get("invoice_attached")),
         }
 
         summary: Dict[str, Any] = {"booking_ref": booking_ref, "customer": None, "admin": []}
@@ -425,6 +472,7 @@ class NotificationService:
                     payload=payload,
                     booking_ref=booking_ref,
                     recipient_phone=str(context.get("passenger_phone") or context.get("passengerPhone") or "").strip() or None,
+                    attachments=attachments,
                 )
             else:
                 logger.warning("Customer confirmation skipped: missing email", extra={"booking_ref": booking_ref})
@@ -446,4 +494,105 @@ class NotificationService:
         except Exception as exc:
             logger.exception("Booking confirmation notification failed for %s: %s", booking_ref, type(exc).__name__)
         return summary
+
+    WHATSAPP_INVOICE_TEMPLATE = "WHATSAPP_INVOICE_PDF"
+
+    @classmethod
+    def _already_sent_whatsapp_invoice(cls, db: Session, booking_ref: str) -> bool:
+        if not booking_ref:
+            return False
+        records = list(
+            db.scalars(
+                select(NotificationRecord)
+                .where(
+                    NotificationRecord.template_type == cls.WHATSAPP_INVOICE_TEMPLATE,
+                    NotificationRecord.status.in_([NotificationStatus.DELIVERED, NotificationStatus.SENDING]),
+                )
+                .order_by(desc(NotificationRecord.created_at))
+                .limit(30)
+            ).all()
+        )
+        for rec in records:
+            payload = rec.payload or {}
+            ref = str(payload.get("booking_ref") or payload.get("bookingRef") or "")
+            if ref == booking_ref:
+                return True
+        return False
+
+    @classmethod
+    def send_whatsapp_invoice_document(
+        cls,
+        db: Session,
+        *,
+        booking_ref: str,
+        recipient_phone: str,
+        invoice_number: str,
+        pdf_bytes: Optional[bytes] = None,
+        document_url: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Send the Tax Invoice PDF as a WhatsApp DOCUMENT message.
+        Idempotent per booking_ref. Marks DELIVERED only after Meta accepts the message.
+        Failures are retryable and never raise to the payment caller.
+        """
+        booking_ref = str(booking_ref or "").strip()
+        phone = str(recipient_phone or "").strip()
+        if not booking_ref or not phone:
+            return {"status": "FAILED", "error": "missing_recipient"}
+        if cls._already_sent_whatsapp_invoice(db, booking_ref):
+            logger.info("Skipping duplicate WhatsApp invoice PDF", extra={"booking_ref": booking_ref})
+            return {"status": "SKIPPED", "reason": "duplicate"}
+
+        filename = f"Shafsky-Aviation-Tax-Invoice-{invoice_number}.pdf"
+        caption = (
+            f"Shafsky Aviation Tax Invoice\n"
+            f"Invoice: {invoice_number}\n"
+            f"Booking: {booking_ref}"
+        )
+        record = NotificationRecord(
+            id=uuid.uuid4(),
+            recipient_email=None,
+            recipient_phone=phone,
+            template_type=cls.WHATSAPP_INVOICE_TEMPLATE,
+            channel="WHATSAPP",
+            payload={
+                "booking_ref": booking_ref,
+                "invoice_number": invoice_number,
+                "filename": filename,
+            },
+            status=NotificationStatus.SENDING,
+            attempts=1,
+            max_attempts=3,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        db.add(record)
+        db.flush()
+
+        try:
+            from app.integrations.whatsapp.client import whatsapp_client
+            result = whatsapp_client.send_document_message(
+                phone,
+                filename=filename,
+                caption=caption,
+                document_url=document_url,
+                pdf_bytes=pdf_bytes,
+            )
+        except Exception as exc:
+            logger.warning("[WhatsApp Invoice] Document send exception: %s", type(exc).__name__)
+            result = {"success": False, "error": "exception", "status": "failed"}
+
+        if result.get("success"):
+            record.status = NotificationStatus.DELIVERED
+            record.delivered_at = datetime.now(timezone.utc)
+            record.message_id = result.get("message_id")
+            record.error_log = None
+            db.commit()
+            return {"status": "DELIVERED", "message_id": result.get("message_id")}
+
+        record.status = NotificationStatus.FAILED
+        record.error_log = str(result.get("error") or result.get("status") or "whatsapp_document_failed")[:400]
+        record.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        return {"status": "FAILED", "error": record.error_log}
 

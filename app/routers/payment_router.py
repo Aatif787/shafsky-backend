@@ -151,7 +151,7 @@ async def verify_payment_endpoint(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Razorpay payment signature.")
 
     result = None
-    if payload.booking_ref:
+    try:
         result = PaymentService.handle_verified_payment(
             db,
             event_name="VERIFY_ENDPOINT",
@@ -162,13 +162,35 @@ async def verify_payment_endpoint(
             signature=payload.razorpay_signature,
             channel="web"
         )
-        if not result.get("success"):
+    except Exception:
+        logger.exception("[verify] Booking confirmation failed after a valid Razorpay signature")
+        return PaymentApiResponse(
+            success=True,
+            data={
+                "status": "SIGNATURE_VALID",
+                "order_id": payload.razorpay_order_id,
+                "payment_id": payload.razorpay_payment_id,
+                "booking_ref": payload.booking_ref,
+            }
+        )
+
+    if result and not result.get("success"):
+        hard_fail = result.get("status") in (
+            "REF_MISMATCH",
+            "AMOUNT_MISMATCH",
+            "CURRENCY_MISMATCH",
+            "COMMIT_FAILED",
+        )
+        if hard_fail:
+            raise HTTPException(status_code=400, detail=result.get("reason", "Payment verification processing failed."))
+        if payload.booking_ref and result.get("status") == "NOT_FOUND":
             raise HTTPException(status_code=400, detail=result.get("reason", "Payment verification processing failed."))
 
+    confirmed = bool(result and result.get("success"))
     return PaymentApiResponse(
         success=True,
         data={
-            "status": "CONFIRMED" if (not result or result.get("success")) else result.get("status", "CONFIRMED"),
+            "status": (result.get("status") if confirmed else None) or ("CONFIRMED" if (confirmed or not payload.booking_ref) else result.get("status", "CONFIRMED")),
             "order_id": payload.razorpay_order_id,
             "payment_id": payload.razorpay_payment_id,
             "booking_ref": payload.booking_ref or (result.get("booking_ref") if result else None)
@@ -332,13 +354,31 @@ async def razorpay_webhook_endpoint(
         entity = payload.get("payload", {}).get("refund", {}).get("entity", {})
 
     notes = entity.get("notes", {}) if isinstance(entity, dict) else {}
-    order_id = entity.get("order_id") or payload.get("payload", {}).get("order", {}).get("entity", {}).get("id")
-    payment_id = entity.get("id") if entity.get("id", "").startswith("pay_") else payload.get("payload", {}).get("payment", {}).get("entity", {}).get("id")
-    booking_ref = notes.get("booking_ref") or entity.get("reference_id") or payload.get("payload", {}).get("order", {}).get("entity", {}).get("receipt")
-    channel = notes.get("channel", "web")
+    if not isinstance(notes, dict):
+        notes = {}
+    plink_entity = payload.get("payload", {}).get("payment_link", {}).get("entity", {})
+    plink_notes = plink_entity.get("notes", {}) if isinstance(plink_entity, dict) else {}
+    if not isinstance(plink_notes, dict):
+        plink_notes = {}
+    order_entity_id = payload.get("payload", {}).get("order", {}).get("entity", {}).get("id")
+    entity_id = str((entity.get("id") if isinstance(entity, dict) else None) or "")
+    order_id = (entity.get("order_id") if isinstance(entity, dict) else None) or (plink_entity.get("order_id") if isinstance(plink_entity, dict) else None) or order_entity_id
+    payment_id = entity_id if entity_id.startswith("pay_") else payload.get("payload", {}).get("payment", {}).get("entity", {}).get("id")
+    if payment_id is not None:
+        payment_id = str(payment_id)
+    booking_ref = (
+        notes.get("booking_ref")
+        or plink_notes.get("booking_ref")
+        or (entity.get("reference_id") if isinstance(entity, dict) else None)
+        or (plink_entity.get("reference_id") if isinstance(plink_entity, dict) else None)
+        or payload.get("payload", {}).get("order", {}).get("entity", {}).get("receipt")
+    )
+    channel = notes.get("channel") or plink_notes.get("channel") or "web"
+
+    plink_id = plink_entity.get("id") if isinstance(plink_entity, dict) else None
 
     # Construct canonical persistent event identifier
-    unique_event_id = event_hdr_id or payload.get("event_id") or f"{event_name}:{order_id or payment_id or booking_ref}"
+    unique_event_id = event_hdr_id or payload.get("event_id") or f"{event_name}:{order_id or payment_id or booking_ref or plink_id}"
 
     # Persistent Webhook Idempotency Check
     existing_event = db.scalar(select(PaymentWebhookEvent).where(PaymentWebhookEvent.event_id == unique_event_id))
@@ -363,23 +403,30 @@ async def razorpay_webhook_endpoint(
 
     logger.info(f"[Razorpay Webhook] Processing verified event '{event_name}' (ID: {unique_event_id}, ref: '{booking_ref}')")
 
-    amount_raw = entity.get("amount") if entity.get("amount") is not None else entity.get("amount_paid")
-    currency_raw = entity.get("currency")
+    amount_raw = entity.get("amount") if isinstance(entity, dict) and entity.get("amount") is not None else (entity.get("amount_paid") if isinstance(entity, dict) else None)
+    currency_raw = entity.get("currency") if isinstance(entity, dict) else None
 
-    # Delegate to canonical payment handler
-    result = PaymentService.handle_verified_payment(
-        db,
-        event_name=event_name,
-        gateway_provider="RAZORPAY",
-        order_id=order_id,
-        payment_id=payment_id,
-        booking_ref=booking_ref,
-        signature=signature,
-        raw_payload=payload,
-        channel=channel,
-        amount=amount_raw,
-        currency=currency_raw
-    )
+    try:
+        result = PaymentService.handle_verified_payment(
+            db,
+            event_name=event_name,
+            gateway_provider="RAZORPAY",
+            order_id=order_id,
+            payment_id=payment_id,
+            booking_ref=booking_ref,
+            signature=signature,
+            raw_payload=payload,
+            channel=channel,
+            amount=amount_raw,
+            currency=currency_raw
+        )
+    except Exception:
+        logger.exception("[Razorpay Webhook] Canonical payment processing failed after HMAC verification")
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail="Payment processing failed.") from None
 
     return PaymentApiResponse(
         success=True,

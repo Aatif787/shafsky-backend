@@ -38,18 +38,46 @@ class RazorpayProvider:
         description: str,
         customer_name: str,
         customer_email: str,
-        customer_phone: str
+        customer_phone: str,
+        expire_by: Optional[int] = None,
+        notes: Optional[Dict[str, str]] = None,
+        booking_ref: Optional[str] = None,
+        channel: str = "whatsapp",
     ) -> Dict[str, Any]:
         """
         Creates an official Razorpay Payment Link server-side.
-        Amount must be in smallest currency unit (e.g. paise for INR).
+        Amount is accepted in rupees and converted to paise.
+        Correlation notes always include booking_ref and channel.
+        Simulated links are marked simulated=True; callers must not send them to customers.
         """
         self._load_config()
         amount_paise = int(round(amount * 100))
+        if amount_paise < 100:
+            return {
+                "success": False,
+                "error": "Minimum payment link amount is 100 paise (INR 1.00).",
+                "simulated": False,
+            }
+
+        canonical_ref = (booking_ref or reference_id or "").strip()
+        razorpay_reference = str(reference_id or canonical_ref)[:40]
+        contact = "".join(filter(str.isdigit, str(customer_phone or "")))
+
+        safe_notes: Dict[str, str] = {
+            "booking_ref": canonical_ref[:256],
+            "channel": str(channel or "whatsapp")[:256],
+            "platform": "Shafsky Aviation WhatsApp Engine",
+        }
+        for k, v in (notes or {}).items():
+            if v is None:
+                continue
+            safe_notes[str(k)[:256]] = str(v)[:256]
+        safe_notes["booking_ref"] = canonical_ref[:256]
+        safe_notes["channel"] = str(channel or "whatsapp")[:256]
 
         if not self.is_configured():
-            logger.warning("[Razorpay] Provider not configured in environment. Using simulated payment link fallback.")
-            fake_link_id = f"plink_sim_{reference_id.replace('-', '')}"
+            logger.warning("[Razorpay] Provider not configured. Simulated payment link must not be sent to customers.")
+            fake_link_id = f"plink_sim_{razorpay_reference.replace('-', '')}"
             fake_url = f"https://rzp.io/i/simulated_{fake_link_id}"
             return {
                 "success": True,
@@ -57,32 +85,30 @@ class RazorpayProvider:
                 "short_url": fake_url,
                 "amount": amount,
                 "currency": currency,
-                "simulated": True
+                "expire_by": expire_by,
+                "simulated": True,
+                "notes": safe_notes,
             }
 
         url = "https://api.razorpay.com/v1/payment_links"
-        payload = {
+        payload: Dict[str, Any] = {
             "amount": amount_paise,
-            "currency": currency.upper(),
+            "currency": (currency or "INR").upper(),
             "accept_partial": False,
-            "reference_id": reference_id,
-            "description": description,
+            "reference_id": razorpay_reference,
+            "description": (description or f"Shafsky Aviation booking {canonical_ref}")[:2048],
             "customer": {
-                "name": customer_name,
-                "email": customer_email,
-                "contact": customer_phone
+                "name": (customer_name or "Guest")[:255],
+                "email": (customer_email or "")[:255],
+                "contact": contact,
             },
-            "notify": {
-                "sms": True,
-                "email": True,
-                "whatsapp": True
-            },
-            "reminder_enable": True,
-            "notes": {
-                "booking_ref": reference_id,
-                "platform": "Shafsky Aviation WhatsApp Engine"
-            }
+            # Meta Cloud API delivers the Pay Now URL. Do not also send Razorpay WhatsApp/SMS.
+            "notify": {"sms": False, "email": False, "whatsapp": False},
+            "reminder_enable": False,
+            "notes": safe_notes,
         }
+        if expire_by:
+            payload["expire_by"] = int(expire_by)
 
         try:
             with httpx.Client(timeout=15.0) as client:
@@ -94,29 +120,34 @@ class RazorpayProvider:
 
                 if res.status_code in (200, 201):
                     data = res.json()
-                    logger.info(f"[Razorpay] Payment link created: {data.get('id')} for ref {reference_id}")
+                    logger.info(f"[Razorpay] Payment link created: {data.get('id')} for ref {canonical_ref}")
                     return {
                         "success": True,
                         "payment_link_id": data.get("id"),
                         "short_url": data.get("short_url"),
                         "order_id": data.get("order_id"),
                         "amount": amount,
-                        "currency": currency,
+                        "currency": data.get("currency", currency),
+                        "expire_by": data.get("expire_by") or expire_by,
+                        "status": data.get("status"),
                         "simulated": False,
+                        "notes": data.get("notes") or safe_notes,
                         "raw_response": data
                     }
 
-                logger.error(f"[Razorpay] API Error ({res.status_code}): {res.text}")
+                logger.error(f"[Razorpay] Payment link API Error ({res.status_code})")
                 return {
                     "success": False,
-                    "error": f"Razorpay API Error ({res.status_code}): {res.text}"
+                    "error": self._friendly_api_error(res.status_code, res.text),
+                    "simulated": False,
                 }
 
         except Exception as err:
-            logger.error(f"[Razorpay] Exception creating payment link: {err}")
+            logger.error(f"[Razorpay] Exception creating payment link: {type(err).__name__}")
             return {
                 "success": False,
-                "error": f"Network exception: {str(err)}"
+                "error": f"Network exception: {type(err).__name__}",
+                "simulated": False,
             }
 
     def create_order(
@@ -192,7 +223,7 @@ class RazorpayProvider:
                         "raw_response": data
                     }
 
-                logger.error(f"[Razorpay] API Error ({res.status_code}): {res.text}")
+                logger.error(f"[Razorpay] API Error ({res.status_code})")
                 return {
                     "success": False,
                     "error": self._friendly_api_error(res.status_code, res.text)
@@ -346,7 +377,7 @@ class RazorpayProvider:
                         "raw_response": data
                     }
 
-                logger.error(f"[Razorpay] Refund API Error ({res.status_code}): {res.text}")
+                logger.error(f"[Razorpay] Refund API Error ({res.status_code})")
                 return {
                     "success": False,
                     "error": f"Razorpay Refund API Error ({res.status_code}): {res.text}"
@@ -392,6 +423,79 @@ class RazorpayProvider:
                 return {"success": False, "error": f"Payment fetch error ({res.status_code}): {res.text}"}
         except Exception as err:
             return {"success": False, "error": str(err)}
+
+    def fetch_payment_link(self, payment_link_id: str) -> Dict[str, Any]:
+        """Fetches a Razorpay Payment Link by id. Never reports paid for simulated ids."""
+        self._load_config()
+        link_id = str(payment_link_id or "").strip()
+        if not link_id:
+            return {"success": False, "error": "missing_payment_link_id"}
+        if not self.is_configured() or link_id.startswith("plink_sim_"):
+            return {
+                "success": False,
+                "error": "Payment link status unavailable (gateway not configured or simulated id).",
+                "simulated": True,
+                "payment_link_id": link_id,
+            }
+
+        url = f"https://api.razorpay.com/v1/payment_links/{link_id}"
+        try:
+            with httpx.Client(timeout=15.0) as client:
+                res = client.get(url, auth=(self.key_id, self.key_secret))
+                if res.status_code == 200:
+                    data = res.json()
+                    return {
+                        "success": True,
+                        "data": data,
+                        "payment_link_id": data.get("id") or link_id,
+                        "status": data.get("status"),
+                        "short_url": data.get("short_url"),
+                        "order_id": data.get("order_id"),
+                        "amount": data.get("amount"),
+                        "amount_paid": data.get("amount_paid"),
+                        "currency": data.get("currency"),
+                        "expire_by": data.get("expire_by"),
+                        "notes": data.get("notes") or {},
+                        "reference_id": data.get("reference_id"),
+                        "simulated": False,
+                    }
+                return {
+                    "success": False,
+                    "error": self._friendly_api_error(res.status_code, res.text),
+                }
+        except Exception as err:
+            return {"success": False, "error": f"Network exception: {type(err).__name__}"}
+
+    def list_payment_links_by_reference(self, reference_id: str) -> Dict[str, Any]:
+        """Lists Payment Links for a Razorpay reference_id (used after unknown create results)."""
+        self._load_config()
+        ref = str(reference_id or "").strip()[:40]
+        if not ref:
+            return {"success": False, "error": "missing_reference_id", "items": []}
+        if not self.is_configured():
+            return {"success": False, "error": "gateway_not_configured", "items": [], "simulated": True}
+
+        url = "https://api.razorpay.com/v1/payment_links"
+        try:
+            with httpx.Client(timeout=15.0) as client:
+                res = client.get(
+                    url,
+                    auth=(self.key_id, self.key_secret),
+                    params={"reference_id": ref},
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    if not isinstance(data, dict):
+                        data = {}
+                    items = data.get("items") if isinstance(data.get("items"), list) else []
+                    return {"success": True, "items": items, "count": len(items)}
+                return {
+                    "success": False,
+                    "error": self._friendly_api_error(res.status_code, res.text),
+                    "items": [],
+                }
+        except Exception as err:
+            return {"success": False, "error": f"Network exception: {type(err).__name__}", "items": []}
 
 
 # Global Singleton Instance

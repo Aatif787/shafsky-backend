@@ -11,10 +11,13 @@ from decimal import Decimal
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from sqlalchemy import select, desc, or_
+from sqlalchemy.exc import IntegrityError
 
 logger = logging.getLogger(__name__)
 
-from app.models.payment import PaymentTransaction, Invoice, Refund, PaymentStatus, InvoiceStatus, PaymentMethod
+from app.models.payment import (
+    PaymentTransaction, Invoice, Refund, PaymentStatus, InvoiceStatus, PaymentMethod, PaymentStateMachine,
+)
 from app.schemas.payment import PaymentInitiateRequest, RefundRequest, WebhookPayload
 from app.providers.base import PaymentProvider, MockPaymentProvider
 from app.services.timeline_service import TimelineService
@@ -124,6 +127,608 @@ class PaymentService:
         return transaction
 
     @classmethod
+    def _payment_link_expire_hours(cls) -> int:
+        """
+        Payment Link lifetime. Default 24h to match expire_stale_transactions.
+        Override with RAZORPAY_PAYMENT_LINK_EXPIRE_HOURS.
+        """
+        raw = (os.getenv("RAZORPAY_PAYMENT_LINK_EXPIRE_HOURS") or "").strip()
+        if raw:
+            try:
+                return max(1, min(int(raw), 24 * 30))
+            except ValueError:
+                pass
+        return 24
+
+    @classmethod
+    def _is_https_payment_url(cls, url: Optional[str]) -> bool:
+        if not url or not isinstance(url, str):
+            return False
+        stripped = url.strip()
+        lowered = stripped.lower()
+        if not lowered.startswith("https://"):
+            return False
+        if any(bad in lowered for bad in ("localhost", "127.0.0.1", "0.0.0.0", "[::1]", "simulated")):
+            return False
+        return True
+
+    @classmethod
+    def _is_simulated_payment_link(
+        cls,
+        link_id: Optional[str] = None,
+        url: Optional[str] = None,
+        simulated_flag: bool = False,
+    ) -> bool:
+        if simulated_flag:
+            return True
+        lid = str(link_id or "")
+        if lid.startswith("plink_sim_") or "plink_sim" in lid:
+            return True
+        if url and "simulated" in str(url).lower():
+            return True
+        return False
+
+    @classmethod
+    def _extract_ids_from_razorpay_payload(cls, raw_payload: Optional[Dict[str, Any]]) -> Dict[str, Optional[str]]:
+        result: Dict[str, Optional[str]] = {
+            "payment_link_id": None,
+            "order_id": None,
+            "payment_id": None,
+            "booking_ref": None,
+            "channel": None,
+        }
+        if not isinstance(raw_payload, dict):
+            return result
+        pl = raw_payload.get("payload") if isinstance(raw_payload.get("payload"), dict) else {}
+        pay_ent = pl.get("payment", {}).get("entity", {}) if isinstance(pl.get("payment"), dict) else {}
+        ord_ent = pl.get("order", {}).get("entity", {}) if isinstance(pl.get("order"), dict) else {}
+        plink_ent = pl.get("payment_link", {}).get("entity", {}) if isinstance(pl.get("payment_link"), dict) else {}
+        if not isinstance(pay_ent, dict):
+            pay_ent = {}
+        if not isinstance(ord_ent, dict):
+            ord_ent = {}
+        if not isinstance(plink_ent, dict):
+            plink_ent = {}
+
+        pay_id = pay_ent.get("id")
+        if isinstance(pay_id, str) and pay_id.startswith("pay_"):
+            result["payment_id"] = pay_id
+        order_id = pay_ent.get("order_id") or ord_ent.get("id") or plink_ent.get("order_id")
+        if order_id:
+            result["order_id"] = str(order_id)
+        plink_id = plink_ent.get("id")
+        if isinstance(plink_id, str) and plink_id.startswith("plink_"):
+            result["payment_link_id"] = plink_id
+
+        notes = {}
+        for source in (pay_ent.get("notes"), plink_ent.get("notes"), ord_ent.get("notes")):
+            if isinstance(source, dict):
+                notes.update(source)
+        result["booking_ref"] = (
+            notes.get("booking_ref")
+            or plink_ent.get("reference_id")
+            or ord_ent.get("receipt")
+        )
+        if result["booking_ref"]:
+            result["booking_ref"] = str(result["booking_ref"])
+        ch = notes.get("channel")
+        if ch:
+            result["channel"] = str(ch)
+        return result
+
+    @classmethod
+    def _collect_tx_gateway_ids(cls, tx: Optional[PaymentTransaction]) -> set:
+        ids = set()
+        if not tx:
+            return ids
+        if tx.gateway_payment_id:
+            ids.add(str(tx.gateway_payment_id))
+        resp = tx.gateway_response if isinstance(tx.gateway_response, dict) else {}
+        for key in ("payment_link_id", "order_id", "payment_id"):
+            val = resp.get(key)
+            if val:
+                ids.add(str(val))
+        payload = resp.get("payload") if isinstance(resp.get("payload"), dict) else {}
+        for entity_key, id_key in (("payment_link", "id"), ("order", "id"), ("payment", "id")):
+            ent = payload.get(entity_key, {})
+            if isinstance(ent, dict):
+                inner = ent.get("entity", ent)
+                if isinstance(inner, dict) and inner.get(id_key):
+                    ids.add(str(inner.get(id_key)))
+            pay_ent = payload.get("payment", {})
+            if isinstance(pay_ent, dict):
+                inner = pay_ent.get("entity", pay_ent)
+                if isinstance(inner, dict) and inner.get("order_id"):
+                    ids.add(str(inner.get("order_id")))
+        for prev in resp.get("previous_payment_links") or []:
+            if isinstance(prev, dict) and prev.get("payment_link_id"):
+                ids.add(str(prev["payment_link_id"]))
+            elif isinstance(prev, str):
+                ids.add(prev)
+        return {i for i in ids if i}
+
+    @classmethod
+    def _merge_gateway_response(
+        cls,
+        existing: Optional[dict],
+        *,
+        raw_payload: Optional[Dict[str, Any]] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> dict:
+        merged = dict(existing) if isinstance(existing, dict) else {}
+        if extra:
+            for k, v in extra.items():
+                if v is not None:
+                    merged[k] = v
+        extracted = cls._extract_ids_from_razorpay_payload(raw_payload)
+        for k, v in extracted.items():
+            if v:
+                merged[k] = v
+        if isinstance(raw_payload, dict):
+            if isinstance(raw_payload.get("payload"), dict):
+                merged["payload"] = raw_payload.get("payload")
+            if raw_payload.get("event"):
+                merged["event"] = raw_payload.get("event")
+        return merged
+
+    @classmethod
+    def _unknown_create_result(cls, result: Optional[Dict[str, Any]]) -> bool:
+        err = str((result or {}).get("error") or "").lower()
+        return any(token in err for token in ("timeout", "timed out", "network exception", "connect"))
+
+    @classmethod
+    def _link_from_gateway_item(cls, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not isinstance(item, dict):
+            return None
+        status = str(item.get("status") or "").lower()
+        if status in ("expired", "cancelled", "paid"):
+            return None
+        url = item.get("short_url")
+        plink_id = item.get("id")
+        if cls._is_simulated_payment_link(plink_id, url) or not cls._is_https_payment_url(url):
+            return None
+        expire_by = item.get("expire_by")
+        if expire_by:
+            try:
+                if int(expire_by) <= int(datetime.now(timezone.utc).timestamp()):
+                    return None
+            except (TypeError, ValueError):
+                pass
+        return {
+            "payment_link_id": plink_id,
+            "short_url": url,
+            "order_id": item.get("order_id"),
+            "expire_by": expire_by,
+            "status": status or "created",
+            "notes": item.get("notes") or {},
+            "raw_response": item,
+            "simulated": False,
+            "success": True,
+        }
+
+    @classmethod
+    def initiate_whatsapp_payment_link(cls, db: Session, booking_ref: str) -> Dict[str, Any]:
+        """
+        Create or reuse a Razorpay Payment Link for a PENDING WhatsApp booking.
+        Always persists/reuses a local PaymentTransaction BEFORE the customer is sent a URL.
+        Never confirms the booking. Never sends simulated/localhost/http URLs.
+        """
+        from app.models.schema import Booking, BookingStatus
+        from app.providers.razorpay_provider import razorpay_provider
+
+        booking = db.scalar(select(Booking).where(Booking.booking_ref == booking_ref))
+        if not booking:
+            return {"success": False, "error": "BOOKING_NOT_FOUND", "reason": f"Booking '{booking_ref}' not found."}
+        if booking.status == BookingStatus.CONFIRMED:
+            return {"success": False, "error": "ALREADY_CONFIRMED", "reason": "Booking is already confirmed."}
+        if booking.status in (BookingStatus.CANCELLED, BookingStatus.REJECTED):
+            return {"success": False, "error": "BOOKING_NOT_PAYABLE", "reason": "Booking cannot accept payment."}
+        if booking.total_amount is None:
+            return {"success": False, "error": "NO_AMOUNT", "reason": "Booking has no authoritative amount."}
+
+        authoritative_amount = float(booking.total_amount)
+        currency = (booking.currency or "INR").upper()
+
+        reusable = cls._find_reusable_whatsapp_payment_link(db, booking_ref)
+        if reusable:
+            return reusable
+
+        expire_hours = cls._payment_link_expire_hours()
+        expire_by = int((datetime.now(timezone.utc).timestamp())) + int(expire_hours * 3600)
+
+        recovered = cls._recover_gateway_link_by_reference(booking.booking_ref)
+        if recovered:
+            tx = cls._persist_whatsapp_payment_link_tx(
+                db,
+                booking=booking,
+                link=recovered,
+                previous_link_id=None,
+            )
+            return {
+                "success": True,
+                "reused": True,
+                "recovered": True,
+                "payment_link_id": recovered["payment_link_id"],
+                "short_url": recovered["short_url"],
+                "transaction_ref": tx.transaction_ref,
+                "expire_by": recovered.get("expire_by") or expire_by,
+            }
+
+        intent = razorpay_provider.create_payment_link(
+            amount=authoritative_amount,
+            currency=currency,
+            reference_id=booking.booking_ref,
+            booking_ref=booking.booking_ref,
+            description=f"Shafsky Aviation booking {booking.booking_ref}",
+            customer_name=booking.passenger_name or "Guest",
+            customer_email=booking.passenger_email or "",
+            customer_phone=booking.passenger_phone or "",
+            expire_by=expire_by,
+            channel="whatsapp",
+            notes={"booking_ref": booking.booking_ref, "channel": "whatsapp"},
+        )
+
+        if (not intent.get("success")) and cls._unknown_create_result(intent):
+            recovered = cls._recover_gateway_link_by_reference(booking.booking_ref)
+            if recovered:
+                intent = recovered
+            else:
+                return {
+                    "success": False,
+                    "error": "LINK_CREATE_UNKNOWN",
+                    "reason": "Payment link creation timed out. Please try again in a moment.",
+                }
+
+        if not intent.get("success") and "reference" in str(intent.get("error") or "").lower():
+            recovered = cls._recover_gateway_link_by_reference(booking.booking_ref)
+            if recovered:
+                intent = recovered
+
+        if not intent.get("success"):
+            return {
+                "success": False,
+                "error": "LINK_CREATE_FAILED",
+                "reason": intent.get("error") or "Payment link could not be created.",
+            }
+
+        plink_id = intent.get("payment_link_id")
+        short_url = intent.get("short_url")
+        if cls._is_simulated_payment_link(plink_id, short_url, bool(intent.get("simulated"))):
+            logger.warning("[PaymentService] Simulated Payment Link rejected for customer delivery (booking %s)", booking_ref)
+            return {
+                "success": False,
+                "error": "SIMULATED_LINK_REJECTED",
+                "reason": "Payment gateway is not configured for live Payment Links.",
+            }
+        if not cls._is_https_payment_url(short_url):
+            return {
+                "success": False,
+                "error": "UNDELIVERABLE_URL",
+                "reason": "Payment link URL is not a secure HTTPS Razorpay URL.",
+            }
+
+        tx = cls._persist_whatsapp_payment_link_tx(
+            db,
+            booking=booking,
+            link={
+                "payment_link_id": plink_id,
+                "short_url": short_url,
+                "order_id": intent.get("order_id"),
+                "expire_by": intent.get("expire_by") or expire_by,
+                "status": intent.get("status") or "created",
+                "notes": intent.get("notes") or {"booking_ref": booking.booking_ref, "channel": "whatsapp"},
+                "raw_response": intent.get("raw_response") or intent,
+                "simulated": False,
+            },
+            previous_link_id=None,
+        )
+        return {
+            "success": True,
+            "reused": False,
+            "payment_link_id": plink_id,
+            "short_url": short_url,
+            "transaction_ref": tx.transaction_ref,
+            "expire_by": intent.get("expire_by") or expire_by,
+        }
+
+    @classmethod
+    def _recover_gateway_link_by_reference(cls, booking_ref: str) -> Optional[Dict[str, Any]]:
+        from app.providers.razorpay_provider import razorpay_provider
+
+        listed = razorpay_provider.list_payment_links_by_reference(booking_ref)
+        items = listed.get("items") if listed.get("success") else []
+        for item in items or []:
+            recovered = cls._link_from_gateway_item(item)
+            if recovered:
+                return recovered
+        return None
+
+    @classmethod
+    def _find_reusable_whatsapp_payment_link(cls, db: Session, booking_ref: str) -> Optional[Dict[str, Any]]:
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        txs = list(
+            db.scalars(
+                select(PaymentTransaction)
+                .where(
+                    PaymentTransaction.entity_id == booking_ref,
+                    PaymentTransaction.gateway_provider == "RAZORPAY",
+                    PaymentTransaction.status.in_([PaymentStatus.PENDING, PaymentStatus.PROCESSING]),
+                    PaymentTransaction.is_duplicate.isnot(True),
+                )
+                .order_by(desc(PaymentTransaction.created_at))
+            ).all()
+        )
+        for tx in txs:
+            resp = tx.gateway_response if isinstance(tx.gateway_response, dict) else {}
+            plink_id = resp.get("payment_link_id")
+            if not plink_id and str(tx.gateway_payment_id or "").startswith("plink_"):
+                plink_id = tx.gateway_payment_id
+            url = resp.get("short_url")
+            link_status = str(resp.get("link_status") or "created").lower()
+            expire_by = resp.get("expire_by")
+            if link_status in ("expired", "cancelled", "paid"):
+                continue
+            expired_locally = False
+            if expire_by:
+                try:
+                    expired_locally = int(expire_by) <= now_ts
+                except (TypeError, ValueError):
+                    expired_locally = False
+            if expired_locally:
+                cls._mark_payment_link_terminal(tx, PaymentStatus.EXPIRED, "expired")
+                continue
+            if cls._is_simulated_payment_link(plink_id, url) or not cls._is_https_payment_url(url):
+                continue
+            return {
+                "success": True,
+                "reused": True,
+                "payment_link_id": plink_id,
+                "short_url": url,
+                "transaction_ref": tx.transaction_ref,
+                "expire_by": expire_by,
+            }
+        return None
+
+    @classmethod
+    def _mark_payment_link_terminal(cls, tx: PaymentTransaction, status: PaymentStatus, link_status: str) -> None:
+        if tx.status == PaymentStatus.SUCCESSFUL:
+            return
+        if not PaymentStateMachine.can_transition(tx.status, status):
+            return
+        tx.status = status
+        resp = dict(tx.gateway_response) if isinstance(tx.gateway_response, dict) else {}
+        resp["link_status"] = link_status
+        tx.gateway_response = resp
+        tx.updated_at = datetime.now(timezone.utc)
+
+    @classmethod
+    def _persist_whatsapp_payment_link_tx(
+        cls,
+        db: Session,
+        *,
+        booking,
+        link: Dict[str, Any],
+        previous_link_id: Optional[str],
+    ) -> PaymentTransaction:
+        plink_id = link["payment_link_id"]
+        existing = db.scalar(
+            select(PaymentTransaction)
+            .where(
+                PaymentTransaction.entity_id == booking.booking_ref,
+                PaymentTransaction.gateway_payment_id == plink_id,
+                PaymentTransaction.is_duplicate.isnot(True),
+            )
+            .order_by(desc(PaymentTransaction.created_at))
+        )
+        if existing and existing.status in (PaymentStatus.PENDING, PaymentStatus.PROCESSING):
+            existing.gateway_response = cls._merge_gateway_response(
+                existing.gateway_response,
+                extra={
+                    "payment_link_id": plink_id,
+                    "short_url": link.get("short_url"),
+                    "order_id": link.get("order_id"),
+                    "expire_by": link.get("expire_by"),
+                    "link_status": link.get("status") or "created",
+                    "channel": "whatsapp",
+                    "booking_ref": booking.booking_ref,
+                    "notes": link.get("notes") or {"booking_ref": booking.booking_ref, "channel": "whatsapp"},
+                },
+            )
+            existing.updated_at = datetime.now(timezone.utc)
+            db.commit()
+            db.refresh(existing)
+            return existing
+
+        latest = db.scalar(
+            select(PaymentTransaction)
+            .where(
+                PaymentTransaction.entity_id == booking.booking_ref,
+                PaymentTransaction.gateway_provider == "RAZORPAY",
+                PaymentTransaction.is_duplicate.isnot(True),
+            )
+            .order_by(desc(PaymentTransaction.created_at))
+        )
+        prev_id = previous_link_id
+        prev_list = []
+        if latest:
+            prev_resp = latest.gateway_response if isinstance(latest.gateway_response, dict) else {}
+            prev_id = prev_id or prev_resp.get("payment_link_id") or (
+                latest.gateway_payment_id if str(latest.gateway_payment_id or "").startswith("plink_") else None
+            )
+            prev_list = list(prev_resp.get("previous_payment_links") or [])
+            if prev_id and prev_id != plink_id:
+                prev_list.append({
+                    "payment_link_id": prev_id,
+                    "short_url": prev_resp.get("short_url"),
+                    "replaced_at": datetime.now(timezone.utc).isoformat(),
+                })
+            if latest.status in (PaymentStatus.PENDING, PaymentStatus.PROCESSING):
+                stale_status = PaymentStatus.EXPIRED
+                if str(prev_resp.get("link_status") or "").lower() == "cancelled":
+                    stale_status = PaymentStatus.CANCELLED
+                cls._mark_payment_link_terminal(latest, stale_status, prev_resp.get("link_status") or "expired")
+
+        ref = f"PAY-WA-{uuid.uuid4().hex[:8].upper()}"
+        gateway_response = {
+            "payment_link_id": plink_id,
+            "short_url": link.get("short_url"),
+            "order_id": link.get("order_id"),
+            "expire_by": link.get("expire_by"),
+            "link_status": link.get("status") or "created",
+            "channel": "whatsapp",
+            "booking_ref": booking.booking_ref,
+            "notes": link.get("notes") or {"booking_ref": booking.booking_ref, "channel": "whatsapp"},
+            "raw_response": link.get("raw_response"),
+            "previous_payment_links": prev_list,
+        }
+        tx = PaymentTransaction(
+            transaction_ref=ref,
+            entity_type="AIRPORT_BOOKING",
+            entity_id=booking.booking_ref,
+            customer_id=str(booking.user_id) if getattr(booking, "user_id", None) else None,
+            amount=float(booking.total_amount),
+            currency=(booking.currency or "INR").upper(),
+            payment_method=PaymentMethod.UPI,
+            status=PaymentStatus.PENDING,
+            gateway_provider="RAZORPAY",
+            gateway_payment_id=plink_id,
+            gateway_response=gateway_response,
+            notes="whatsapp_payment_link",
+        )
+        db.add(tx)
+        try:
+            TimelineService.add_entry(
+                db,
+                entity_type="AIRPORT_BOOKING",
+                entity_id=booking.booking_ref,
+                event_type="PAYMENT_LINK_INITIATED",
+                title=f"WhatsApp Payment Link Initiated ({ref})",
+                details={"payment_link_id": plink_id, "amount": float(booking.total_amount)},
+            )
+        except Exception:
+            pass
+        db.commit()
+        db.refresh(tx)
+        return tx
+
+    @classmethod
+    def replace_whatsapp_payment_link(cls, db: Session, booking_ref: str) -> Dict[str, Any]:
+        """Force a new Payment Link for a still-PENDING booking after expiry/cancellation."""
+        from app.models.schema import Booking, BookingStatus
+
+        booking = db.scalar(select(Booking).where(Booking.booking_ref == booking_ref))
+        if not booking:
+            return {"success": False, "error": "BOOKING_NOT_FOUND"}
+        if booking.status != BookingStatus.PENDING:
+            return {"success": False, "error": "BOOKING_NOT_PENDING"}
+
+        latest = db.scalar(
+            select(PaymentTransaction)
+            .where(
+                PaymentTransaction.entity_id == booking_ref,
+                PaymentTransaction.gateway_provider == "RAZORPAY",
+                PaymentTransaction.is_duplicate.isnot(True),
+            )
+            .order_by(desc(PaymentTransaction.created_at))
+        )
+        if latest and latest.status in (PaymentStatus.PENDING, PaymentStatus.PROCESSING):
+            cls._mark_payment_link_terminal(latest, PaymentStatus.EXPIRED, "expired")
+            db.flush()
+        return cls.initiate_whatsapp_payment_link(db, booking_ref)
+
+    @classmethod
+    def reconcile_whatsapp_payment_link(cls, db: Session, booking_ref: str) -> Dict[str, Any]:
+        """
+        Fetch live Payment Link status. Confirms only if Razorpay reports paid,
+        via handle_verified_payment — never from customer text.
+        """
+        from app.models.schema import Booking, BookingStatus
+        from app.providers.razorpay_provider import razorpay_provider
+
+        booking = db.scalar(select(Booking).where(Booking.booking_ref == booking_ref))
+        if not booking:
+            return {"success": False, "status": "NOT_FOUND", "paid": False}
+        if booking.status == BookingStatus.CONFIRMED:
+            return {"success": True, "status": "ALREADY_CONFIRMED", "paid": True}
+
+        tx = db.scalar(
+            select(PaymentTransaction)
+            .where(
+                PaymentTransaction.entity_id == booking_ref,
+                PaymentTransaction.gateway_provider == "RAZORPAY",
+                PaymentTransaction.is_duplicate.isnot(True),
+            )
+            .order_by(desc(PaymentTransaction.created_at))
+        )
+        resp = tx.gateway_response if tx and isinstance(tx.gateway_response, dict) else {}
+        plink_id = (resp.get("payment_link_id") if resp else None) or (
+            tx.gateway_payment_id if tx and str(tx.gateway_payment_id or "").startswith("plink_") else None
+        )
+        if not plink_id:
+            return {"success": True, "status": "NO_LINK", "paid": False}
+
+        fetched = razorpay_provider.fetch_payment_link(plink_id)
+        if not fetched.get("success"):
+            return {
+                "success": True,
+                "status": "STATUS_UNAVAILABLE",
+                "paid": False,
+                "reason": fetched.get("error"),
+            }
+
+        remote_status = str(fetched.get("status") or "").lower()
+        if remote_status in ("expired", "cancelled"):
+            if tx:
+                target = PaymentStatus.EXPIRED if remote_status == "expired" else PaymentStatus.CANCELLED
+                cls._mark_payment_link_terminal(tx, target, remote_status)
+                db.commit()
+            return {"success": True, "status": remote_status.upper(), "paid": False}
+
+        if remote_status != "paid":
+            return {"success": True, "status": remote_status.upper() or "CREATED", "paid": False}
+
+        amount = fetched.get("amount_paid")
+        if amount is None:
+            amount = fetched.get("amount")
+        currency = fetched.get("currency") or (booking.currency if booking else "INR")
+        data = fetched.get("data") if isinstance(fetched.get("data"), dict) else {}
+        raw_payload = {
+            "event": "payment_link.paid",
+            "payload": {
+                "payment_link": {
+                    "entity": data or {
+                        "id": plink_id,
+                        "amount": amount,
+                        "amount_paid": amount,
+                        "currency": currency,
+                        "status": "paid",
+                        "order_id": fetched.get("order_id"),
+                        "reference_id": booking_ref,
+                        "notes": {"booking_ref": booking_ref, "channel": "whatsapp"},
+                    }
+                }
+            },
+        }
+        result = cls.handle_verified_payment(
+            db,
+            event_name="payment_link.paid",
+            gateway_provider="RAZORPAY",
+            order_id=fetched.get("order_id") or (data.get("order_id") if data else None),
+            payment_id=None,
+            booking_ref=booking_ref,
+            raw_payload=raw_payload,
+            channel="whatsapp",
+            amount=amount,
+            currency=currency,
+        )
+        return {
+            "success": bool(result.get("success")),
+            "status": result.get("status"),
+            "paid": result.get("status") in ("CONFIRMED",) or bool(result.get("already_confirmed")),
+            "details": result,
+        }
+
+    @classmethod
     def verify_internal_webhook_signature(cls, payload: WebhookPayload, signature: Optional[str]) -> bool:
         secret = (os.getenv("PAYMENT_WEBHOOK_SECRET") or os.getenv("RAZORPAY_WEBHOOK_SECRET") or "").strip()
         if not secret:
@@ -160,23 +765,49 @@ class PaymentService:
         from app.services.notification_service import NotificationService
         from sqlalchemy import or_
 
+        extracted_ids = cls._extract_ids_from_razorpay_payload(raw_payload)
+        payment_link_id = extracted_ids.get("payment_link_id")
+        if not order_id:
+            order_id = extracted_ids.get("order_id")
+        if not payment_id:
+            payment_id = extracted_ids.get("payment_id")
+        if not booking_ref:
+            booking_ref = extracted_ids.get("booking_ref")
+        if not channel:
+            channel = extracted_ids.get("channel") or channel
+
         logger.info(
-            f"[PaymentService] Processing event '{event_name}' (order: {order_id}, payment: {payment_id}, ref: {booking_ref})"
+            f"[PaymentService] Processing event '{event_name}' (order: {order_id}, payment: {payment_id}, plink: {payment_link_id}, ref: {booking_ref})"
         )
 
         # 1. Resolve PaymentTransaction
         transaction = None
-        if order_id or payment_id or booking_ref:
+        if order_id or payment_id or booking_ref or payment_link_id:
             conditions = []
             if order_id:
                 conditions.append(PaymentTransaction.gateway_payment_id == order_id)
             if payment_id:
                 conditions.append(PaymentTransaction.gateway_payment_id == payment_id)
+            if payment_link_id:
+                conditions.append(PaymentTransaction.gateway_payment_id == payment_link_id)
             if booking_ref:
                 conditions.append(PaymentTransaction.transaction_ref == booking_ref)
                 conditions.append(PaymentTransaction.entity_id == booking_ref)
-            
+
             transaction = db.scalar(select(PaymentTransaction).where(or_(*conditions)).order_by(PaymentTransaction.created_at.desc()))
+            if booking_ref and transaction and transaction.status != PaymentStatus.SUCCESSFUL:
+                successful = db.scalar(
+                    select(PaymentTransaction).where(
+                        PaymentTransaction.entity_id == booking_ref,
+                        PaymentTransaction.status == PaymentStatus.SUCCESSFUL,
+                        PaymentTransaction.is_duplicate.isnot(True),
+                    ).order_by(PaymentTransaction.created_at.asc())
+                )
+                if successful:
+                    stored = cls._collect_tx_gateway_ids(successful)
+                    incoming = {i for i in (order_id, payment_id, payment_link_id) if i}
+                    if incoming & stored:
+                        transaction = successful
 
         # 2. Resolve Booking
         booking = None
@@ -348,16 +979,19 @@ class PaymentService:
                 # Case 1: Direct ID match (payment_id == existing gateway_payment_id, or order_id == existing gateway_payment_id)
                 is_same_payment = (
                     (payment_id and existing_pid and payment_id == existing_pid) or
-                    (order_id and existing_pid and order_id == existing_pid)
+                    (order_id and existing_pid and order_id == existing_pid) or
+                    (payment_link_id and existing_pid and payment_link_id == existing_pid)
                 )
 
                 # Case 2: The resolved transaction IS the same DB row as the existing successful TX.
-                # This happens when order.paid arrives after payment.captured — the transaction was
-                # resolved via order_id/booking_ref and is literally the same record that was already
-                # marked SUCCESSFUL. Different Razorpay lifecycle events for the same payment.
+                # Same row is the same financial payment only when incoming ids overlap stored ids
+                # (or no ids were provided). A distinct payment_id on the same booking is a duplicate.
                 if not is_same_payment and transaction and existing_successful_tx:
                     if transaction.id == existing_successful_tx.id:
-                        is_same_payment = True
+                        stored_ids = cls._collect_tx_gateway_ids(existing_successful_tx)
+                        incoming_ids = {i for i in (payment_id, order_id, payment_link_id) if i}
+                        if not incoming_ids or (incoming_ids & stored_ids):
+                            is_same_payment = True
 
                 # Case 3: The order_id matches the original order stored in gateway_response.
                 # After payment.captured, gateway_payment_id is updated from order_id to payment_id,
@@ -368,13 +1002,21 @@ class PaymentService:
                     if isinstance(gw_resp, dict):
                         # Check nested payload structures for the original order_id
                         original_order_id = (
+                            gw_resp.get("order_id") or
                             gw_resp.get("payload", {}).get("payment", {}).get("entity", {}).get("order_id") or
                             gw_resp.get("payload", {}).get("order", {}).get("entity", {}).get("id")
                         )
                     if original_order_id and order_id == original_order_id:
                         is_same_payment = True
 
-                logger.info(f"[DEBUG_DP] existing_pid={existing_pid}, payment_id={payment_id}, order_id={order_id}, is_same_payment={is_same_payment}")
+                # Case 4: stored payment_link_id / order_id / payment_id vs incoming ids
+                if not is_same_payment and existing_successful_tx:
+                    stored_ids = cls._collect_tx_gateway_ids(existing_successful_tx)
+                    incoming_ids = {i for i in (payment_id, order_id, payment_link_id) if i}
+                    if incoming_ids and (incoming_ids & stored_ids):
+                        is_same_payment = True
+
+                logger.info(f"[DEBUG_DP] existing_pid={existing_pid}, payment_id={payment_id}, order_id={order_id}, plink={payment_link_id}, is_same_payment={is_same_payment}")
 
                 if not is_same_payment and (payment_id or order_id):
                     # Distinct second payment arrived for already confirmed booking!
@@ -429,6 +1071,20 @@ class PaymentService:
 
                 # Exact same payment replay - idempotent return
                 logger.info(f"[PaymentService] Booking '{resolved_booking_ref}' is already confirmed and paid. Idempotent return.")
+                # Retry PDF/storage if the invoice row exists without a stored document.
+                # Never creates a second invoice; never reverses payment.
+                try:
+                    tx_for_invoice = existing_successful_tx or transaction
+                    if tx_for_invoice:
+                        retry_inv = db.scalar(select(Invoice).where(Invoice.transaction_id == tx_for_invoice.id))
+                        if retry_inv and not retry_inv.pdf_url:
+                            from app.services.pdf_service import schedule_invoice_fulfillment
+                            schedule_invoice_fulfillment(str(retry_inv.id))
+                except Exception as pdf_retry_err:
+                    logger.error(
+                        "[PaymentService] Invoice PDF retry scheduling failed: %s",
+                        type(pdf_retry_err).__name__,
+                    )
                 return {
                     "success": True,
                     "status": "CONFIRMED",
@@ -444,25 +1100,53 @@ class PaymentService:
                     transaction.gateway_payment_id = payment_id
                 if signature:
                     transaction.gateway_signature = signature
-                if raw_payload:
-                    transaction.gateway_response = raw_payload
+                transaction.gateway_response = cls._merge_gateway_response(
+                    transaction.gateway_response,
+                    raw_payload=raw_payload,
+                    extra={
+                        "payment_link_id": payment_link_id,
+                        "order_id": order_id,
+                        "payment_id": payment_id,
+                        "booking_ref": resolved_booking_ref,
+                        "channel": channel or extracted_ids.get("channel"),
+                        "link_status": "paid",
+                    },
+                )
                 transaction.updated_at = datetime.now(timezone.utc)
 
             # Update Booking
             if booking:
                 booking.status = BookingStatus.CONFIRMED
                 booking.updated_at = datetime.now(timezone.utc)
+                # Future-proof soft-link: always store booking_ref on the payment row.
+                if transaction and booking.booking_ref:
+                    if str(transaction.entity_id or "") != str(booking.booking_ref):
+                        logger.info(
+                            "[PaymentService] Normalizing payment entity_id to booking_ref=%s",
+                            booking.booking_ref,
+                        )
+                    transaction.entity_id = str(booking.booking_ref)
+                    transaction.entity_type = transaction.entity_type or "AIRPORT_BOOKING"
 
-            # Auto-generate Tax Invoice (Idempotent check inside generate_invoice)
+            # Auto-generate Tax Invoice DB row (Idempotent check inside generate_invoice).
+            # PDF/storage/email happen after commit so the webhook is not blocked.
+            invoice_id_to_fulfill = None
             if transaction:
-                customer_name = booking.passenger_name if booking else "Valued Guest"
-                customer_email = booking.passenger_email if booking else "customer@shafsky.com"
-                cls.generate_invoice(
-                    db,
-                    transaction=transaction,
-                    customer_name=customer_name,
-                    customer_email=customer_email
-                )
+                try:
+                    customer_name = booking.passenger_name if booking else "Valued Guest"
+                    customer_email = booking.passenger_email if booking else "customer@shafsky.com"
+                    invoice_row = cls.generate_invoice(
+                        db,
+                        transaction=transaction,
+                        customer_name=customer_name,
+                        customer_email=customer_email
+                    )
+                    if invoice_row:
+                        invoice_id_to_fulfill = str(invoice_row.id)
+                except Exception:
+                    logger.exception(
+                        "[PaymentService] Invoice row creation failed; payment confirmation will still be committed"
+                    )
 
             # Audit Log
             try:
@@ -502,14 +1186,57 @@ class PaymentService:
                 logger.warning(f"[PaymentService] Timeline logging notice: {time_err}")
 
             # Commit DB changes before triggering external notifications
-            db.commit()
+            try:
+                db.commit()
+            except Exception:
+                logger.exception("[PaymentService] Payment confirmation commit failed")
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                return {
+                    "success": False,
+                    "status": "COMMIT_FAILED",
+                    "reason": "Could not persist payment confirmation.",
+                    "booking_ref": resolved_booking_ref,
+                }
             if transaction:
                 db.refresh(transaction)
             if booking:
                 db.refresh(booking)
 
-            # Send Confirmation Notifications (Idempotent with duplicate suppression)
-            if booking:
+            # Invoice PDF + confirmation email/WhatsApp after commit (never blocks webhook).
+            # PDF/storage/email failure must not undo payment or the invoice row.
+            if invoice_id_to_fulfill:
+                try:
+                    from app.services.pdf_service import schedule_invoice_fulfillment
+                    schedule_invoice_fulfillment(invoice_id_to_fulfill)
+                except Exception as pdf_err:
+                    logger.error("[PaymentService] Invoice fulfillment scheduling failed: %s", type(pdf_err).__name__)
+                    if booking:
+                        try:
+                            meta = booking.metadata_json or {}
+                            NotificationService.notify_booking_confirmed(db, {
+                                "booking_ref": booking.booking_ref,
+                                "passenger_name": booking.passenger_name,
+                                "passenger_email": booking.passenger_email,
+                                "passenger_phone": booking.passenger_phone,
+                                "flight_num": booking.flight_num,
+                                "origin_code": booking.origin_code,
+                                "dest_code": booking.dest_code,
+                                "airport_code": meta.get("service_airport") or booking.origin_code or booking.dest_code,
+                                "journey_type": meta.get("journey_type") or booking.service_type,
+                                "service_type": booking.service_type,
+                                "service_name": meta.get("package") or booking.service_type,
+                                "departure_time": booking.departure_time.isoformat() if booking.departure_time else None,
+                                "terminal": meta.get("terminal"),
+                                "total_amount": float(booking.total_amount) if booking.total_amount is not None else 0.0,
+                                "currency": booking.currency,
+                                "invoice_attached": False,
+                            })
+                        except Exception as notif_err:
+                            logger.error(f"[PaymentService] Confirmation notification error: {notif_err}")
+            elif booking:
                 try:
                     meta = booking.metadata_json or {}
                     NotificationService.notify_booking_confirmed(db, {
@@ -535,14 +1262,15 @@ class PaymentService:
             # Update WhatsApp Conversation State if relevant
             try:
                 from app.models.whatsapp_models import WhatsAppConversation
-                conv = db.scalar(
-                    select(WhatsAppConversation).where(
-                        or_(
-                            WhatsAppConversation.booking_ref == resolved_booking_ref,
-                            WhatsAppConversation.booking_id == (str(booking.id) if booking else None)
-                        )
+                conv = None
+                if resolved_booking_ref:
+                    conv = db.scalar(
+                        select(WhatsAppConversation).where(WhatsAppConversation.booking_ref == resolved_booking_ref)
                     )
-                )
+                if not conv and booking is not None:
+                    conv = db.scalar(
+                        select(WhatsAppConversation).where(WhatsAppConversation.booking_id == booking.id)
+                    )
                 if conv:
                     conv.payment_status = "SUCCESSFUL"
                     conv.current_state = "COMPLETED"
@@ -600,6 +1328,47 @@ class PaymentService:
                 "status": "AUTHORIZED",
                 "booking_ref": resolved_booking_ref,
                 "payment_id": payment_id
+            }
+
+        # 3c. Payment Link expired / cancelled — booking stays PENDING and recoverable.
+        elif event_name in ["payment_link.expired", "payment_link.cancelled"]:
+            terminal_status = PaymentStatus.EXPIRED if event_name.endswith("expired") else PaymentStatus.CANCELLED
+            link_status = "expired" if terminal_status == PaymentStatus.EXPIRED else "cancelled"
+            if transaction and transaction.status != PaymentStatus.SUCCESSFUL:
+                cls._mark_payment_link_terminal(transaction, terminal_status, link_status)
+                transaction.gateway_response = cls._merge_gateway_response(
+                    transaction.gateway_response,
+                    raw_payload=raw_payload,
+                    extra={
+                        "payment_link_id": payment_link_id,
+                        "link_status": link_status,
+                        "booking_ref": resolved_booking_ref,
+                    },
+                )
+            if booking and booking.status == BookingStatus.PENDING:
+                logger.info(
+                    "[PaymentService] Payment link %s for booking '%s'; booking remains PENDING.",
+                    link_status,
+                    resolved_booking_ref,
+                )
+            try:
+                from app.models.whatsapp_models import WhatsAppConversation
+                conv = None
+                if resolved_booking_ref:
+                    conv = db.scalar(
+                        select(WhatsAppConversation).where(WhatsAppConversation.booking_ref == resolved_booking_ref)
+                    )
+                if conv:
+                    conv.payment_status = "EXPIRED" if link_status == "expired" else "CANCELLED"
+                    conv.current_state = "WAITING_PAYMENT"
+                    conv.updated_at = datetime.now(timezone.utc)
+            except Exception as wa_err:
+                logger.debug("[PaymentService] WhatsApp expiry sync notice: %s", wa_err)
+            db.commit()
+            return {
+                "success": True,
+                "status": terminal_status.value,
+                "booking_ref": resolved_booking_ref,
             }
 
         # 4. Handle Failed Payment Events
@@ -894,33 +1663,42 @@ class PaymentService:
         transaction: PaymentTransaction,
         customer_name: str,
         customer_email: str
-    ) -> Invoice:
+    ) -> Optional[Invoice]:
         """Generates a tax invoice for a transaction with duplicate prevention."""
         existing_invoice = db.scalar(select(Invoice).where(Invoice.transaction_id == transaction.id))
         if existing_invoice:
             return existing_invoice
 
-        invoice_num = f"INV-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
-
         tax_rate = 0.18  # 18% GST/Tax standard
         subtotal = round(transaction.amount / (1 + tax_rate), 2)
         tax_amt = round(transaction.amount - subtotal, 2)
+        is_paid = transaction.status == PaymentStatus.SUCCESSFUL
 
-        invoice = Invoice(
-            invoice_number=invoice_num,
-            transaction_id=transaction.id,
-            customer_name=customer_name,
-            customer_email=customer_email,
-            subtotal_amount=subtotal,
-            tax_amount=tax_amt,
-            total_amount=transaction.amount,
-            currency=transaction.currency,
-            status=InvoiceStatus.PAID if transaction.status == PaymentStatus.SUCCESSFUL else InvoiceStatus.ISSUED,
-            paid_at=datetime.now(timezone.utc) if transaction.status == PaymentStatus.SUCCESSFUL else None
-        )
-        db.add(invoice)
-        db.flush()
-        return invoice
+        for _ in range(5):
+            invoice_num = f"INV-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}"
+            invoice = Invoice(
+                invoice_number=invoice_num,
+                transaction_id=transaction.id,
+                customer_name=customer_name,
+                customer_email=customer_email,
+                subtotal_amount=subtotal,
+                tax_amount=tax_amt,
+                total_amount=transaction.amount,
+                currency=transaction.currency,
+                status=InvoiceStatus.PAID if is_paid else InvoiceStatus.ISSUED,
+                paid_at=datetime.now(timezone.utc) if is_paid else None
+            )
+            try:
+                with db.begin_nested():
+                    db.add(invoice)
+                    db.flush()
+                return invoice
+            except IntegrityError:
+                logger.warning("[PaymentService] Invoice number collision; retrying allocation")
+                continue
+
+        logger.error("[PaymentService] Unable to allocate a unique invoice number without aborting payment")
+        return None
 
     @classmethod
     def process_refund(
@@ -1233,7 +2011,8 @@ class PaymentService:
     def expire_stale_transactions(cls, db: Session, max_age_hours: float = 24.0) -> int:
         """
         Finds all PENDING payment transactions created more than max_age_hours ago
-        and transitions them to EXPIRED.
+        and transitions them to EXPIRED. Also marks stale WhatsApp WAITING_PAYMENT
+        conversations so abandoned links do not linger forever.
         """
         from datetime import timedelta
 
@@ -1253,9 +2032,35 @@ class PaymentService:
             tx.updated_at = datetime.now(timezone.utc)
             count += 1
 
-        if count > 0:
+        wa_expired = 0
+        try:
+            from app.models.whatsapp_models import WhatsAppConversation
+            stale_convs = list(
+                db.scalars(
+                    select(WhatsAppConversation).where(
+                        WhatsAppConversation.current_state.in_(["WAITING_PAYMENT", "PENDING_PAYMENT"]),
+                        WhatsAppConversation.updated_at <= threshold,
+                    )
+                ).all()
+            )
+            for conv in stale_convs:
+                conv.payment_status = "EXPIRED"
+                # Keep booking PENDING; do not invent CANCELLED without customer action.
+                # Move chat out of payment wait so the customer can restart cleanly.
+                conv.current_state = "CATEGORY_SELECTION"
+                conv.updated_at = datetime.now(timezone.utc)
+                wa_expired += 1
+        except Exception:
+            logger.exception("[PaymentService] Stale WhatsApp WAITING_PAYMENT cleanup failed")
+
+        if count > 0 or wa_expired > 0:
             db.commit()
-            logger.info(f"[PaymentService] Expired {count} stale PENDING payment transactions older than {max_age_hours}h.")
+            logger.info(
+                "[PaymentService] Expired %s stale PENDING payment transactions and %s WhatsApp payment waits older than %sh.",
+                count,
+                wa_expired,
+                max_age_hours,
+            )
 
         return count
 

@@ -312,6 +312,100 @@ class WhatsAppClient:
         """Convenience method for text messages."""
         return self.send_message(to_phone=to_phone, message_body=message_body)
 
+    @staticmethod
+    def _is_meta_fetchable_url(url: str) -> bool:
+        """Meta must fetch the file over public HTTPS — never localhost."""
+        from urllib.parse import urlparse
+        text = (url or "").strip()
+        if not text.lower().startswith("https://"):
+            return False
+        host = (urlparse(text).hostname or "").lower()
+        if not host:
+            return False
+        if host in ("localhost", "127.0.0.1", "0.0.0.0", "::1") or host.endswith(".local"):
+            return False
+        return True
+
+    def upload_media_document(self, pdf_bytes: bytes, filename: str) -> Optional[str]:
+        """Upload a PDF to Meta Graph media API. Returns media id or None. Never logs tokens."""
+        self._load_config()
+        if not self.is_configured() or not pdf_bytes:
+            return None
+        if os.getenv("PYTEST_CURRENT_TEST") and os.getenv("WHATSAPP_INVOICE_ENABLED") != "1":
+            return None
+        media_url = f"https://graph.facebook.com/{self.api_version}/{self.phone_number_id}/media"
+        headers = {"Authorization": self._cached_auth_header or f"Bearer {self.access_token}"}
+        safe_name = (filename or "invoice.pdf").replace("\\", "_").replace("/", "_")[:180]
+        try:
+            with httpx.Client(timeout=httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=5.0)) as client:
+                response = client.post(
+                    media_url,
+                    headers=headers,
+                    data={"messaging_product": "whatsapp", "type": "application/pdf"},
+                    files={"file": (safe_name, pdf_bytes, "application/pdf")},
+                )
+            if response.status_code not in (200, 201):
+                logger.error("[WhatsApp] Media upload failed (HTTP %s)", response.status_code)
+                return None
+            media_id = str((response.json() or {}).get("id") or "").strip()
+            return media_id or None
+        except Exception as err:
+            logger.error("[WhatsApp] Media upload exception: %s", type(err).__name__)
+            return None
+
+    def send_document_message(
+        self,
+        to_phone: str,
+        *,
+        filename: str,
+        caption: str = "",
+        document_url: Optional[str] = None,
+        pdf_bytes: Optional[bytes] = None,
+    ) -> Dict[str, Any]:
+        """
+        Send an actual WhatsApp DOCUMENT message via Meta Cloud API.
+        Prefers media-id upload of PDF bytes; falls back to an HTTPS link Meta can fetch.
+        Never sends localhost or non-https URLs. Never marks success without Meta 200/201.
+        """
+        self._load_config()
+        clean_phone = "".join(filter(str.isdigit, str(to_phone)))
+        if not clean_phone or len(clean_phone) < 10:
+            logger.error("[WhatsApp] Invalid recipient phone for document: '%s'", to_phone)
+            return {"success": False, "error": "invalid_recipient_phone", "status": "failed"}
+
+        if os.getenv("PYTEST_CURRENT_TEST") and os.getenv("WHATSAPP_INVOICE_ENABLED") != "1":
+            logger.info("[WhatsApp] Skipping live document send during pytest")
+            return {"success": False, "error": "pytest_skipped_live_send", "status": "failed"}
+
+        safe_name = (filename or "invoice.pdf").replace("\\", "_").replace("/", "_")[:180]
+        document: Dict[str, Any] = {"filename": safe_name}
+        if caption:
+            document["caption"] = str(caption)[:1024]
+
+        media_id = None
+        if pdf_bytes:
+            media_id = self.upload_media_document(pdf_bytes, safe_name)
+        if media_id:
+            document["id"] = media_id
+        elif document_url and self._is_meta_fetchable_url(document_url):
+            document["link"] = document_url.strip()
+        else:
+            logger.warning("[WhatsApp] Document send skipped: no Meta-fetchable PDF (media id or https URL)")
+            return {
+                "success": False,
+                "error": "no_meta_accessible_document",
+                "status": "failed",
+            }
+
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": clean_phone,
+            "type": "document",
+            "document": document,
+        }
+        return self._dispatch_http(clean_phone, payload, "Document")
+
     def send_interactive_buttons(
         self,
         to_phone: str,

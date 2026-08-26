@@ -271,14 +271,25 @@ class JourneyDetectionEngine:
                 unavailable_message="This airport is currently not supported for online booking.",
             )
 
-        # Travel type: prefer the user's explicit selection; otherwise infer when possible.
-        explicit_flight_type = normalize_flight_type(flight_type)
-        if explicit_flight_type:
-            flight_type = explicit_flight_type
-        elif dep_airport and arr_airport:
-            flight_type = "INTERNATIONAL" if dep_airport.country != arr_airport.country else "DOMESTIC"
-        else:
-            flight_type = None
+        # Travel type: derive authoritatively from route countries.
+        # Client explicit selection is NOT trusted for ARRIVAL/DEPARTURE.
+        from app.services.service_airport_rules import derive_flight_type_from_route
+        try:
+            derived = derive_flight_type_from_route(db, departure_code, arrival_code, normalized_type)
+            if derived is not None:
+                flight_type = derived
+            else:
+                # TRANSIT — preserve existing compound type from client
+                flight_type = normalize_flight_type(flight_type)
+        except ValueError:
+            # Catalog browsing: origin/dest may be missing. Graceful fallback.
+            explicit_flight_type = normalize_flight_type(flight_type)
+            if explicit_flight_type:
+                flight_type = explicit_flight_type
+            elif dep_airport and arr_airport:
+                flight_type = "INTERNATIONAL" if dep_airport.country != arr_airport.country else "DOMESTIC"
+            else:
+                flight_type = None
 
         # Check distinct non-null terminals for this airport/journey/flight configuration
         terminal_stmt = (

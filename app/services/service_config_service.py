@@ -699,35 +699,25 @@ class ServiceConfigService:
                 "error": f"Services currently unavailable at airport {code}."
             }
 
-        # Determine domestic/international flightType dynamically from airport country metadata
-        def _norm_country(c_val: Optional[str], code_val: str) -> str:
-            if not c_val:
-                return "india" if code_val.upper() in ["DEL", "BOM", "HYD", "AMD", "BLR", "CCU", "MAA", "LKO"] else "international"
-            c_low = c_val.lower().strip()
-            if c_low in ["ind", "india", "in"]:
-                return "india"
-            if c_low in ["uae", "united arab emirates", "dubai"]:
-                return "uae"
-            return c_low
-
+        # Determine domestic/international flightType from canonical route resolver
+        from app.services.service_airport_rules import derive_flight_type_from_route
         resolved_flight_type = flight_type
-        explicit_ft = normalize_flight_type(flight_type)
-        if explicit_ft:
-            resolved_flight_type = explicit_ft.lower()
-        elif not resolved_flight_type:
-            if origin_code and dest_code:
-                orig_ap = db.scalar(select(AirportManagement).where(AirportManagement.code == origin_code.upper()))
-                dest_ap = db.scalar(select(AirportManagement).where(AirportManagement.code == dest_code.upper()))
-
-                orig_country = _norm_country(orig_ap.country if orig_ap else None, origin_code)
-                dest_country = _norm_country(dest_ap.country if dest_ap else None, dest_code)
-
-                if orig_country == dest_country:
-                    resolved_flight_type = "domestic"
-                else:
-                    resolved_flight_type = "international"
+        try:
+            derived = derive_flight_type_from_route(db, origin_code, dest_code, j_norm)
+            if derived is not None:
+                resolved_flight_type = derived.lower()
             else:
+                # TRANSIT — use client-provided compound type
+                explicit_ft = normalize_flight_type(flight_type)
+                resolved_flight_type = explicit_ft.lower() if explicit_ft else (flight_type or "domestic")
+        except ValueError:
+            # Catalog browsing: origin/dest may be absent. Fall back to client hint.
+            explicit_ft = normalize_flight_type(flight_type)
+            if explicit_ft:
+                resolved_flight_type = explicit_ft.lower()
+            elif not resolved_flight_type:
                 resolved_flight_type = "domestic"
+
 
         packages = master_config.get("packages", [])
         # Booking catalogue is packages-only; demo individual cards are never returned.
@@ -836,11 +826,20 @@ class ServiceConfigService:
         elif journey_type == "transit" and transit_val:
             target_airport_code = transit_val
 
+        # Derive authoritative flight_type from route, not client payload
+        from app.services.service_airport_rules import derive_flight_type_from_route
+        client_ft = payload.get("flight_type") or payload.get("flightType")
+        try:
+            derived_ft = derive_flight_type_from_route(db, origin_val, dest_val, journey_type)
+            authoritative_ft = derived_ft if derived_ft is not None else client_ft
+        except ValueError:
+            authoritative_ft = client_ft  # graceful fallback for validation context
+
         config = cls.get_airport_configuration(
             target_airport_code,
             db=db,
             journey_type=journey_type,
-            flight_type=payload.get("flight_type") or payload.get("flightType"),
+            flight_type=authoritative_ft,
         )
 
         # Check coverage in database
