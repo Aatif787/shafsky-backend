@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.ai.schemas import (
     ChatRequest,
-    WhatsAppWebhookPayload,
     AiApiResponse,
     TakeoverRequest,
     ResumeRequest
@@ -28,49 +27,40 @@ router = APIRouter(prefix="/api/ai", tags=["AI Conversation Engine"])
 )
 def interactive_chat_endpoint(
     payload: ChatRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    """Processes interactive website or customer portal chat messages with state tracking."""
+    """
+    Public website chat (rate-limited by SecurityMiddleware).
+    Does not expose staff takeover/history. Abuse controls: IP rate limit on /api/ai/chat.
+    """
     try:
         response = AiService.process_chat(db, payload)
         return AiApiResponse(success=True, data=response)
     except Exception as err:
-        raise HTTPException(status_code=500, detail=str(err)) from err
+        raise HTTPException(status_code=500, detail="AI chat temporarily unavailable.") from err
 
 
 @router.post(
     "/whatsapp",
     response_model=AiApiResponse,
-    status_code=status.HTTP_200_OK,
-    summary="WhatsApp Webhook Message Processing"
+    status_code=status.HTTP_403_FORBIDDEN,
+    summary="Disabled — use official Meta WhatsApp webhook"
 )
 @router.post(
     "/webhook/whatsapp",
     response_model=AiApiResponse,
-    status_code=status.HTTP_200_OK,
-    summary="WhatsApp Webhook Message Processing (Alias)"
+    status_code=status.HTTP_403_FORBIDDEN,
+    summary="Disabled — use official Meta WhatsApp webhook"
 )
-def whatsapp_webhook_endpoint(
-    payload: WhatsAppWebhookPayload,
-    db: Session = Depends(get_db)
-):
-    """Processes incoming WhatsApp Webhook messages and returns AI assistant reply."""
-    from_num = payload.from_number or "whatsapp_user"
-    msg_body = payload.message_body or "Hello"
-
-    chat_req = ChatRequest(
-        session_id=f"wa_{from_num}",
-        message=msg_body,
-        phone_number=from_num,
-        channel="WHATSAPP",
-        metadata={"from_number": from_num}
+def whatsapp_webhook_endpoint_disabled():
+    """
+    C10: Public AI WhatsApp ingest is disabled.
+    Use POST /api/whatsapp/webhook (HMAC-verified Meta Cloud API) instead.
+    """
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="This endpoint is disabled. Use the official Meta WhatsApp webhook at /api/whatsapp/webhook.",
     )
-
-    try:
-        response = AiService.process_chat(db, chat_req)
-        return AiApiResponse(success=True, data=response)
-    except Exception as err:
-        raise HTTPException(status_code=500, detail=str(err)) from err
 
 
 @router.post(

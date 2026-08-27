@@ -191,12 +191,46 @@ class BookingService:
             service_clock = dep_time or arr_time
 
         if service_clock is not None:
-            if service_clock < now:
+            if service_clock.tzinfo is None:
+                service_clock = service_clock.replace(tzinfo=timezone.utc)
+            now_aware = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+            if service_clock.astimezone(timezone.utc) < now_aware.astimezone(timezone.utc):
                 raise HTTPException(
                     status_code=400,
                     detail="This flight time is in the past and cannot be booked."
                 )
-            diff_hours = (service_clock - now).total_seconds() / 3600.0
+
+        if early_jt != "TRANSIT" and service_clock is not None:
+            from app.services.booking_cutoff import evaluate_booking_cutoff, lookup_airport_timezone
+            from app.services.service_airport_rules import derive_flight_type_from_route
+            try:
+                derived_ft = derive_flight_type_from_route(
+                    db, payload.origin_code, payload.dest_code, early_jt
+                )
+            except (ValueError, Exception):
+                derived_ft = None
+            if derived_ft in ("DOMESTIC", "INTERNATIONAL"):
+                svc_iata = service_airport or (
+                    payload.origin_code if early_jt == "DEPARTURE" else payload.dest_code
+                )
+                cutoff = evaluate_booking_cutoff(
+                    scheduled_dt=service_clock,
+                    now_utc=now if now.tzinfo else now.replace(tzinfo=timezone.utc),
+                    airport_tz_name=lookup_airport_timezone(db, svc_iata),
+                    flight_type=derived_ft,
+                )
+                if not cutoff.allowed:
+                    raise HTTPException(status_code=400, detail=cutoff.customer_message)
+            else:
+                diff_hours = (service_clock.astimezone(timezone.utc) - now_aware.astimezone(timezone.utc)).total_seconds() / 3600.0
+                if diff_hours < 6.0:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Bookings require at least 6 hours advance notice. Service time is in {round(diff_hours, 1)} hours."
+                    )
+        elif early_jt == "TRANSIT" and service_clock is not None:
+            now_aware = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+            diff_hours = (service_clock.astimezone(timezone.utc) - now_aware.astimezone(timezone.utc)).total_seconds() / 3600.0
             if diff_hours < 6.0:
                 raise HTTPException(
                     status_code=400,

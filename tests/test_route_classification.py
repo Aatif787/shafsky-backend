@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from app.services.service_airport_rules import (
     derive_flight_type_from_route,
     resolve_airport_country,
+    resolve_catalog_flight_type,
     _is_india,
     normalize_iata,
 )
@@ -315,3 +316,33 @@ class TestEdgeCases:
             for intl in intl_codes:
                 assert derive_flight_type_from_route(db, india, intl, "DEPARTURE") == "INTERNATIONAL"
                 assert derive_flight_type_from_route(db, intl, india, "ARRIVAL") == "INTERNATIONAL"
+
+
+class TestResolveCatalogFlightType:
+    """Client flight_type is ignored when both route endpoints are known."""
+
+    def test_dxb_del_client_domestic_is_international(self, db):
+        result = resolve_catalog_flight_type(db, "DXB", "DEL", "ARRIVAL", "DOMESTIC")
+        assert result == "INTERNATIONAL"
+
+    def test_del_dxb_client_domestic_is_international(self, db):
+        result = resolve_catalog_flight_type(db, "DEL", "DXB", "DEPARTURE", "DOMESTIC")
+        assert result == "INTERNATIONAL"
+
+    def test_del_bom_client_international_is_domestic(self, db):
+        result = resolve_catalog_flight_type(db, "DEL", "BOM", "DEPARTURE", "INTERNATIONAL")
+        assert result == "DOMESTIC"
+
+    def test_transit_preserves_client_compound_type(self, db):
+        result = resolve_catalog_flight_type(
+            db, "DXB", "LHR", "TRANSIT", "DOMESTIC_DOMESTIC"
+        )
+        assert result == "DOMESTIC_DOMESTIC"
+
+    def test_browsing_without_route_keeps_client(self, db):
+        result = resolve_catalog_flight_type(db, None, None, "ARRIVAL", "INTERNATIONAL")
+        assert result == "INTERNATIONAL"
+
+    def test_unknown_airport_raises(self, db):
+        with pytest.raises(ValueError):
+            resolve_catalog_flight_type(db, "ZZZ", "DEL", "ARRIVAL", "DOMESTIC")

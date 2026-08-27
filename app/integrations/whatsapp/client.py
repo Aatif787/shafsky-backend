@@ -119,9 +119,16 @@ class WhatsAppClient:
         app_secret = self.app_secret
 
         if not app_secret:
+            from app.config import settings as _settings
+            if _settings.is_production:
+                logger.error(
+                    "[WhatsApp Webhook] WHATSAPP_APP_SECRET is not configured in production. "
+                    "Rejecting webhook (unsigned webhooks are not allowed)."
+                )
+                return False
             logger.warning(
                 "[WhatsApp Webhook] WHATSAPP_APP_SECRET is not configured. "
-                "Bypassing X-Hub-Signature-256 verification. Set WHATSAPP_APP_SECRET in .env for production authenticity validation."
+                "Bypassing X-Hub-Signature-256 verification in non-production only."
             )
             return True
 

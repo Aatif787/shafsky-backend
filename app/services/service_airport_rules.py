@@ -236,3 +236,42 @@ def derive_flight_type_from_route(
         return "DOMESTIC"
 
     return "INTERNATIONAL"
+
+
+def resolve_catalog_flight_type(
+    db,
+    origin_code: Optional[str],
+    dest_code: Optional[str],
+    journey_type: Optional[str],
+    client_flight_type: Optional[str] = None,
+) -> Optional[str]:
+    """
+    Authoritative flight_type for loading airport service catalogs.
+
+    Client DOMESTIC / INTERNATIONAL is never used when both route
+    endpoints are known. Derive from origin/destination countries first.
+
+    TRANSIT: returns the client compound type unchanged (never two-point).
+    ARRIVAL/DEPARTURE with both origin and dest: route-derived value.
+    ARRIVAL/DEPARTURE with neither origin nor dest: browsing — client hint.
+    ARRIVAL/DEPARTURE with incomplete or unknown airports: raises ValueError.
+      Do not guess DOMESTIC.
+    """
+    jt = normalize_journey_type(journey_type)
+
+    if jt == "TRANSIT":
+        return normalize_flight_type(client_flight_type)
+
+    origin_clean = normalize_iata(origin_code)
+    dest_clean = normalize_iata(dest_code)
+
+    if origin_clean and dest_clean:
+        return derive_flight_type_from_route(db, origin_clean, dest_clean, jt)
+
+    if origin_clean or dest_clean:
+        raise ValueError(
+            "Unable to determine whether this route is domestic or international. "
+            "Please provide valid origin and destination airports."
+        )
+
+    return normalize_flight_type(client_flight_type)

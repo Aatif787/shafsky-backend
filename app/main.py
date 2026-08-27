@@ -16,6 +16,7 @@ import app.models.shared_domain  # Phase B.5 Shared Domain models
 import app.models.airport  # Phase C.1 Airport Meet & Assist models
 import app.models.journey_models  # Phase 1 Journey Detection Engine models
 import app.models.operations_models  # Phase 6 Operations & Communication Engine models
+import app.models.charter_models  # Private Charter Engine models
 from app.security.middleware import SecurityMiddleware
 from app.security.dependencies import get_required_admin
 from app.security.secrets import validate_secrets_on_startup
@@ -66,6 +67,10 @@ async def startup_checks():
                 conn.commit()
             except Exception:
                 pass
+        try:
+            Base.metadata.create_all(bind=engine, checkfirst=True)
+        except Exception:
+            pass
     except Exception as err:
         structured_logger.critical("Database connectivity check failed on startup", extra={"error": str(err)})
         # In production/staging, fail fast
@@ -112,11 +117,13 @@ async def sqlalchemy_exception_handler(_request, _exc: SQLAlchemyError):
         content={"success": False, "error": "A database error occurred. Please try again later."}
     )
 
+from fastapi.encoders import jsonable_encoder
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(_request, exc: RequestValidationError):
     return JSONResponse(
         status_code=422,
-        content={"success": False, "error": "Validation error in request payload.", "details": exc.errors()}
+        content={"success": False, "error": "Validation error in request payload.", "details": jsonable_encoder(exc.errors())}
     )
 
 from app.routers import workflow_router
@@ -128,6 +135,7 @@ from app.routers import ticketing_router
 from app.routers import payment_router
 from app.routers import journey_router
 from app.routers import operations_router
+from app.routers import charter_router
 from app.ai import router as ai_router
 from app.integrations.whatsapp.router import router as whatsapp_router
 
@@ -137,6 +145,7 @@ app.include_router(clean_flight_router)
 app.include_router(clean_flights_router)
 app.include_router(admin_router.router)
 app.include_router(booking_router.router)
+app.include_router(charter_router.router)
 app.include_router(notification_router.router)
 app.include_router(crm_router.router)
 app.include_router(dr_router.router)

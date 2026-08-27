@@ -192,6 +192,8 @@ def test_pdf_library_is_reportlab():
     assert "TAX INVOICE" in text
     assert "SHAFSKY AVIATION SERVICES" in text
     assert "INV-TEST-000001" in text
+    assert "ops@shafskyaviation.com" not in text
+    assert "26 Aug 2026" in text
 
 
 def test_successful_payment_creates_paid_invoice_row():

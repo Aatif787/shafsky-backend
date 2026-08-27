@@ -326,6 +326,16 @@ class PaymentService:
         if booking.total_amount is None:
             return {"success": False, "error": "NO_AMOUNT", "reason": "Booking has no authoritative amount."}
 
+        from app.services.booking_cutoff import evaluate_cutoff_for_booking
+        cutoff = evaluate_cutoff_for_booking(db, booking)
+        if not cutoff.allowed:
+            return {
+                "success": False,
+                "error": "BOOKING_CUTOFF",
+                "reason": cutoff.reason,
+                "customer_message": cutoff.customer_message,
+            }
+
         authoritative_amount = float(booking.total_amount)
         currency = (booking.currency or "INR").upper()
 
@@ -1605,8 +1615,12 @@ class PaymentService:
         payload: WebhookPayload,
         provider: Optional[PaymentProvider] = None
     ) -> PaymentTransaction:
-        """Handles incoming payment gateway webhooks with strict idempotency and state machine protection."""
-        provider = provider or MockPaymentProvider()
+        """Handles incoming payment gateway webhooks with strict idempotency and state machine protection.
+
+        Signature verification must already have passed at the router layer.
+        Do not default to MockPaymentProvider (H10) — that path is for explicit tests only.
+        """
+        _ = provider  # optional injected provider reserved for tests; not used for auth
 
         transaction = db.scalar(
             select(PaymentTransaction).where(PaymentTransaction.transaction_ref == payload.transaction_ref)

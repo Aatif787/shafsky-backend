@@ -665,3 +665,22 @@ class WorkflowAuditLog(Base):
     instance = relationship("WorkflowInstance", back_populates="audit_logs")
 
 
+class FlightAPICache(Base):
+    """
+    Production-ready flight verification cache for AviationStack.
+    Caches flight details to prevent repetitive external API calls and quota consumption.
+    """
+    __tablename__ = "flight_api_cache"
+    __table_args__ = (
+        Index("ix_flight_api_cache_provider_iata_date", "provider", "flight_iata", "flight_date", unique=True),
+        Index("ix_flight_api_cache_provider_iata", "provider", "flight_iata"),
+        Index("ix_flight_api_cache_expires_at", "expires_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    flight_iata: Mapped[str] = mapped_column(String(20), nullable=False)
+    flight_date: Mapped[str] = mapped_column(String(20), nullable=False)
+    response_data: Mapped[dict] = mapped_column(JSON, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

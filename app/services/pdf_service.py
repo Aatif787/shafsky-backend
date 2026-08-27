@@ -13,14 +13,27 @@ import logging
 import os
 import re
 import threading
+import uuid
+import zlib
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 import httpx
-from reportlab.lib.colors import Color, white
-from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
-from sqlalchemy import select
+try:
+    from reportlab.lib.colors import Color, white
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+except ImportError:
+    class _Color:
+        def __init__(self, r, g, b):
+            self.r, self.g, self.b = r, g, b
+    Color = _Color
+    white = "#ffffff"
+    A4 = (595.27, 841.89)
+    canvas = None
+
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -35,7 +48,6 @@ SILVER = Color(0.85, 0.87, 0.9)
 FOOTER_BG = Color(0.97, 0.98, 0.99)
 
 SUPPORT_PHONE = "+91 9599087959"
-SUPPORT_EMAIL = "ops@shafskyaviation.com"
 
 
 def _safe_text(value: Any, default: str = "") -> str:
@@ -109,7 +121,38 @@ def _razorpay_ids(transaction) -> Tuple[str, str]:
     return payment_id, order_id
 
 
+def invoice_logo_path() -> Optional[Path]:
+    """Use an official on-disk logo when present. Never invent a mark."""
+    roots = [
+        Path(__file__).resolve().parent.parent / "assets",
+        Path(__file__).resolve().parent.parent / "static",
+        Path(__file__).resolve().parent.parent / "static" / "branding",
+        Path(__file__).resolve().parents[2] / "assets",
+    ]
+    names = (
+        "shafsky-logo.png",
+        "shafsky-aviation-logo.png",
+        "shafsky.png",
+        "logo.png",
+        "logo.svg",
+    )
+    for root in roots:
+        for name in names:
+            candidate = root / name
+            if candidate.is_file():
+                return candidate
+    return None
+
+
 def _booking_meta(booking) -> Dict[str, str]:
+    from app.services.booking_cutoff import (
+        airport_tzinfo,
+        format_date_local,
+        format_time_local,
+        service_leg_scheduled_datetime,
+    )
+    from app.services.service_airport_rules import normalize_journey_type
+
     meta = getattr(booking, "metadata_json", None) or {}
     if not isinstance(meta, dict):
         meta = {}
@@ -121,14 +164,26 @@ def _booking_meta(booking) -> Dict[str, str]:
     journey = _safe_text(meta.get("journey_type") or meta.get("direction") or getattr(booking, "service_type", None))
     flight_type = _safe_text(meta.get("flight_type") or meta.get("travel_type"))
     service_name = _safe_text(meta.get("package") or getattr(booking, "service_type", None))
-    travel_dt = getattr(booking, "departure_time", None) or getattr(booking, "arrival_time", None)
+    origin = _safe_text(meta.get("origin_iata") or getattr(booking, "origin_code", None))
+    dest = _safe_text(meta.get("destination_iata") or getattr(booking, "dest_code", None))
+    tz = airport_tzinfo(meta.get("airport_timezone") or "Asia/Kolkata")
+    jt = normalize_journey_type(meta.get("journey_type") or meta.get("direction") or journey)
+    scheduled = service_leg_scheduled_datetime(
+        jt,
+        getattr(booking, "departure_time", None) or meta.get("departure_scheduled"),
+        getattr(booking, "arrival_time", None) or meta.get("arrival_scheduled"),
+        tz,
+    )
     pax = meta.get("pax_adults") or meta.get("guest_count") or 1
     return {
         "airport": airport,
         "journey": journey,
         "flight_type": flight_type,
         "service_name": service_name,
-        "travel_date": _fmt_dt(travel_dt),
+        "origin": origin,
+        "destination": dest,
+        "travel_date": format_date_local(scheduled, tz) if scheduled else "",
+        "scheduled_time": format_time_local(scheduled, tz) if scheduled else "",
         "pax": str(pax),
         "terminal": _safe_text(meta.get("terminal")),
     }
@@ -148,12 +203,26 @@ def generate_tax_invoice_pdf(data: Dict[str, Any]) -> bytes:
     # Header bar
     c.setFillColor(TEAL)
     c.rect(0, page_h - 96, page_w, 96, fill=1, stroke=0)
+    title_x = 40
+    logo_file = invoice_logo_path()
+    if logo_file is not None and str(logo_file).lower().endswith((".png", ".jpg", ".jpeg")):
+        try:
+            from reportlab.lib.utils import ImageReader
+            img = ImageReader(str(logo_file))
+            iw, ih = img.getSize()
+            max_h, max_w = 52, 120
+            scale = min(max_w / float(iw or 1), max_h / float(ih or 1))
+            dw, dh = iw * scale, ih * scale
+            c.drawImage(img, 40, page_h - 28 - dh, width=dw, height=dh, mask="auto", preserveAspectRatio=True)
+            title_x = 40 + dw + 16
+        except Exception:
+            title_x = 40
     c.setFillColor(white)
-    c.setFont("Helvetica-Bold", 18)
-    c.drawString(40, page_h - 50, "SHAFSKY AVIATION SERVICES")
+    c.setFont("Helvetica-Bold", 16 if title_x > 40 else 18)
+    c.drawString(title_x, page_h - 50, "SHAFSKY AVIATION SERVICES")
     c.setFont("Helvetica", 9)
     c.setFillColor(Color(0.85, 0.95, 0.95))
-    c.drawString(40, page_h - 72, "Private Aviation · Meet & Greet · Ground Services")
+    c.drawString(title_x, page_h - 72, "Private Aviation · Meet & Greet · Ground Services")
     c.setFillColor(white)
     c.setFont("Helvetica-Bold", 18)
     c.drawRightString(page_w - 40, page_h - 50, "TAX INVOICE")
@@ -181,7 +250,7 @@ def generate_tax_invoice_pdf(data: Dict[str, Any]) -> bytes:
     c.drawString(40, y, _safe_text(data.get("customer_phone")))
 
     y -= 28
-    box_h = 118
+    box_h = 132
     c.setStrokeColor(SILVER)
     c.setLineWidth(1)
     c.rect(40, y - box_h, page_w - 80, box_h, fill=0, stroke=1)
@@ -190,17 +259,36 @@ def generate_tax_invoice_pdf(data: Dict[str, Any]) -> bytes:
     c.drawString(52, y - 14, "TRIP / SERVICE DETAILS")
     c.setFillColor(INK)
     c.setFont("Helvetica-Bold", 12)
-    origin = _safe_text(data.get("origin"), "—")
-    dest = _safe_text(data.get("destination"), "—")
-    c.drawString(52, y - 34, f"{origin}  →  {dest}")
+    origin = _safe_text(data.get("origin"))
+    dest = _safe_text(data.get("destination"))
+    if origin and dest:
+        route_line = f"{origin}  →  {dest}"
+    elif origin:
+        route_line = origin
+    else:
+        route_line = dest or "—"
+    c.drawString(52, y - 34, route_line)
     c.setFont("Helvetica", 10)
-    lines = [
-        f"Airport: {_safe_text(data.get('airport'), '—')}",
-        f"Journey: {_safe_text(data.get('journey_type'), '—')}    Flight type: {_safe_text(data.get('flight_type'), '—')}",
-        f"Flight: {_safe_text(data.get('flight_num'), '—')}    Travel date: {_safe_text(data.get('travel_date'), '—')}",
-        f"Passengers: {_safe_text(data.get('pax'), '1')}"
-        + (f"    Terminal: {data.get('terminal')}" if data.get("terminal") else ""),
-    ]
+    lines = []
+    if data.get("airport"):
+        lines.append(f"Airport: {_safe_text(data.get('airport'))}")
+    if data.get("journey_type"):
+        jt_line = f"Journey: {_safe_text(data.get('journey_type'))}"
+        if data.get("flight_type"):
+            jt_line += f"    Flight type: {_safe_text(data.get('flight_type'))}"
+        lines.append(jt_line)
+    elif data.get("flight_type"):
+        lines.append(f"Flight type: {_safe_text(data.get('flight_type'))}")
+    if data.get("flight_num"):
+        lines.append(f"Flight: {_safe_text(data.get('flight_num'))}")
+    if data.get("travel_date"):
+        lines.append(f"Travel date: {_safe_text(data.get('travel_date'))}")
+    if data.get("scheduled_time"):
+        lines.append(f"Scheduled time: {_safe_text(data.get('scheduled_time'))}")
+    pax_line = f"Passengers: {_safe_text(data.get('pax'), '1')}"
+    if data.get("terminal"):
+        pax_line += f"    Terminal: {data.get('terminal')}"
+    lines.append(pax_line)
     ly = y - 52
     for line in lines:
         c.drawString(52, ly, line)
@@ -299,7 +387,7 @@ def generate_tax_invoice_pdf(data: Dict[str, Any]) -> bytes:
     c.rect(0, 0, page_w, 70, fill=1, stroke=0)
     c.setFillColor(MUTED)
     c.setFont("Helvetica", 9)
-    c.drawString(40, 42, f"Shafsky Aviation Services Pvt Ltd  ·  {SUPPORT_PHONE}  ·  {SUPPORT_EMAIL}")
+    c.drawString(40, 42, f"Shafsky Aviation Services Pvt Ltd  ·  {SUPPORT_PHONE}")
     c.drawString(40, 26, "Thank you for choosing Shafsky Airport Services.")
 
     c.showPage()
@@ -390,7 +478,10 @@ def invoice_pdf_data_from_records(invoice, booking, transaction) -> Dict[str, An
         "journey": "",
         "flight_type": "",
         "service_name": "",
+        "origin": "",
+        "destination": "",
         "travel_date": "",
+        "scheduled_time": "",
         "pax": "1",
         "terminal": "",
     }
@@ -404,13 +495,14 @@ def invoice_pdf_data_from_records(invoice, booking, transaction) -> Dict[str, An
         "customer_name": _safe_text(getattr(invoice, "customer_name", None) or (getattr(booking, "passenger_name", None) if booking else None), "Valued Guest"),
         "customer_email": _safe_text(getattr(invoice, "customer_email", None) or (getattr(booking, "passenger_email", None) if booking else None)),
         "customer_phone": _safe_text(getattr(booking, "passenger_phone", None) if booking else None),
-        "origin": _safe_text(getattr(booking, "origin_code", None) if booking else None),
-        "destination": _safe_text(getattr(booking, "dest_code", None) if booking else None),
+        "origin": meta.get("origin") or _safe_text(getattr(booking, "origin_code", None) if booking else None),
+        "destination": meta.get("destination") or _safe_text(getattr(booking, "dest_code", None) if booking else None),
         "airport": meta["airport"],
         "journey_type": meta["journey"],
         "flight_type": meta["flight_type"],
         "flight_num": _safe_text(getattr(booking, "flight_num", None) if booking else None),
         "travel_date": meta["travel_date"],
+        "scheduled_time": meta.get("scheduled_time") or "",
         "pax": meta["pax"],
         "terminal": meta["terminal"],
         "service_name": meta["service_name"] or _safe_text(getattr(booking, "service_type", None) if booking else None),
@@ -526,6 +618,10 @@ def fulfill_paid_invoice(
         return {"success": False, "error": "fulfillment_failed"}
 
 
+_ACTIVE_FULFILLMENT_LOCK = threading.Lock()
+_ACTIVE_FULFILLMENT_INVOICES: set[str] = set()
+
+
 def _fulfill_paid_invoice_inner(
     db: Session,
     invoice_id: str,
@@ -537,99 +633,121 @@ def _fulfill_paid_invoice_inner(
     from app.services.notification_service import NotificationService
 
     try:
-        inv_uuid = __import__("uuid").UUID(str(invoice_id))
+        inv_uuid = uuid.UUID(str(invoice_id))
     except Exception:
-        logger.error("[InvoicePDF] Invalid invoice id")
+        logger.error("[InvoicePDF] Invalid invoice id: %s", invoice_id)
         return {"success": False, "error": "invalid_invoice_id"}
 
-    invoice = db.scalar(select(Invoice).where(Invoice.id == inv_uuid))
-    if not invoice:
-        logger.error("[InvoicePDF] Invoice %s not found", invoice_id)
-        return {"success": False, "error": "invoice_not_found"}
+    # Concurrency Lock: Database-level advisory lock per invoice_id
+    lock_id = zlib.crc32(f"fulfill_invoice:{str(inv_uuid)}".encode("utf-8"))
+    is_pg = getattr(db.bind, "dialect", None) and db.bind.dialect.name == "postgresql"
+    have_lock = False
 
-    transaction = invoice.transaction
-    booking = None
-    entity_id = getattr(transaction, "entity_id", None) if transaction else None
-    if entity_id:
-        booking = db.scalar(select(Booking).where(Booking.booking_ref == str(entity_id)))
-        if not booking:
+    if is_pg:
+        try:
+            acquired = db.execute(text("SELECT pg_try_advisory_lock(:id)"), {"id": lock_id}).scalar()
+            if not acquired:
+                logger.info("[InvoicePDF] Concurrent fulfillment in progress for invoice %s; skipping duplicate run.", invoice_id)
+                return {"success": True, "status": "SKIPPED", "reason": "already_in_progress"}
+            have_lock = True
+        except Exception as lock_err:
+            logger.warning("[InvoicePDF] Advisory lock check error: %s", lock_err)
+
+    try:
+        invoice = db.scalar(select(Invoice).where(Invoice.id == inv_uuid))
+        if not invoice:
+            logger.error("[InvoicePDF] Invoice %s not found", invoice_id)
+            return {"success": False, "error": "invoice_not_found"}
+
+        transaction = invoice.transaction
+        booking = None
+        entity_id = getattr(transaction, "entity_id", None) if transaction else None
+        if entity_id:
+            booking = db.scalar(select(Booking).where(Booking.booking_ref == str(entity_id)))
+            if not booking:
+                try:
+                    booking = db.scalar(select(Booking).where(Booking.id == uuid.UUID(str(entity_id))))
+                except Exception:
+                    booking = None
+
+        pdf_bytes: Optional[bytes] = None
+        attached = False
+        signed_url: Optional[str] = None
+        storage_path = invoice.pdf_url if invoice.pdf_url and not str(invoice.pdf_url).startswith("http") else None
+
+        if invoice.pdf_url:
+            storage_path = storage_path or invoice.pdf_url
             try:
-                booking = db.scalar(select(Booking).where(Booking.id == __import__("uuid").UUID(str(entity_id))))
+                pdf_bytes = generate_invoice_pdf_bytes(invoice, booking, transaction)
             except Exception:
-                booking = None
-
-    pdf_bytes: Optional[bytes] = None
-    attached = False
-    signed_url: Optional[str] = None
-    storage_path = invoice.pdf_url if invoice.pdf_url and not str(invoice.pdf_url).startswith("http") else None
-
-    if invoice.pdf_url:
-        storage_path = storage_path or invoice.pdf_url
-        try:
-            pdf_bytes = generate_invoice_pdf_bytes(invoice, booking, transaction)
-        except Exception:
-            logger.exception("[InvoicePDF] Regeneration of existing invoice failed; continuing with stored path")
-    else:
-        try:
-            pdf_bytes = generate_invoice_pdf_bytes(invoice, booking, transaction)
-        except Exception:
-            logger.exception("[InvoicePDF] PDF generation failed for %s", invoice.invoice_number)
-            pdf_bytes = None
-
-        if pdf_bytes:
-            booking_ref = getattr(booking, "booking_ref", None) or entity_id or "unknown"
-            storage_path = build_invoice_storage_path(str(booking_ref), invoice.invoice_number)
-            uploaded = upload_invoice_pdf(storage_path, pdf_bytes)
-            if uploaded:
-                invoice.pdf_url = storage_path
-                db.commit()
-                db.refresh(invoice)
-            else:
-                logger.error("[InvoicePDF] Storage upload failed for %s; invoice row kept without pdf_url", invoice.invoice_number)
-                storage_path = None
-
-    if invoice.pdf_url:
-        signed_url = create_signed_invoice_url(invoice.pdf_url)
-    attached = bool(pdf_bytes)
-
-    if send_notifications:
-        try:
-            ctx = _notification_context(booking, invoice, signed_url, attached)
-            NotificationService.notify_booking_confirmed(
-                db,
-                ctx,
-                attachments=[{"filename": f"{invoice.invoice_number}.pdf", "content": pdf_bytes}] if attached and pdf_bytes else None,
-            )
-        except Exception:
-            logger.exception("[InvoicePDF] Confirmation notification failed for invoice %s", invoice.invoice_number)
-
-        wa_phone = resolve_whatsapp_invoice_recipient(db, booking, transaction)
-        if wa_phone and (pdf_bytes or (signed_url and str(signed_url).startswith("https://"))):
+                logger.exception("[InvoicePDF] Regeneration of existing invoice failed; continuing with stored path")
+        else:
             try:
-                NotificationService.send_whatsapp_invoice_document(
+                pdf_bytes = generate_invoice_pdf_bytes(invoice, booking, transaction)
+            except Exception:
+                logger.exception("[InvoicePDF] PDF generation failed for %s", invoice.invoice_number)
+                pdf_bytes = None
+
+            if pdf_bytes:
+                booking_ref = getattr(booking, "booking_ref", None) or entity_id or "unknown"
+                storage_path = build_invoice_storage_path(str(booking_ref), invoice.invoice_number)
+                uploaded = upload_invoice_pdf(storage_path, pdf_bytes)
+                if uploaded:
+                    invoice.pdf_url = storage_path
+                    db.commit()
+                    db.refresh(invoice)
+                else:
+                    logger.error("[InvoicePDF] Storage upload failed for %s; invoice row kept without pdf_url", invoice.invoice_number)
+                    storage_path = None
+
+        if invoice.pdf_url:
+            signed_url = create_signed_invoice_url(invoice.pdf_url)
+        attached = bool(pdf_bytes)
+
+        if send_notifications:
+            try:
+                ctx = _notification_context(booking, invoice, signed_url, attached)
+                NotificationService.notify_booking_confirmed(
                     db,
-                    booking_ref=getattr(booking, "booking_ref", None) or "",
-                    recipient_phone=wa_phone,
-                    invoice_number=invoice.invoice_number,
-                    pdf_bytes=pdf_bytes,
-                    document_url=signed_url if signed_url and str(signed_url).startswith("https://") else None,
+                    ctx,
+                    attachments=[{"filename": f"{invoice.invoice_number}.pdf", "content": pdf_bytes}] if attached and pdf_bytes else None,
                 )
             except Exception:
-                logger.exception("[InvoicePDF] WhatsApp invoice document failed for %s", invoice.invoice_number)
-        elif not wa_phone:
-            logger.info(
-                "[InvoicePDF] Skipping WhatsApp invoice PDF (not a WhatsApp-originated booking)",
-                extra={"invoice_number": invoice.invoice_number},
-            )
+                logger.exception("[InvoicePDF] Confirmation notification failed for invoice %s", invoice.invoice_number)
 
-    return {
-        "success": True,
-        "invoice_number": invoice.invoice_number,
-        "pdf_url": invoice.pdf_url,
-        "attached": attached,
-        "signed_url": bool(signed_url),
-        "notifications_sent": bool(send_notifications),
-    }
+            wa_phone = resolve_whatsapp_invoice_recipient(db, booking, transaction)
+            if wa_phone and (pdf_bytes or (signed_url and str(signed_url).startswith("https://"))):
+                try:
+                    NotificationService.send_whatsapp_invoice_document(
+                        db,
+                        booking_ref=getattr(booking, "booking_ref", None) or "",
+                        recipient_phone=wa_phone,
+                        invoice_number=invoice.invoice_number,
+                        pdf_bytes=pdf_bytes,
+                        document_url=signed_url if signed_url and str(signed_url).startswith("https://") else None,
+                    )
+                except Exception:
+                    logger.exception("[InvoicePDF] WhatsApp invoice document failed for %s", invoice.invoice_number)
+            elif not wa_phone:
+                logger.info(
+                    "[InvoicePDF] Skipping WhatsApp invoice PDF (not a WhatsApp-originated booking)",
+                    extra={"invoice_number": invoice.invoice_number},
+                )
+
+        return {
+            "success": True,
+            "invoice_number": invoice.invoice_number,
+            "pdf_url": invoice.pdf_url,
+            "attached": attached,
+            "signed_url": bool(signed_url),
+            "notifications_sent": bool(send_notifications),
+        }
+    finally:
+        if is_pg and have_lock:
+            try:
+                db.execute(text("SELECT pg_advisory_unlock(:id)"), {"id": lock_id})
+            except Exception:
+                pass
 
 
 def _run_fulfillment(invoice_id: str) -> None:
@@ -648,8 +766,22 @@ def schedule_invoice_fulfillment(invoice_id: str) -> None:
     """Do not block the webhook: run PDF/storage/email after payment is committed."""
     if not invoice_id:
         return
+    inv_key = str(invoice_id).strip()
+    with _ACTIVE_FULFILLMENT_LOCK:
+        if inv_key in _ACTIVE_FULFILLMENT_INVOICES:
+            logger.info("[InvoicePDF] Fulfillment thread already active for invoice %s; skipping duplicate thread start", inv_key)
+            return
+        _ACTIVE_FULFILLMENT_INVOICES.add(inv_key)
+
+    def _cleanup_and_run(i_id: str):
+        try:
+            _run_fulfillment(i_id)
+        finally:
+            with _ACTIVE_FULFILLMENT_LOCK:
+                _ACTIVE_FULFILLMENT_INVOICES.discard(i_id)
+
     if os.getenv("PYTEST_CURRENT_TEST"):
-        _run_fulfillment(str(invoice_id))
+        _cleanup_and_run(inv_key)
         return
-    thread = threading.Thread(target=_run_fulfillment, args=(str(invoice_id),), daemon=True, name=f"invoice-pdf-{invoice_id}")
+    thread = threading.Thread(target=_cleanup_and_run, args=(inv_key,), daemon=True, name=f"invoice-pdf-{inv_key[:8]}")
     thread.start()

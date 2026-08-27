@@ -502,9 +502,25 @@ def test_scenario_19_invalid_input_reprompting():
 ])
 @patch("app.integrations.whatsapp.client.WhatsAppClient.send_text_message")
 @patch("app.integrations.whatsapp.client.WhatsAppClient.send_interactive_buttons")
-def test_scenario_21_whatsapp_flight_pure_local_validation_valid_formats(mock_buttons, mock_text, flight_input, expected_normalized):
+@patch("app.flight.aviationstack_service.verify_flight_for_whatsapp")
+def test_scenario_21_whatsapp_flight_pure_local_validation_valid_formats(
+    mock_verify, mock_buttons, mock_text, flight_input, expected_normalized
+):
     mock_buttons.return_value = {"success": True, "message_id": "wamid.test_01"}
     mock_text.return_value = {"success": True, "message_id": "wamid.test_02"}
+    mock_verify.return_value = {
+        "success": True,
+        "reason": "OK",
+        "flight": {
+            "flight_number": expected_normalized,
+            "airline": "Test Air",
+            "airline_iata": expected_normalized[:2],
+            "departure": {"iata": "DEL", "city": "New Delhi", "airport": "IGI"},
+            "arrival": {"iata": "BOM", "city": "Mumbai", "airport": "BOM"},
+            "status": "scheduled",
+            "provider": "aviationstack",
+        },
+    }
     from app.database import SessionLocal
     db = SessionLocal()
     try:
@@ -514,18 +530,21 @@ def test_scenario_21_whatsapp_flight_pure_local_validation_valid_formats(mock_bu
         conv.selected_airport_name = "Indira Gandhi International Airport"
         conv.current_state = "FLIGHT_INPUT"
         conv.requires_flight = True
+        conv.flight_details_json = {"journey_type": "DEPARTURE", "travel_type": "DOMESTIC"}
         db.commit()
 
         res = WhatsAppBookingStateMachine.process_incoming_event(db, phone, flight_input)
         db.refresh(conv)
 
-        assert res["status"] == "flight_number_received"
-        assert conv.flight_num == expected_normalized
+        assert res["status"] == "flight_verified"
+        assert conv.flight_num is None
         assert conv.current_state == "FLIGHT_CONFIRMATION"
         assert isinstance(conv.flight_details_json, dict)
-        assert conv.flight_details_json["flight_number"] == expected_normalized
-        assert conv.flight_details_json["verification_status"] == "not_verified"
+        assert conv.flight_details_json["verification_status"] == "pending_confirmation"
+        pending = conv.flight_details_json["_pending_verified_flight"]
+        assert pending["flight_number"] == expected_normalized
         assert mock_buttons.called
+        assert mock_verify.called
     finally:
         db.close()
 
@@ -566,14 +585,30 @@ def test_scenario_22_whatsapp_flight_local_validation_invalid_formats(mock_text,
         db.close()
 
 
-# 17. ZERO External HTTP API Calls when WhatsApp Receives Flight Number
+# 17. WhatsApp flight input uses AviationStack secondary verification (not Aviation Edge)
 @patch("httpx.Client.get")
 @patch("httpx.AsyncClient.get")
 @patch("app.integrations.whatsapp.client.WhatsAppClient.send_text_message")
 @patch("app.integrations.whatsapp.client.WhatsAppClient.send_interactive_buttons")
-def test_scenario_23_whatsapp_flight_no_external_api_calls(mock_buttons, mock_text, mock_async_http, mock_sync_http):
+@patch("app.flight.aviationstack_service.verify_flight_for_whatsapp")
+def test_scenario_23_whatsapp_flight_uses_aviationstack_secondary(
+    mock_verify, mock_buttons, mock_text, mock_async_http, mock_sync_http
+):
     mock_buttons.return_value = {"success": True, "message_id": "wamid.test_03"}
     mock_text.return_value = {"success": True, "message_id": "wamid.test_04"}
+    mock_verify.return_value = {
+        "success": True,
+        "reason": "OK",
+        "flight": {
+            "flight_number": "EK501",
+            "airline": "Emirates",
+            "airline_iata": "EK",
+            "departure": {"iata": "BOM", "city": "Mumbai", "airport": "BOM"},
+            "arrival": {"iata": "DXB", "city": "Dubai", "airport": "DXB"},
+            "status": "scheduled",
+            "provider": "aviationstack",
+        },
+    }
     from app.database import SessionLocal
     db = SessionLocal()
     try:
@@ -583,16 +618,23 @@ def test_scenario_23_whatsapp_flight_no_external_api_calls(mock_buttons, mock_te
         conv.selected_airport_name = "Chhatrapati Shivaji Maharaj International Airport"
         conv.current_state = "FLIGHT_INPUT"
         conv.requires_flight = True
+        conv.flight_details_json = {"journey_type": "DEPARTURE", "travel_type": "INTERNATIONAL"}
         db.commit()
 
         res = WhatsAppBookingStateMachine.process_incoming_event(db, phone, "EK501")
         db.refresh(conv)
 
-        assert not mock_sync_http.called
-        assert not mock_async_http.called
-        assert res["status"] == "flight_number_received"
-        assert conv.flight_num == "EK501"
+        assert mock_verify.called
+        assert res["status"] == "flight_verified"
+        assert conv.flight_num is None
         assert conv.current_state == "FLIGHT_CONFIRMATION"
+        assert conv.flight_details_json["verification_status"] == "pending_confirmation"
+        pending = conv.flight_details_json["_pending_verified_flight"]
+        assert pending["flight_number"] == "EK501"
+        assert pending["verification_provider"] == "aviationstack"
+        # Direct Aviation Edge httpx calls are not made from WhatsApp flight input
+        # (verification is delegated to aviationstack_service, which is mocked here).
+        assert not mock_async_http.called
     finally:
         db.close()
 
@@ -624,9 +666,21 @@ def test_scenario_25_whatsapp_flight_confirmation_to_date_transition(mock_text):
         phone = f"91{uuid.uuid4().int % 10**10:010d}"
         conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
         conv.selected_airport_iata = "DEL"
-        conv.flight_num = "6E224"
+        conv.flight_num = None
         conv.current_state = "FLIGHT_CONFIRMATION"
         conv.requires_flight = True
+        conv.flight_details_json = {
+            "journey_type": "DEPARTURE",
+            "verification_status": "pending_confirmation",
+            "_pending_verified_flight": {
+                "flight_number": "6E224",
+                "airline_code": "6E",
+                "airline_name": "IndiGo",
+                "origin_iata": "DEL",
+                "destination_iata": "BOM",
+                "verification_provider": "aviationstack",
+            },
+        }
         db.commit()
 
         res = WhatsAppBookingStateMachine.process_incoming_event(db, phone, "Confirm Flight", input_id="btn_confirm_flight")
@@ -1097,10 +1151,24 @@ def test_scenario_40_dynamic_travel_type_switch_during_service_selection(mock_li
 @patch("app.integrations.whatsapp.client.WhatsAppClient.send_interactive_buttons")
 @patch("app.integrations.whatsapp.client.WhatsAppClient.send_interactive_list")
 @patch("app.integrations.whatsapp.client.WhatsAppClient.send_text_message")
-def test_scenario_41_complete_separated_airport_service_booking(mock_text, mock_list, mock_buttons):
+@patch("app.flight.aviationstack_service.verify_flight_for_whatsapp")
+def test_scenario_41_complete_separated_airport_service_booking(mock_verify, mock_text, mock_list, mock_buttons):
     mock_text.return_value = {"success": True, "message_id": "wamid.txt"}
     mock_list.return_value = {"success": True, "message_id": "wamid.lst"}
     mock_buttons.return_value = {"success": True, "message_id": "wamid.btn"}
+    mock_verify.return_value = {
+        "success": True,
+        "reason": "OK",
+        "flight": {
+            "flight_number": "EK501",
+            "airline": "Emirates",
+            "airline_iata": "EK",
+            "departure": {"iata": "LKO", "city": "Lucknow", "airport": "LKO"},
+            "arrival": {"iata": "DEL", "city": "Delhi", "airport": "DEL"},
+            "status": "scheduled",
+            "provider": "aviationstack",
+        },
+    }
     from app.database import SessionLocal
     db = SessionLocal()
     try:
@@ -1140,16 +1208,19 @@ def test_scenario_41_complete_separated_airport_service_booking(mock_text, mock_
         assert conv.current_state == "FLIGHT_INPUT"
         assert conv.total_amount == 2420.0
 
-        # 7. Enter Flight EK501 (local validation)
+        # 7. Enter Flight EK501 — API verifies; number is not saved until Confirm
         WhatsAppBookingStateMachine.process_incoming_event(db, phone, "EK501")
         db.refresh(conv)
         assert conv.current_state == "FLIGHT_CONFIRMATION"
-        assert conv.flight_num == "EK501"
+        assert conv.flight_num is None
+        assert conv.flight_details_json["verification_status"] == "pending_confirmation"
 
         # 8. Confirm Flight
         WhatsAppBookingStateMachine.process_incoming_event(db, phone, "Confirm")
         db.refresh(conv)
         assert conv.current_state == "DATE_SELECTION"
+        assert conv.flight_num == "EK501"
+        assert conv.flight_details_json["verification_status"] == "verified"
 
         # 9. Date
         WhatsAppBookingStateMachine.process_incoming_event(db, phone, "25/12/2026")

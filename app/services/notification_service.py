@@ -2,10 +2,11 @@ import uuid
 import re
 import httpx
 import logging
+import zlib
 from datetime import datetime, timezone
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from sqlalchemy.orm import Session
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, text
 from fastapi import HTTPException, BackgroundTasks
 
 from app.config import settings
@@ -260,6 +261,129 @@ class NotificationService:
         ]
 
     @classmethod
+    def _acquire_notification_claim(
+        cls,
+        db: Session,
+        template_type: str,
+        booking_ref: str,
+        recipient: Optional[str],
+        channel: str,
+        payload: Dict[str, Any],
+        lease_seconds: int = 300,
+    ) -> Tuple[Optional[NotificationRecord], str]:
+        """
+        Atomically claims or checks the right to send a notification for (template_type, booking_ref, recipient).
+        Returns (record, action):
+          - (record, "PROCEED"): caller has acquired the exclusive SENDING claim and must dispatch.
+          - (None, "ALREADY_DELIVERED"): notification was already successfully sent.
+          - (None, "IN_PROGRESS"): another active worker is currently dispatching this notification.
+          - (None, "MAX_ATTEMPTS_EXCEEDED"): max attempts reached without success.
+        """
+        if not booking_ref:
+            return None, "MISSING_REF"
+
+        ref_clean = str(booking_ref).strip()
+        rec_clean = str(recipient or "").strip()
+        now = datetime.now(timezone.utc)
+
+        # Database-level advisory lock to serialize concurrent claim attempts for the same notification identity
+        is_pg = getattr(db.bind, "dialect", None) and db.bind.dialect.name == "postgresql"
+        lock_id = zlib.crc32(f"notif_claim:{template_type}:{ref_clean}:{rec_clean}".encode("utf-8"))
+
+        if is_pg:
+            try:
+                db.execute(text("SELECT pg_advisory_xact_lock(:id)"), {"id": lock_id})
+            except Exception as e:
+                logger.warning("[NotificationService] Advisory lock error: %s", e)
+
+        # Query existing records for this template_type
+        records = list(
+            db.scalars(
+                select(NotificationRecord)
+                .where(NotificationRecord.template_type == template_type)
+                .order_by(desc(NotificationRecord.created_at))
+                .limit(50)
+            ).all()
+        )
+
+        matching_records = []
+        for r in records:
+            p = r.payload or {}
+            b_ref = str(p.get("booking_ref") or p.get("bookingRef") or "")
+            if b_ref == ref_clean:
+                if rec_clean:
+                    r_rec = str(r.recipient_email or r.recipient_phone or "").strip()
+                    if r_rec == rec_clean or (len(rec_clean) >= 10 and rec_clean[-10:] in r_rec):
+                        matching_records.append(r)
+                else:
+                    matching_records.append(r)
+
+        # 1. If already delivered or bypassed, do not send again
+        for r in matching_records:
+            if r.status in (NotificationStatus.DELIVERED, NotificationStatus.BYPASSED):
+                return None, "ALREADY_DELIVERED"
+
+        # 2. If actively sending by another worker with an active lease, skip duplicate send
+        for r in matching_records:
+            if r.status == NotificationStatus.SENDING:
+                last_update = r.updated_at or r.created_at
+                if last_update and (now - last_update).total_seconds() < lease_seconds:
+                    return None, "IN_PROGRESS"
+                else:
+                    # Stale lease recovery (worker crashed or timed out)
+                    r.attempts += 1
+                    r.updated_at = now
+                    r.status = NotificationStatus.SENDING
+                    r.payload = payload
+                    try:
+                        db.commit()
+                        db.refresh(r)
+                    except Exception:
+                        db.rollback()
+                    return r, "PROCEED"
+
+        # 3. If failed record exists, check if retryable
+        for r in matching_records:
+            if r.status in (NotificationStatus.FAILED, NotificationStatus.QUEUED):
+                if r.attempts < r.max_attempts:
+                    r.attempts += 1
+                    r.updated_at = now
+                    r.status = NotificationStatus.SENDING
+                    r.payload = payload
+                    try:
+                        db.commit()
+                        db.refresh(r)
+                    except Exception:
+                        db.rollback()
+                    return r, "PROCEED"
+                else:
+                    return None, "MAX_ATTEMPTS_EXCEEDED"
+
+        # 4. No record exists yet: create initial SENDING claim and commit immediately
+        new_record = NotificationRecord(
+            id=uuid.uuid4(),
+            recipient_email=rec_clean if "@" in rec_clean else None,
+            recipient_phone=rec_clean if "@" not in rec_clean and rec_clean else None,
+            template_type=template_type,
+            channel=channel,
+            payload=payload,
+            status=NotificationStatus.SENDING,
+            attempts=1,
+            max_attempts=3,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(new_record)
+        try:
+            db.commit()
+            db.refresh(new_record)
+        except Exception:
+            db.rollback()
+            return None, "IN_PROGRESS"
+
+        return new_record, "PROCEED"
+
+    @classmethod
     def _already_notified(cls, db: Session, template_type: str, booking_ref: str, recipient_email: str) -> bool:
         if not booking_ref or not recipient_email:
             return False
@@ -294,29 +418,34 @@ class NotificationService:
         recipient_phone: Optional[str] = None,
         attachments: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
-        if cls._already_notified(db, template_type, booking_ref, recipient_email):
+        channel = "ALL" if recipient_phone else "EMAIL_ONLY"
+        record, action = cls._acquire_notification_claim(
+            db,
+            template_type=template_type,
+            booking_ref=booking_ref,
+            recipient=recipient_email,
+            channel=channel,
+            payload=payload,
+        )
+
+        if action in ("ALREADY_DELIVERED", "IN_PROGRESS"):
             logger.info(
-                "Skipping duplicate notification",
+                "Skipping duplicate notification (%s)",
+                action,
                 extra={"template": template_type, "booking_ref": booking_ref},
             )
-            return {"status": "SKIPPED", "reason": "duplicate"}
+            return {"status": "SKIPPED", "reason": "duplicate", "claim_status": action}
+        elif action == "MAX_ATTEMPTS_EXCEEDED":
+            logger.warning(
+                "Max attempts exceeded for notification",
+                extra={"template": template_type, "booking_ref": booking_ref},
+            )
+            return {"status": "FAILED", "error": "max_attempts_exceeded"}
+
+        if not record:
+            return {"status": "FAILED", "error": "claim_failed"}
 
         rendered = NotificationTemplateEngine.render_template(template_type, payload)
-        record = NotificationRecord(
-            id=uuid.uuid4(),
-            recipient_email=recipient_email,
-            recipient_phone=recipient_phone,
-            template_type=template_type,
-            channel="ALL" if recipient_phone else "EMAIL_ONLY",
-            payload=payload,
-            status=NotificationStatus.SENDING,
-            attempts=1,
-            max_attempts=3,
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
-        )
-        db.add(record)
-        db.flush()
 
         result = cls.send_email_resend_sync(
             recipient_email,
@@ -324,7 +453,7 @@ class NotificationService:
             rendered["html"],
             attachments=attachments if template_type == "BOOKING_CONFIRMATION" else None,
         )
-        
+
         wa_sent = False
         if recipient_phone:
             try:
@@ -335,9 +464,10 @@ class NotificationService:
             except Exception as e:
                 logger.warning(f"Failed to send WhatsApp notification: {e}")
 
+        now = datetime.now(timezone.utc)
         if result.get("status") == "DELIVERED":
             record.status = NotificationStatus.DELIVERED
-            record.delivered_at = datetime.now(timezone.utc)
+            record.delivered_at = now
             record.message_id = result.get("message_id")
             record.error_log = None
         elif result.get("status") == "BYPASSED":
@@ -346,12 +476,15 @@ class NotificationService:
         else:
             record.status = NotificationStatus.FAILED
             record.error_log = result.get("error") or "delivery_failed"
-            
+
         if recipient_phone and not wa_sent and record.status != NotificationStatus.FAILED:
             record.error_log = (record.error_log or "") + " | WA_FAILED"
-            
-        record.updated_at = datetime.now(timezone.utc)
-        db.commit()
+
+        record.updated_at = now
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
         return result
 
     @classmethod
@@ -532,16 +665,14 @@ class NotificationService:
     ) -> Dict[str, Any]:
         """
         Send the Tax Invoice PDF as a WhatsApp DOCUMENT message.
-        Idempotent per booking_ref. Marks DELIVERED only after Meta accepts the message.
+        Atomically claimed and idempotent per booking_ref + invoice_number.
+        Marks DELIVERED only after Meta accepts the message.
         Failures are retryable and never raise to the payment caller.
         """
         booking_ref = str(booking_ref or "").strip()
         phone = str(recipient_phone or "").strip()
         if not booking_ref or not phone:
             return {"status": "FAILED", "error": "missing_recipient"}
-        if cls._already_sent_whatsapp_invoice(db, booking_ref):
-            logger.info("Skipping duplicate WhatsApp invoice PDF", extra={"booking_ref": booking_ref})
-            return {"status": "SKIPPED", "reason": "duplicate"}
 
         filename = f"Shafsky-Aviation-Tax-Invoice-{invoice_number}.pdf"
         caption = (
@@ -549,25 +680,30 @@ class NotificationService:
             f"Invoice: {invoice_number}\n"
             f"Booking: {booking_ref}"
         )
-        record = NotificationRecord(
-            id=uuid.uuid4(),
-            recipient_email=None,
-            recipient_phone=phone,
+        payload = {
+            "booking_ref": booking_ref,
+            "invoice_number": invoice_number,
+            "filename": filename,
+        }
+
+        record, action = cls._acquire_notification_claim(
+            db,
             template_type=cls.WHATSAPP_INVOICE_TEMPLATE,
+            booking_ref=booking_ref,
+            recipient=phone,
             channel="WHATSAPP",
-            payload={
-                "booking_ref": booking_ref,
-                "invoice_number": invoice_number,
-                "filename": filename,
-            },
-            status=NotificationStatus.SENDING,
-            attempts=1,
-            max_attempts=3,
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
+            payload=payload,
         )
-        db.add(record)
-        db.flush()
+
+        if action in ("ALREADY_DELIVERED", "IN_PROGRESS"):
+            logger.info("Skipping duplicate WhatsApp invoice PDF (%s)", action, extra={"booking_ref": booking_ref})
+            return {"status": "SKIPPED", "reason": "duplicate", "claim_status": action}
+        elif action == "MAX_ATTEMPTS_EXCEEDED":
+            logger.warning("Max attempts exceeded for WhatsApp invoice PDF", extra={"booking_ref": booking_ref})
+            return {"status": "FAILED", "error": "max_attempts_exceeded"}
+
+        if not record:
+            return {"status": "FAILED", "error": "claim_failed"}
 
         try:
             from app.integrations.whatsapp.client import whatsapp_client
@@ -582,17 +718,24 @@ class NotificationService:
             logger.warning("[WhatsApp Invoice] Document send exception: %s", type(exc).__name__)
             result = {"success": False, "error": "exception", "status": "failed"}
 
+        now = datetime.now(timezone.utc)
         if result.get("success"):
             record.status = NotificationStatus.DELIVERED
-            record.delivered_at = datetime.now(timezone.utc)
+            record.delivered_at = now
             record.message_id = result.get("message_id")
             record.error_log = None
-            db.commit()
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
             return {"status": "DELIVERED", "message_id": result.get("message_id")}
 
         record.status = NotificationStatus.FAILED
         record.error_log = str(result.get("error") or result.get("status") or "whatsapp_document_failed")[:400]
-        record.updated_at = datetime.now(timezone.utc)
-        db.commit()
+        record.updated_at = now
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
         return {"status": "FAILED", "error": record.error_log}
 

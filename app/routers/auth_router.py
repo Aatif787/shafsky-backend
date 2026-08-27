@@ -60,37 +60,41 @@ async def login(
 
     device_info = DeviceTracking.get_client_device(request)
 
-    admin_email = (os.getenv("ADMIN_EMAIL") or "").lower().strip()
-    admin_pass = os.getenv("ADMIN_PASSWORD") or ""
-
-    user_data = None
-    if admin_email and admin_pass and email == admin_email and password == admin_pass:
-        # Auto-seed admin record in DB if missing to ensure DB session tracking
-        user = db.scalar(select(UserAuth).where(UserAuth.email == email))
-        if not user:
-            user = UserAuth(
-                email=email,
-                password_hash=AuthService.hash_password(password),
-                role=Role.SUPER_ADMIN,
-                is_verified=True
+    # C1: Never accept plaintext env ADMIN_PASSWORD as a login backdoor.
+    # Admins must authenticate against a hashed UserAuth row in the database.
+    # Optional one-time bootstrap: ALLOW_ADMIN_BOOTSTRAP=true (non-production only)
+    # when ADMIN_EMAIL + ADMIN_PASSWORD are set and no SUPER_ADMIN exists yet.
+    allow_bootstrap = (
+        not settings.is_production
+        and (os.getenv("ALLOW_ADMIN_BOOTSTRAP") or "").strip().lower() in ("1", "true", "yes")
+    )
+    if allow_bootstrap:
+        admin_email = (os.getenv("ADMIN_EMAIL") or "").lower().strip()
+        admin_pass = os.getenv("ADMIN_PASSWORD") or ""
+        if admin_email and admin_pass and email == admin_email and password == admin_pass:
+            existing_super = db.scalar(
+                select(UserAuth).where(UserAuth.role == Role.SUPER_ADMIN).limit(1)
             )
-            db.add(user)
-            db.commit()
-            db.refresh(user)
+            user = db.scalar(select(UserAuth).where(UserAuth.email == email))
+            if not existing_super and not user:
+                user = UserAuth(
+                    email=email,
+                    password_hash=AuthService.hash_password(password),
+                    role=Role.SUPER_ADMIN,
+                    is_verified=True,
+                )
+                db.add(user)
+                db.commit()
+                db.refresh(user)
 
+    user = db.scalar(select(UserAuth).where(UserAuth.email == email))
+    user_data = None
+    if user and AuthService.verify_password(password, user.password_hash):
         user_data = {
             "sub": user.email,
             "user_id": str(user.id),
-            "role": user.role.value if hasattr(user.role, "value") else str(user.role)
+            "role": user.role.value if hasattr(user.role, "value") else str(user.role),
         }
-    else:
-        user = db.scalar(select(UserAuth).where(UserAuth.email == email))
-        if user and AuthService.verify_password(password, user.password_hash):
-            user_data = {
-                "sub": user.email,
-                "user_id": str(user.id),
-                "role": user.role.value if hasattr(user.role, "value") else str(user.role)
-            }
 
     if not user_data:
         raise HTTPException(status_code=401, detail="Invalid email or password credentials.")
@@ -99,21 +103,21 @@ async def login(
     raw_refresh = AuthService.create_refresh_token(user_data)
 
     # Save Hashed Refresh Token in DB with a new Token Family
-    token_record = AuthService.register_refresh_token(
+    AuthService.register_refresh_token(
         db,
         user_id=user.id,
         raw_token=raw_refresh,
         device_info=device_info
     )
 
-    # Set HttpOnly, Secure, SameSite=Strict security cookie
+    # C2: Refresh token only in HttpOnly cookie — never in JSON body.
     _set_refresh_cookie(response, raw_refresh)
 
     return ApiResponse(
         success=True,
         data=AuthDataResponse(
             accessToken=access_token,
-            refreshToken=raw_refresh,
+            refreshToken=None,
             user=UserResponse(
                 id=user_data["user_id"],
                 email=user_data["sub"],

@@ -264,7 +264,11 @@ class RazorpayProvider:
             return False
 
         if not self.webhook_secret:
-            # Fallback for dev / test simulation environments
+            # Never accept unsigned or simulated webhooks when secret is missing in production.
+            from app.config import settings as _settings
+            if _settings.is_production:
+                return False
+            # Dev/test simulation only
             if not self.is_configured() and signature_header in ("simulated_webhook_signature", "test_signature", "simulated_sig"):
                 return True
             return False

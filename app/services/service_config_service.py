@@ -624,6 +624,7 @@ class ServiceConfigService:
         from app.services.service_airport_rules import (
             normalize_flight_type,
             normalize_journey_type,
+            resolve_catalog_flight_type,
             resolve_service_airport_iata,
         )
 
@@ -659,6 +660,37 @@ class ServiceConfigService:
                 "error": "Service airport could not be resolved from the selected journey.",
             }
 
+        # Route classification MUST happen before any airport_service rows are loaded.
+        # Client flight_type is never authoritative when origin and destination are known.
+        try:
+            catalog_flight_type = resolve_catalog_flight_type(
+                db, origin_code, dest_code, j_norm, flight_type
+            )
+        except ValueError as exc:
+            return {
+                "covered": False,
+                "success": False,
+                "airport": {"id": None, "code": code, "name": f"{code} Airport"},
+                "journey_type": j_type,
+                "journeyType": j_type,
+                "flight_type": None,
+                "flightType": None,
+                "terminal": terminal,
+                "catalogSource": "existing-airport-catalog",
+                "packages": [],
+                "individual_services": [],
+                "individualServices": [],
+                "error": str(exc),
+            }
+
+        resolved_flight_type = (
+            catalog_flight_type.lower()
+            if catalog_flight_type
+            else (normalize_flight_type(flight_type) or flight_type or "domestic")
+        )
+        if isinstance(resolved_flight_type, str):
+            resolved_flight_type = resolved_flight_type.lower()
+
         db_airport = db.scalar(
             select(AirportManagement).where(AirportManagement.code == code)
         )
@@ -667,7 +699,7 @@ class ServiceConfigService:
             code,
             db=db,
             journey_type=j_norm,
-            flight_type=flight_type,
+            flight_type=catalog_flight_type,
         )
 
         is_covered = True
@@ -689,8 +721,8 @@ class ServiceConfigService:
                 },
                 "journey_type": j_type,
                 "journeyType": j_type,
-                "flight_type": flight_type or "domestic",
-                "flightType": flight_type or "domestic",
+                "flight_type": resolved_flight_type,
+                "flightType": resolved_flight_type,
                 "terminal": terminal,
                 "catalogSource": "existing-airport-catalog",
                 "packages": [],
@@ -698,26 +730,6 @@ class ServiceConfigService:
                 "individualServices": [],
                 "error": f"Services currently unavailable at airport {code}."
             }
-
-        # Determine domestic/international flightType from canonical route resolver
-        from app.services.service_airport_rules import derive_flight_type_from_route
-        resolved_flight_type = flight_type
-        try:
-            derived = derive_flight_type_from_route(db, origin_code, dest_code, j_norm)
-            if derived is not None:
-                resolved_flight_type = derived.lower()
-            else:
-                # TRANSIT — use client-provided compound type
-                explicit_ft = normalize_flight_type(flight_type)
-                resolved_flight_type = explicit_ft.lower() if explicit_ft else (flight_type or "domestic")
-        except ValueError:
-            # Catalog browsing: origin/dest may be absent. Fall back to client hint.
-            explicit_ft = normalize_flight_type(flight_type)
-            if explicit_ft:
-                resolved_flight_type = explicit_ft.lower()
-            elif not resolved_flight_type:
-                resolved_flight_type = "domestic"
-
 
         packages = master_config.get("packages", [])
         # Booking catalogue is packages-only; demo individual cards are never returned.

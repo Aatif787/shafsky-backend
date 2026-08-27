@@ -121,10 +121,14 @@ def get_services_at_airport(
     iata_code: str,
     journey_type: Optional[str] = Query(None, description="Filter by journey type: ARRIVAL, DEPARTURE, TRANSIT"),
     flight_type: Optional[str] = Query(None, description="Filter by flight type: DOMESTIC, INTERNATIONAL"),
+    origin: Optional[str] = Query(None, description="Origin airport IATA code"),
+    destination: Optional[str] = Query(None, description="Destination airport IATA code"),
     terminal: Optional[str] = Query(None, description="Filter by terminal e.g. Terminal 1 & 2, Terminal 3"),
     include_inactive: bool = Query(False, description="Whether to include inactive/draft services"),
     db: Session = Depends(get_db),
 ):
+    from app.services.service_airport_rules import resolve_catalog_flight_type
+
     airport = JourneyDetectionEngine.get_airport_by_iata(db, iata_code)
     if not airport:
         raise HTTPException(
@@ -132,8 +136,21 @@ def get_services_at_airport(
             detail=f"Airport with IATA code '{iata_code.upper()}' not found.",
         )
 
+    # Route classification is authoritative when origin and destination are known.
+    # Client flight_type must not select the catalog in that case.
+    catalog_flight_type = flight_type
+    try:
+        catalog_flight_type = resolve_catalog_flight_type(
+            db, origin, destination, journey_type, flight_type
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        )
+
     mappings = JourneyDetectionEngine.get_services_for_airport(
-        db, iata_code, journey_type, flight_type, terminal, include_inactive=include_inactive
+        db, iata_code, journey_type, catalog_flight_type, terminal, include_inactive=include_inactive
     )
 
     def _to_assist(val):
@@ -173,6 +190,7 @@ def get_services_at_airport(
         airport_iata=airport.iata_code,
         airport_name=airport.airport_name,
         journey_type=journey_type.upper() if journey_type else None,
+        flight_type=catalog_flight_type.upper() if catalog_flight_type else None,
         total=len(data),
         data=data,
     )
@@ -226,6 +244,7 @@ def resolve_service_airport_endpoint(
     from app.services.service_airport_rules import (
         normalize_flight_type,
         normalize_journey_type,
+        resolve_catalog_flight_type,
         resolve_service_airport_iata,
     )
 
@@ -233,7 +252,21 @@ def resolve_service_airport_endpoint(
     origin = payload.get("origin") or payload.get("origin_code") or payload.get("departure_code")
     destination = payload.get("destination") or payload.get("dest_code") or payload.get("arrival_code")
     transit = payload.get("transit") or payload.get("transit_code")
-    flight_type = normalize_flight_type(payload.get("flight_type") or payload.get("travel_type"))
+    client_flight_type = normalize_flight_type(payload.get("flight_type") or payload.get("travel_type"))
+    try:
+        flight_type = resolve_catalog_flight_type(
+            db, origin, destination, journey_type, client_flight_type
+        )
+    except ValueError as exc:
+        return {
+            "success": False,
+            "valid": False,
+            "is_supported": False,
+            "journey_type": journey_type,
+            "flight_type": None,
+            "service_airport": None,
+            "error": str(exc),
+        }
 
     service_iata = resolve_service_airport_iata(journey_type, origin, destination, transit)
     if not service_iata:

@@ -121,7 +121,7 @@ async def get_booking_status(
             "paymentStatus": "PAID" if is_paid else (tx.status.value if tx and hasattr(tx.status, "value") else "PENDING"),
             "totalAmount": float(booking.total_amount),
             "currency": booking.currency,
-            "passengerName": booking.passenger_name,
+            # Intentionally omit passenger PII on this public polling endpoint (C4 remnant).
             "serviceType": booking.service_type,
             "createdAt": booking.created_at.isoformat() if booking.created_at else None
         }

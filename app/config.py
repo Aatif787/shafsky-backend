@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     AVIATION_EDGE_API_KEY: str = os.getenv("AVIATION_EDGE_API_KEY", "")
     AVIATION_EDGE_BASE_URL: str = os.getenv("AVIATION_EDGE_BASE_URL", "https://aviation-edge.com/v2/public")
 
+    # AviationStack — secondary provider (WhatsApp flight confirmation only)
+    AVIATIONSTACK_API_KEY: str = os.getenv("AVIATIONSTACK_API_KEY", "")
+    AVIATIONSTACK_BASE_URL: str = os.getenv("AVIATIONSTACK_BASE_URL", "https://api.aviationstack.com/v1")
+    AVIATIONSTACK_TIMEOUT: float = float(os.getenv("AVIATIONSTACK_TIMEOUT", "10"))
+    AVIATIONSTACK_MAX_RETRIES: int = int(os.getenv("AVIATIONSTACK_MAX_RETRIES", "2"))
+    AVIATIONSTACK_CACHE_TTL_SECONDS: int = int(os.getenv("AVIATIONSTACK_CACHE_TTL_SECONDS", "300"))
+
     # Meta WhatsApp Cloud API
     WHATSAPP_ACCESS_TOKEN: str = os.getenv("WHATSAPP_ACCESS_TOKEN", "")
     WHATSAPP_PHONE_NUMBER_ID: str = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")

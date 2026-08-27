@@ -79,15 +79,23 @@ def _seed_review_conv(db, phone: str, amount: float = 4500.0) -> WhatsAppConvers
     conv.selected_airport_name = "Indira Gandhi International Airport"
     conv.total_amount = amount
     conv.customer_name = "Test Guest"
-    conv.customer_email = "guest@example.com"
+    conv.customer_email = "guest@shafsky.com"
     conv.customer_phone = phone
     conv.booking_date = "20 August 2026"
     conv.passenger_count = 1
+    conv.flight_num = "AI101"
+    future = (datetime.now(timezone.utc) + timedelta(hours=48)).isoformat()
     conv.flight_details_json = {
         "unit_price": amount,
         "base_price": amount,
         "journey_type": "DEPARTURE",
         "travel_type": "DOMESTIC",
+        "verification_status": "verified",
+        "verification_provider": "AVIATION_STACK",
+        "origin_iata": "DEL",
+        "destination_iata": "BOM",
+        "departure_scheduled": future,
+        "arrival_scheduled": future,
     }
     conv.current_state = "BOOKING_REVIEW"
     db.commit()
@@ -281,7 +289,18 @@ def test_payment_link_paid_confirms_same_transaction(monkeypatch):
     try:
         phone = f"91{uuid.uuid4().int % 10**10:010d}"
         conv = _seed_review_conv(db, phone, 12500.0)
-        conv.flight_details_json = {"unit_price": 12500.0, "base_price": 12500.0, "journey_type": "DEPARTURE", "travel_type": "DOMESTIC"}
+        conv.flight_details_json = {
+            "unit_price": 12500.0,
+            "base_price": 12500.0,
+            "journey_type": "DEPARTURE",
+            "travel_type": "DOMESTIC",
+            "verification_status": "verified",
+            "verification_provider": "AVIATION_STACK",
+            "origin_iata": "DEL",
+            "destination_iata": "BOM",
+            "departure_scheduled": (datetime.now(timezone.utc) + timedelta(hours=48)).isoformat(),
+            "arrival_scheduled": (datetime.now(timezone.utc) + timedelta(hours=50)).isoformat(),
+        }
         db.commit()
         with patch("app.integrations.whatsapp.client.WhatsAppClient.send_text_message"):
             WhatsAppBookingStateMachine.process_incoming_event(db, phone, "CONFIRM", input_id="btn_confirm_booking")
@@ -342,7 +361,18 @@ def test_captured_and_order_paid_after_link_paid_are_idempotent(monkeypatch):
     try:
         phone = f"91{uuid.uuid4().int % 10**10:010d}"
         conv = _seed_review_conv(db, phone, 12500.0)
-        conv.flight_details_json = {"unit_price": 12500.0, "base_price": 12500.0}
+        conv.flight_details_json = {
+            "unit_price": 12500.0,
+            "base_price": 12500.0,
+            "journey_type": "DEPARTURE",
+            "travel_type": "DOMESTIC",
+            "verification_status": "verified",
+            "verification_provider": "AVIATION_STACK",
+            "origin_iata": "DEL",
+            "destination_iata": "BOM",
+            "departure_scheduled": (datetime.now(timezone.utc) + timedelta(hours=48)).isoformat(),
+            "arrival_scheduled": (datetime.now(timezone.utc) + timedelta(hours=50)).isoformat(),
+        }
         db.commit()
         with patch("app.integrations.whatsapp.client.WhatsAppClient.send_text_message"):
             WhatsAppBookingStateMachine.process_incoming_event(db, phone, "CONFIRM", input_id="btn_confirm_booking")
@@ -419,7 +449,18 @@ def test_distinct_payment_id_flagged_duplicate(monkeypatch):
     try:
         phone = f"91{uuid.uuid4().int % 10**10:010d}"
         conv = _seed_review_conv(db, phone, 12500.0)
-        conv.flight_details_json = {"unit_price": 12500.0, "base_price": 12500.0}
+        conv.flight_details_json = {
+            "unit_price": 12500.0,
+            "base_price": 12500.0,
+            "journey_type": "DEPARTURE",
+            "travel_type": "DOMESTIC",
+            "verification_status": "verified",
+            "verification_provider": "AVIATION_STACK",
+            "origin_iata": "DEL",
+            "destination_iata": "BOM",
+            "departure_scheduled": (datetime.now(timezone.utc) + timedelta(hours=48)).isoformat(),
+            "arrival_scheduled": (datetime.now(timezone.utc) + timedelta(hours=50)).isoformat(),
+        }
         db.commit()
         with patch("app.integrations.whatsapp.client.WhatsAppClient.send_text_message"):
             WhatsAppBookingStateMachine.process_incoming_event(db, phone, "CONFIRM", input_id="btn_confirm_booking")

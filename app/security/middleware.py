@@ -4,25 +4,26 @@ from app.security.headers import get_security_headers
 from app.security.rate_limit import RateLimiter
 from app.security.client_ip import get_client_ip
 
+
 class SecurityMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         client_ip = get_client_ip(request)
         endpoint_path = request.url.path
 
-        # 2. Apply Rate Limiting
+        # Apply rate limiting (stricter on auth, flight, AI, booking create)
         if endpoint_path.startswith("/api/auth/login") or endpoint_path.startswith("/api/auth/register"):
             RateLimiter.check_rate_limit(f"rate_limit_auth:{client_ip}", max_requests=10, window_seconds=60)
         elif endpoint_path.startswith("/api/flight/validate") or endpoint_path.startswith("/api/flights/validate"):
-            RateLimiter.check_rate_limit(f"rate_limit_flight:{client_ip}", max_requests=20, window_seconds=60)
+            RateLimiter.check_rate_limit(f"rate_limit_flight:{client_ip}", max_requests=15, window_seconds=60)
         elif endpoint_path.startswith("/api/ai/chat"):
-            RateLimiter.check_rate_limit(f"rate_limit_ai:{client_ip}", max_requests=30, window_seconds=60)
+            RateLimiter.check_rate_limit(f"rate_limit_ai:{client_ip}", max_requests=20, window_seconds=60)
+        elif endpoint_path.startswith("/api/bookings") and request.method.upper() == "POST":
+            RateLimiter.check_rate_limit(f"rate_limit_booking_create:{client_ip}", max_requests=15, window_seconds=60)
         elif endpoint_path.startswith("/api/"):
             RateLimiter.check_rate_limit(f"rate_limit_api:{client_ip}", max_requests=200, window_seconds=60)
 
-        # 3. Process Request
         response = await call_next(request)
 
-        # 4. Inject OWASP Security Headers
         for key, val in get_security_headers().items():
             response.headers[key] = val
 

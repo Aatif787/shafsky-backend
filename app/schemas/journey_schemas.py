@@ -99,6 +99,7 @@ class AirportServiceListResponse(BaseModel):
     airport_iata: str
     airport_name: str
     journey_type: Optional[str] = None
+    flight_type: Optional[str] = None
     total: int
     data: List[AirportServiceResponse] = []
 
