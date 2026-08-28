@@ -2,11 +2,12 @@
 
 from typing import Any, Dict, List, Optional
 
-BRAND = "Shafsky Aviation"
+BRAND = "Shafsky Aviation Services"
 FOOTER = "Reply HI · BACK · HELP · CANCEL"
 SESSION_TIMEOUT_HINT = "Sessions close after 15 minutes of inactivity."
+EXECUTIVE_PHONE = "+91-9599087959"
 
-WELCOME_HEADLINE = "✨ *Welcome to Shafsky Aviation ✈️*"
+WELCOME_HEADLINE = "✨ *Welcome to Shafsky Aviation Services ✈️*"
 EXPIRED_PREFIX = "Your previous session has expired. Let's start again.\n\n"
 
 CATEGORY_LINES = (
@@ -51,6 +52,161 @@ def _feature_list(raw: Any) -> List[str]:
     return []
 
 
+def _extract_tier_name(title: str) -> str:
+    """Extract clean tier name (e.g. 'Silver', 'Gold', 'Elite', 'Platinum') or fallback."""
+    import re
+    t = (title or "").strip()
+    for tier in ("Silver", "Gold", "Elite", "Platinum", "Bronze", "VIP"):
+        if re.search(rf"\b{tier}\b", t, re.IGNORECASE):
+            return tier
+    cleaned = re.sub(r"(?i)\s*(service|package)\s*$", "", t).strip()
+    return cleaned or t
+
+
+def compute_package_inheritance(services: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Dynamically computes the inheritance and additional inclusions for each package.
+    Never hardcodes tier names or differences.
+    """
+    import re
+    result = []
+    prev_features: List[str] = []
+    prev_tier_name: Optional[str] = None
+
+    for i, svc in enumerate(services, 1):
+        title = svc.get("title") or svc.get("name") or f"Service {i}"
+        price = svc.get("price", svc.get("base_price"))
+        features_curr = _feature_list(svc.get("features"))
+        tier_name = _extract_tier_name(title)
+
+        if i == 1:
+            # Base tier
+            result.append({
+                "index": i,
+                "service": svc,
+                "title": title,
+                "tier_name": tier_name,
+                "price": price,
+                "features": features_curr,
+                "count": len(features_curr),
+                "is_base": True,
+                "prev_tier_name": None,
+                "additions": features_curr,
+            })
+        else:
+            # Higher tier: compute dynamic additions over immediately previous tier
+            norm_prev = {re.sub(r"[^a-z0-9]+", " ", f.lower()).strip() for f in prev_features}
+            additions = []
+            for f in features_curr:
+                norm_f = re.sub(r"[^a-z0-9]+", " ", f.lower()).strip()
+                if norm_f and norm_f not in norm_prev:
+                    additions.append(f)
+
+            result.append({
+                "index": i,
+                "service": svc,
+                "title": title,
+                "tier_name": tier_name,
+                "price": price,
+                "features": features_curr,
+                "count": len(features_curr),
+                "is_base": False,
+                "prev_tier_name": prev_tier_name,
+                "additions": additions,
+            })
+
+        prev_features = features_curr
+        prev_tier_name = tier_name
+
+    return result
+
+
+def compact_inheritance_package_lines(services: List[Dict[str, Any]]) -> str:
+    """
+    Renders Level 1 compact package list using dynamic inheritance logic.
+    - Base package shows: X services included
+    - Subsequent packages show: Includes all [PrevTier] services + [Additions]
+    """
+    if not services:
+        return ""
+
+    inheritance = compute_package_inheritance(services)
+    blocks = []
+
+    for item in inheritance:
+        i = item["index"]
+        title = item["title"]
+        price_str = format_inr(item["price"])
+        lines = [f"{i}. *{title}*", price_str]
+
+        if item["is_base"]:
+            count = item["count"]
+            if count > 0:
+                s_word = "service" if count == 1 else "services"
+                lines.append(f"• {count} {s_word} included")
+            else:
+                lines.append("• Standard services included")
+        else:
+            prev_name = item["prev_tier_name"] or "previous"
+            lines.append(f"• Includes all {prev_name} services")
+            additions = item["additions"]
+            for add in additions:
+                lines.append(f"• + {add}")
+
+        blocks.append("\n".join(lines))
+
+    return "\n\n".join(blocks)
+
+
+def selected_package_details_text(
+    selected_svc: Dict[str, Any],
+    all_services: Optional[List[Dict[str, Any]]] = None
+) -> str:
+    """
+    Level 2 package details:
+    - Base package: lists all exact service inclusions.
+    - Higher package: communicates inheritance ('[Tier] includes all [PrevTier] services plus:')
+      followed by the additional services.
+    Preserves exact service wording.
+    """
+    features = _feature_list(selected_svc.get("features"))
+    if not features:
+        return ""
+
+    if all_services and len(all_services) > 1:
+        inheritance = compute_package_inheritance(all_services)
+        sel_id = str(selected_svc.get("id"))
+        sel_title = str(selected_svc.get("title") or selected_svc.get("name") or "").lower()
+
+        matched_item = None
+        for item in inheritance:
+            if str(item["service"].get("id")) == sel_id:
+                matched_item = item
+                break
+            if str(item["title"]).lower() == sel_title:
+                matched_item = item
+                break
+
+        if matched_item and not matched_item["is_base"]:
+            prev_name = matched_item["prev_tier_name"] or "previous"
+            tier_name = matched_item["tier_name"] or "This package"
+            additions = matched_item["additions"]
+            lines = ["📋 *Package Inclusions:*"]
+            if additions:
+                lines.append(f"{tier_name} includes all {prev_name} services plus:")
+                for add in additions:
+                    lines.append(f"• + {add}")
+            else:
+                lines.append(f"• Includes all {prev_name} services")
+            return "\n".join(lines)
+
+    # Base package or single package -> list all inclusions
+    lines = ["📋 *Package Inclusions:*"]
+    for f in features:
+        lines.append(f"• {f}")
+    return "\n".join(lines)
+
+
 def compact_inclusion_lines(features: Any, max_show: int = 4) -> List[str]:
     """Up to 4 DB inclusions verbatim, plus '+ X more' when additional exist."""
     feats = _feature_list(features)
@@ -67,27 +223,28 @@ def numbered_service_lines_with_inclusions(
     max_chars: int = 900,
 ) -> str:
     """Compact package cards for WhatsApp body (Meta body max 1024)."""
-
-    def _blocks(max_show: int) -> str:
-        chunks = []
-        for i, svc in enumerate(services, 1):
-            title = svc.get("title") or svc.get("name") or "Service"
-            price = svc.get("price", svc.get("base_price"))
-            lines = [f"{i}. *{title}*", format_inr(price)]
-            lines.extend(compact_inclusion_lines(svc.get("features"), max_show=max_show))
-            chunks.append("\n".join(lines))
-        return "\n\n".join(chunks)
-
-    for max_show in (4, 3, 2, 0):
-        text = _blocks(max_show) if max_show else numbered_service_lines(services)
-        if len(text) <= max_chars:
-            return text
+    if not services:
+        return ""
+    text = compact_inheritance_package_lines(services)
+    if len(text) <= max_chars:
+        return text
     return numbered_service_lines(services)[:max_chars]
 
 
-def list_row_description(price: Any, features: Any) -> str:
-    """Meta list row description max 72 characters. Prefer first DB inclusion."""
+def list_row_description(price: Any, features: Any, svc_info: Optional[Dict[str, Any]] = None) -> str:
+    """Meta list row description max 72 characters. Compact and descriptive."""
     price_part = format_inr(price)
+    if svc_info and not svc_info.get("is_base") and svc_info.get("prev_tier_name"):
+        prev_name = svc_info["prev_tier_name"]
+        add_count = len(svc_info.get("additions", []))
+        if add_count > 0:
+            add_word = "addition" if add_count == 1 else "additions"
+            candidate = f"{price_part} · All {prev_name} + {add_count} {add_word}"
+        else:
+            candidate = f"{price_part} · All {prev_name} services"
+        if len(candidate) <= 72:
+            return candidate
+
     feats = _feature_list(features)
     if feats:
         first = feats[0]

@@ -849,7 +849,7 @@ def test_scenario_31_global_restart_from_flight_input_state(mock_list, restart_w
         assert conv.selected_service_name is None
         assert mock_list.called
         args, kwargs = mock_list.call_args
-        assert "Welcome to Shafsky Aviation ✈️" in kwargs.get("body_text", "")
+        assert "Welcome to Shafsky Aviation Services ✈️" in kwargs.get("body_text", "")
         assert "1️⃣ Airport Services" in kwargs.get("body_text", "")
     finally:
         db.close()

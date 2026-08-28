@@ -155,10 +155,12 @@ async def list_admin_charter_requests_endpoint(
 
     return {
         "success": True,
-        "total": total,
-        "skip": skip,
-        "limit": limit,
-        "data": items,
+        "data": {
+            "items": items,
+            "total": total,
+            "skip": skip,
+            "limit": limit,
+        },
     }
 
 

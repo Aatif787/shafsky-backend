@@ -16,6 +16,7 @@ from app.models.schema import (
     ShiftRecord,
     AirportManagement
 )
+from app.models.payment import PaymentTransaction, PaymentStatus
 from app.schemas.admin import (
     RoleUpdateRequest,
     StaffAssignRequest,
@@ -320,19 +321,48 @@ class AdminService:
     def generate_daily_report(cls, db: Session) -> Dict[str, Any]:
         now = datetime.now(timezone.utc)
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        
-        total_bookings = db.scalar(select(func.count(Booking.id)).where(Booking.created_at >= today_start)) or 0
-        confirmed = db.scalar(select(func.count(Booking.id)).where(Booking.created_at >= today_start, Booking.status == BookingStatus.CONFIRMED)) or 0
-        completed = db.scalar(select(func.count(Booking.id)).where(Booking.created_at >= today_start, Booking.status == BookingStatus.COMPLETED)) or 0
-        revenue = db.scalar(select(func.sum(Booking.total_amount)).where(Booking.created_at >= today_start, Booking.status != BookingStatus.CANCELLED)) or 0.0
+        live = Booking.deleted_at.is_(None)
+
+        total_bookings = db.scalar(
+            select(func.count(Booking.id)).where(live, Booking.created_at >= today_start)
+        ) or 0
+        confirmed = db.scalar(
+            select(func.count(Booking.id)).where(
+                live, Booking.created_at >= today_start, Booking.status == BookingStatus.CONFIRMED
+            )
+        ) or 0
+        completed = db.scalar(
+            select(func.count(Booking.id)).where(
+                live, Booking.created_at >= today_start, Booking.status == BookingStatus.COMPLETED
+            )
+        ) or 0
+        pending_bookings = db.scalar(
+            select(func.count(Booking.id)).where(live, Booking.status == BookingStatus.PENDING)
+        ) or 0
+        live_refs = select(Booking.booking_ref).where(live)
+        pending_payments = db.scalar(
+            select(func.count(PaymentTransaction.id)).where(
+                PaymentTransaction.status.in_((PaymentStatus.PENDING, PaymentStatus.PROCESSING)),
+                PaymentTransaction.entity_id.in_(live_refs),
+            )
+        ) or 0
+        paid_revenue = db.scalar(
+            select(func.coalesce(func.sum(PaymentTransaction.amount), 0)).where(
+                PaymentTransaction.status == PaymentStatus.SUCCESSFUL,
+                PaymentTransaction.created_at >= today_start,
+                PaymentTransaction.entity_id.in_(live_refs),
+            )
+        ) or 0.0
 
         return {
             "reportType": "DAILY",
             "date": today_start.strftime("%Y-%m-%d"),
-            "totalBookings": total_bookings,
-            "confirmedBookings": confirmed,
-            "completedBookings": completed,
-            "dailyRevenueINR": float(revenue)
+            "totalBookings": int(total_bookings),
+            "confirmedBookings": int(confirmed),
+            "completedBookings": int(completed),
+            "pendingBookings": int(pending_bookings),
+            "pendingPayments": int(pending_payments),
+            "dailyRevenueINR": float(paid_revenue),
         }
 
     @classmethod
@@ -340,8 +370,15 @@ class AdminService:
         now = datetime.now(timezone.utc)
         week_start = now - timedelta(days=7)
 
-        total_bookings = db.scalar(select(func.count(Booking.id)).where(Booking.created_at >= week_start)) or 0
-        revenue = db.scalar(select(func.sum(Booking.total_amount)).where(Booking.created_at >= week_start, Booking.status != BookingStatus.CANCELLED)) or 0.0
+        total_bookings = db.scalar(select(func.count(Booking.id)).where(Booking.deleted_at.is_(None), Booking.created_at >= week_start)) or 0
+        live_refs = select(Booking.booking_ref).where(Booking.deleted_at.is_(None))
+        revenue = db.scalar(
+            select(func.coalesce(func.sum(PaymentTransaction.amount), 0)).where(
+                PaymentTransaction.status == PaymentStatus.SUCCESSFUL,
+                PaymentTransaction.created_at >= week_start,
+                PaymentTransaction.entity_id.in_(live_refs),
+            )
+        ) or 0.0
 
         return {
             "reportType": "WEEKLY",
@@ -355,8 +392,15 @@ class AdminService:
         now = datetime.now(timezone.utc)
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-        total_bookings = db.scalar(select(func.count(Booking.id)).where(Booking.created_at >= month_start)) or 0
-        revenue = db.scalar(select(func.sum(Booking.total_amount)).where(Booking.created_at >= month_start, Booking.status != BookingStatus.CANCELLED)) or 0.0
+        total_bookings = db.scalar(select(func.count(Booking.id)).where(Booking.deleted_at.is_(None), Booking.created_at >= month_start)) or 0
+        live_refs = select(Booking.booking_ref).where(Booking.deleted_at.is_(None))
+        revenue = db.scalar(
+            select(func.coalesce(func.sum(PaymentTransaction.amount), 0)).where(
+                PaymentTransaction.status == PaymentStatus.SUCCESSFUL,
+                PaymentTransaction.created_at >= month_start,
+                PaymentTransaction.entity_id.in_(live_refs),
+            )
+        ) or 0.0
 
         return {
             "reportType": "MONTHLY",
@@ -367,7 +411,13 @@ class AdminService:
 
     @classmethod
     def generate_revenue_report(cls, db: Session) -> Dict[str, Any]:
-        total_revenue = db.scalar(select(func.sum(Booking.total_amount)).where(Booking.status != BookingStatus.CANCELLED)) or 0.0
+        live_refs = select(Booking.booking_ref).where(Booking.deleted_at.is_(None))
+        total_revenue = db.scalar(
+            select(func.coalesce(func.sum(PaymentTransaction.amount), 0)).where(
+                PaymentTransaction.status == PaymentStatus.SUCCESSFUL,
+                PaymentTransaction.entity_id.in_(live_refs),
+            )
+        ) or 0.0
         currency_breakdown = {"INR": float(total_revenue)}
         return {
             "reportType": "REVENUE_SUMMARY",

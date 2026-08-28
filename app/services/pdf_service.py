@@ -125,15 +125,22 @@ def invoice_logo_path() -> Optional[Path]:
     """Use an official on-disk logo when present. Never invent a mark."""
     roots = [
         Path(__file__).resolve().parent.parent / "assets",
+        Path(__file__).resolve().parent.parent.parent / "assets",
         Path(__file__).resolve().parent.parent / "static",
         Path(__file__).resolve().parent.parent / "static" / "branding",
-        Path(__file__).resolve().parents[2] / "assets",
+        Path(__file__).resolve().parents[2] / "shafsky-frontend-main" / "public",
+        Path(__file__).resolve().parents[2] / "shafsky-frontend-main" / "src" / "assets",
+        Path("app/assets"),
+        Path("static/branding"),
+        Path("public"),
     ]
     names = (
         "shafsky-logo.png",
         "shafsky-aviation-logo.png",
         "shafsky.png",
         "logo.png",
+        "logo_cropped.png",
+        "shafsky aviation services logo.png",
         "logo.svg",
     )
     for root in roots:
@@ -210,25 +217,29 @@ def generate_tax_invoice_pdf(data: Dict[str, Any]) -> bytes:
             from reportlab.lib.utils import ImageReader
             img = ImageReader(str(logo_file))
             iw, ih = img.getSize()
-            max_h, max_w = 52, 120
+            max_h, max_w = 60, 110
             scale = min(max_w / float(iw or 1), max_h / float(ih or 1))
             dw, dh = iw * scale, ih * scale
-            c.drawImage(img, 40, page_h - 28 - dh, width=dw, height=dh, mask="auto", preserveAspectRatio=True)
-            title_x = 40 + dw + 16
+            c.drawImage(img, 40, page_h - 48 - (dh / 2), width=dw, height=dh, mask="auto", preserveAspectRatio=True)
+            title_x = 40 + dw + 14
         except Exception:
             title_x = 40
     c.setFillColor(white)
-    c.setFont("Helvetica-Bold", 16 if title_x > 40 else 18)
-    c.drawString(title_x, page_h - 50, "SHAFSKY AVIATION SERVICES")
-    c.setFont("Helvetica", 9)
+    c.setFont("Helvetica-Bold", 14 if title_x > 40 else 18)
+    c.drawString(title_x, page_h - 44, "SHAFSKY AVIATION SERVICES")
+    c.setFont("Helvetica", 8.5)
     c.setFillColor(Color(0.85, 0.95, 0.95))
-    c.drawString(title_x, page_h - 72, "Private Aviation · Meet & Greet · Ground Services")
+    c.drawString(title_x, page_h - 60, "Private Aviation · Meet & Greet · Ground Services")
+    c.setFont("Helvetica", 8)
+    c.drawString(title_x, page_h - 73, "ops@shafskyaviation.com · +91 9599087959")
     c.setFillColor(white)
-    c.setFont("Helvetica-Bold", 18)
-    c.drawRightString(page_w - 40, page_h - 50, "TAX INVOICE")
-    c.setFont("Helvetica", 9)
+    c.setFont("Helvetica-Bold", 16)
+    c.drawRightString(page_w - 40, page_h - 44, "TAX INVOICE")
+    c.setFont("Helvetica", 8.5)
     c.setFillColor(Color(0.85, 0.95, 0.95))
-    c.drawRightString(page_w - 40, page_h - 72, f"Ref: {_safe_text(data.get('booking_ref'), 'N/A')}")
+    c.drawRightString(page_w - 40, page_h - 60, f"Ref: {_safe_text(data.get('booking_ref'), 'N/A')}")
+    c.setFont("Helvetica", 8)
+    c.drawRightString(page_w - 40, page_h - 73, f"Invoice: {_safe_text(data.get('invoice_number'), 'N/A')}")
 
     y = page_h - 130
     c.setFillColor(MUTED)

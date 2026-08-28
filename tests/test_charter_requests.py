@@ -193,8 +193,9 @@ def test_admin_list_and_update_charter_requests(admin_token):
     assert list_res.status_code == 200
     list_body = list_res.json()
     assert list_body["success"] is True
-    assert list_body["total"] >= 1
-    found_item = next((item for item in list_body["data"] if item["request_reference"] == ref), None)
+    items = list_body.get("data", {}).get("items") or list_body.get("data") or []
+    assert list_body.get("data", {}).get("total", list_body.get("total", len(items))) >= 1
+    found_item = next((item for item in items if item["request_reference"] == ref), None)
     assert found_item is not None
     req_id = found_item["id"]
 

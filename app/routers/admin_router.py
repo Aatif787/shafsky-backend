@@ -36,7 +36,10 @@ async def get_admin_dashboard(
             "dailyRevenueINR": daily["dailyRevenueINR"],
             "todayBookings": daily["totalBookings"],
             "completedToday": daily["completedBookings"],
-            "engine": "FastAPI Enterprise Admin Engine"
+            "confirmedToday": daily["confirmedBookings"],
+            "pendingBookings": daily["pendingBookings"],
+            "pendingPayments": daily["pendingPayments"],
+            "engine": "FastAPI Enterprise Admin Engine",
         }
     )
 

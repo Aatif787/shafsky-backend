@@ -145,7 +145,12 @@ class Booking(Base):
     status: Mapped[BookingStatus] = mapped_column(Enum(BookingStatus), default=BookingStatus.PENDING, nullable=False)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     notes: Mapped[str] = mapped_column(Text, nullable=True)
-    deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    deleted_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("user_auth.id", ondelete="SET NULL"), nullable=True
+    )
+    deleted_by_email: Mapped[Optional[str]] = mapped_column(String, index=True, nullable=True)
+    deleted_by_role: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 

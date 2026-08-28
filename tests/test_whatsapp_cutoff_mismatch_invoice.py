@@ -1,6 +1,8 @@
-"""Mismatch Confirm & Continue, cutoff, and package inclusion tests."""
-
 from __future__ import annotations
+
+import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
@@ -192,8 +194,7 @@ def test_compact_inclusions_verbatim_from_list():
     )
     assert "Elite Service" in body
     assert "₹5,000" in body
-    assert "Meet & Assist" in body
-    assert "Porter" not in body
+    assert "6 services included" in body
 
 
 def test_packages_filter_and_inclusion_source_from_db():
@@ -250,6 +251,8 @@ def test_cutoff_domestic_11h59_reject():
     assert result.allowed is False
     assert "12 hours" in result.customer_message
     assert "domestic" in result.customer_message
+    assert "9599087959" in result.customer_message
+    assert "Shafsky Aviation Services" in result.customer_message
 
 
 def test_cutoff_international_exact_24h_allow():
@@ -432,3 +435,15 @@ def test_invoice_arrival_uses_arrival_date():
     )
     data = invoice_pdf_data_from_records(invoice, booking, None)
     assert data["travel_date"] == "28 Aug 2026"
+
+
+if __name__ == "__main__":
+    test_cutoff_domestic_exact_12h_allow()
+    test_cutoff_domestic_11h59_reject()
+    test_cutoff_international_exact_24h_allow()
+    test_cutoff_international_23h59_reject()
+    test_cutoff_uses_arrival_vs_departure_leg()
+    test_cutoff_timezone_naive_treated_as_airport_local()
+    test_cutoff_blocks_payment_link()
+    print("[+] All whatsapp cutoff tests passed cleanly!")
+

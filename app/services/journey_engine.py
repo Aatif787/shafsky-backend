@@ -40,8 +40,13 @@ class JourneyDetectionEngine:
     """
 
     # ─── Contact Details (centralized) ───
-    CONTACT_PHONE = "+91-XXXXXXXXXX"
-    CONTACT_WHATSAPP = "+91-XXXXXXXXXX"
+    CONTACT_PHONE = "+91-9599087959"
+    CONTACT_WHATSAPP = "+91-9599087959"
+
+    @classmethod
+    def _airport_notice_hours(cls, flight_type: Optional[str]) -> int:
+        from app.services.booking_cutoff import airport_min_notice_hours
+        return airport_min_notice_hours(flight_type)
 
     # ─── Airport Resolution ───
 
@@ -195,9 +200,10 @@ class JourneyDetectionEngine:
         return UrgentAssistanceInfo(
             is_urgent=True,
             message=(
-                f"Your flight departs in approximately {hours_remaining:.0f} hours. "
-                f"This service requires at least {min_notice} hours advance notice for online booking. "
-                "Please contact our 24/7 VIP Command Desk for instant assistance."
+                f"Your flight is in approximately {hours_remaining:.0f} hours. "
+                f"Airport services require at least {min_notice} hours' notice "
+                f"({'24 hours international' if min_notice >= 24 else '12 hours domestic'}). "
+                f"For urgent assistance, please call our executive on {cls.CONTACT_PHONE}."
             ),
             hours_remaining=hours_remaining,
             min_notice_required_hours=min_notice,
@@ -341,13 +347,14 @@ class JourneyDetectionEngine:
             is_bookable = True
             urgent = None
             hours_remaining = None
+            notice_hours = cls._airport_notice_hours(flight_type)
 
             if service_dt:
                 is_bookable, hours_remaining = cls.check_booking_window(
-                    aps.min_booking_notice_hours, service_dt
+                    notice_hours, service_dt
                 )
                 if not is_bookable:
-                    urgent = cls._build_urgent_assistance(hours_remaining, aps.min_booking_notice_hours)
+                    urgent = cls._build_urgent_assistance(hours_remaining, notice_hours)
                 else:
                     all_urgent = False
             else:
@@ -371,7 +378,7 @@ class JourneyDetectionEngine:
                     additional_benefits=getattr(aps, "additional_benefits", []) or [],
                     icon=svc.icon,
                     journey_type=aps.journey_type,
-                    min_booking_notice_hours=aps.min_booking_notice_hours,
+                    min_booking_notice_hours=notice_hours,
                     display_priority=aps.display_priority,
                     price=price_val,
                     currency=curr_val,
@@ -486,19 +493,20 @@ class JourneyDetectionEngine:
                 ),
             )
 
+        notice_hours = cls._airport_notice_hours(getattr(aps, "flight_type", None))
         is_bookable, hours_remaining = cls.check_booking_window(
-            aps.min_booking_notice_hours, service_dt
+            notice_hours, service_dt
         )
 
         urgent = None
         if not is_bookable:
-            urgent = cls._build_urgent_assistance(hours_remaining, aps.min_booking_notice_hours)
+            urgent = cls._build_urgent_assistance(hours_remaining, notice_hours)
 
         return BookingWindowCheckResponse(
             success=True,
             is_bookable_online=is_bookable,
             hours_remaining=hours_remaining,
-            min_notice_required_hours=aps.min_booking_notice_hours,
+            min_notice_required_hours=notice_hours,
             urgent_assistance=urgent,
         )
 
@@ -577,11 +585,13 @@ class JourneyDetectionEngine:
 
             # Check notice window
             if service_dt:
-                is_bookable, hours_rem = cls.check_booking_window(aps.min_booking_notice_hours, service_dt)
+                notice_hours = cls._airport_notice_hours(flight_type)
+                is_bookable, hours_rem = cls.check_booking_window(notice_hours, service_dt)
                 if not is_bookable:
                     is_valid = False
                     messages.append(
-                        f"Service '{aps.service.name}' requires at least {aps.min_booking_notice_hours} hours notice. "
+                        f"Airport services require at least {notice_hours} hours' notice. "
+                        f"For urgent assistance call {cls.CONTACT_PHONE}. "
                         f"(Approx {hours_rem:.0f}h remaining)"
                     )
 

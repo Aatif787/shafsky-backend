@@ -43,6 +43,18 @@ def get_required_super_admin(authorization: Optional[str] = Header(None)) -> Dic
         raise HTTPException(status_code=403, detail="Access denied. Super Admin privileges required.")
     return user
 
+RECYCLE_ADMIN_ROLES = ["SUPER_ADMIN", "ADMIN"]
+
+def get_required_recycle_admin(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    """Admin or Super Admin may move bookings to the bin and restore them."""
+    user = get_required_admin(authorization)
+    if user.get("role") not in RECYCLE_ADMIN_ROLES:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied. Only Admin or Super Admin can manage the booking recycle bin.",
+        )
+    return user
+
 def get_required_staff_or_admin(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
     user = get_required_user(authorization)
     if user.get("role") not in STAFF_OR_ADMIN_ROLES:

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import StaleDataError
-from sqlalchemy import select, or_, desc
+from sqlalchemy import select, or_, desc, func
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 
@@ -200,42 +200,42 @@ class BookingService:
                     detail="This flight time is in the past and cannot be booked."
                 )
 
-        if early_jt != "TRANSIT" and service_clock is not None:
-            from app.services.booking_cutoff import evaluate_booking_cutoff, lookup_airport_timezone
+        if service_category == "Airport Assistance" and service_clock is not None:
+            from app.services.booking_cutoff import (
+                evaluate_booking_cutoff,
+                lookup_airport_timezone,
+                airport_min_notice_hours,
+                INTERNATIONAL_MIN_HOURS,
+            )
             from app.services.service_airport_rules import derive_flight_type_from_route
-            try:
-                derived_ft = derive_flight_type_from_route(
-                    db, payload.origin_code, payload.dest_code, early_jt
-                )
-            except (ValueError, Exception):
-                derived_ft = None
-            if derived_ft in ("DOMESTIC", "INTERNATIONAL"):
-                svc_iata = service_airport or (
-                    payload.origin_code if early_jt == "DEPARTURE" else payload.dest_code
-                )
-                cutoff = evaluate_booking_cutoff(
-                    scheduled_dt=service_clock,
-                    now_utc=now if now.tzinfo else now.replace(tzinfo=timezone.utc),
-                    airport_tz_name=lookup_airport_timezone(db, svc_iata),
-                    flight_type=derived_ft,
-                )
-                if not cutoff.allowed:
-                    raise HTTPException(status_code=400, detail=cutoff.customer_message)
-            else:
-                diff_hours = (service_clock.astimezone(timezone.utc) - now_aware.astimezone(timezone.utc)).total_seconds() / 3600.0
-                if diff_hours < 6.0:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Bookings require at least 6 hours advance notice. Service time is in {round(diff_hours, 1)} hours."
-                    )
-        elif early_jt == "TRANSIT" and service_clock is not None:
             now_aware = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
-            diff_hours = (service_clock.astimezone(timezone.utc) - now_aware.astimezone(timezone.utc)).total_seconds() / 3600.0
-            if diff_hours < 6.0:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Bookings require at least 6 hours advance notice. Service time is in {round(diff_hours, 1)} hours."
+            derived_ft = None
+            if early_jt != "TRANSIT":
+                try:
+                    derived_ft = derive_flight_type_from_route(
+                        db, payload.origin_code, payload.dest_code, early_jt
+                    )
+                except (ValueError, Exception):
+                    derived_ft = None
+            if derived_ft not in ("DOMESTIC", "INTERNATIONAL"):
+                notice = airport_min_notice_hours(
+                    derived_ft
+                    or (early_meta or {}).get("flight_type")
+                    or (early_meta or {}).get("travel_type")
+                    or (early_meta or {}).get("transit_type")
                 )
+                derived_ft = "INTERNATIONAL" if notice == INTERNATIONAL_MIN_HOURS else "DOMESTIC"
+            svc_iata = service_airport or (
+                payload.origin_code if early_jt == "DEPARTURE" else payload.dest_code
+            )
+            cutoff = evaluate_booking_cutoff(
+                scheduled_dt=service_clock,
+                now_utc=now_aware,
+                airport_tz_name=lookup_airport_timezone(db, svc_iata),
+                flight_type=derived_ft,
+            )
+            if not cutoff.allowed:
+                raise HTTPException(status_code=400, detail=cutoff.customer_message)
 
         if dep_time is not None and arr_time is not None and arr_time < dep_time:
             raise HTTPException(
@@ -474,8 +474,13 @@ class BookingService:
         cls,
         db: Session,
         status: Optional[str] = None,
-        search: Optional[str] = None
-    ) -> List[Booking]:
+        search: Optional[str] = None,
+        service_category: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        page: int = 1,
+        page_size: int = 25,
+    ) -> tuple[List[Booking], int]:
         stmt = select(Booking).where(Booking.deleted_at.is_(None))
 
         if status:
@@ -485,19 +490,50 @@ class BookingService:
             except ValueError:
                 pass
 
+        if service_category and service_category.strip() and service_category.upper() != "ALL":
+            stmt = stmt.where(Booking.service_category.ilike(service_category.strip()))
+
+        if date_from:
+            try:
+                start = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
+                if start.tzinfo is None:
+                    start = start.replace(tzinfo=timezone.utc)
+                travel_ts = func.coalesce(Booking.departure_time, Booking.created_at)
+                stmt = stmt.where(travel_ts >= start)
+            except ValueError:
+                pass
+
+        if date_to:
+            try:
+                end = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
+                if end.tzinfo is None:
+                    end = end.replace(tzinfo=timezone.utc)
+                if end.hour == 0 and end.minute == 0 and end.second == 0:
+                    end = end.replace(hour=23, minute=59, second=59)
+                travel_ts = func.coalesce(Booking.departure_time, Booking.created_at)
+                stmt = stmt.where(travel_ts <= end)
+            except ValueError:
+                pass
+
         if search:
-            search_pattern = f"%{search}%"
+            search_pattern = f"%{search.strip()}%"
             stmt = stmt.where(
                 or_(
                     Booking.booking_ref.ilike(search_pattern),
                     Booking.passenger_name.ilike(search_pattern),
                     Booking.passenger_email.ilike(search_pattern),
-                    Booking.flight_num.ilike(search_pattern)
+                    Booking.passenger_phone.ilike(search_pattern),
+                    Booking.flight_num.ilike(search_pattern),
+                    Booking.origin_code.ilike(search_pattern),
+                    Booking.dest_code.ilike(search_pattern),
                 )
             )
 
-        stmt = stmt.order_by(desc(Booking.created_at))
-        return list(db.scalars(stmt).all())
+        total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+        page = max(1, int(page or 1))
+        page_size = min(100, max(1, int(page_size or 25)))
+        stmt = stmt.order_by(desc(Booking.created_at)).offset((page - 1) * page_size).limit(page_size)
+        return list(db.scalars(stmt).all()), int(total)
 
     @classmethod
     def admin_update_status(

@@ -15,8 +15,11 @@ from app.services.booking_service import BookingService
 from app.security.dependencies import (
     get_optional_user,
     get_required_user,
-    get_required_admin
+    get_required_admin,
+    get_required_recycle_admin,
+    get_required_super_admin,
 )
+from app.services.booking_recycle_service import BookingRecycleService
 
 router = APIRouter(prefix="/api/bookings", tags=["Booking Engine"])
 
@@ -146,15 +149,119 @@ async def get_my_bookings(
 async def admin_list_bookings(
     status: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
+    service_category: Optional[str] = Query(None),
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100, alias="pageSize"),
     db: Session = Depends(get_db),
     _admin_context: Dict[str, Any] = Depends(get_required_admin)
 ):
-    bookings = BookingService.admin_list_bookings(db, status=status, search=search)
+    bookings, total = BookingService.admin_list_bookings(
+        db,
+        status=status,
+        search=search,
+        service_category=service_category,
+        date_from=date_from,
+        date_to=date_to,
+        page=page,
+        page_size=page_size,
+    )
     formatted = [BookingService.format_booking_dict(b) for b in bookings]
+    total_pages = max(1, (total + page_size - 1) // page_size) if total else 1
     return BookingApiResponse(
         success=True,
-        data=formatted
+        data={
+            "items": formatted,
+            "total": total,
+            "page": page,
+            "pageSize": page_size,
+            "totalPages": total_pages,
+        },
     )
+
+@router.get("/admin/bin", response_model=BookingApiResponse)
+async def admin_list_recycle_bin(
+    search: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100, alias="pageSize"),
+    db: Session = Depends(get_db),
+    admin_context: Dict[str, Any] = Depends(get_required_recycle_admin),
+):
+    bookings, total = BookingRecycleService.list_bin(
+        db, search=search, page=page, page_size=page_size
+    )
+    is_super = admin_context.get("role") == "SUPER_ADMIN"
+    formatted = [
+        BookingRecycleService.format_bin_item(b, viewer_is_super_admin=is_super)
+        for b in bookings
+    ]
+    total_pages = max(1, (total + page_size - 1) // page_size) if total else 1
+    return BookingApiResponse(
+        success=True,
+        data={
+            "items": formatted,
+            "total": total,
+            "page": page,
+            "pageSize": page_size,
+            "totalPages": total_pages,
+        },
+    )
+
+@router.get("/admin/deletion-log", response_model=BookingApiResponse)
+async def admin_deletion_log(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100, alias="pageSize"),
+    db: Session = Depends(get_db),
+    _super_admin: Dict[str, Any] = Depends(get_required_super_admin),
+):
+    rows, total = BookingRecycleService.list_deletion_log(db, page=page, page_size=page_size)
+    formatted = [BookingRecycleService.format_deletion_log(row) for row in rows]
+    total_pages = max(1, (total + page_size - 1) // page_size) if total else 1
+    return BookingApiResponse(
+        success=True,
+        data={
+            "items": formatted,
+            "total": total,
+            "page": page,
+            "pageSize": page_size,
+            "totalPages": total_pages,
+        },
+    )
+
+@router.post("/admin/{identifier}/recycle", response_model=BookingApiResponse)
+async def admin_recycle_booking(
+    identifier: str,
+    db: Session = Depends(get_db),
+    admin_context: Dict[str, Any] = Depends(get_required_recycle_admin),
+):
+    booking = BookingRecycleService.recycle_booking(db, identifier, admin_context)
+    is_super = admin_context.get("role") == "SUPER_ADMIN"
+    return BookingApiResponse(
+        success=True,
+        data=BookingRecycleService.format_bin_item(booking, viewer_is_super_admin=is_super),
+    )
+
+@router.post("/admin/{identifier}/restore", response_model=BookingApiResponse)
+async def admin_restore_booking(
+    identifier: str,
+    db: Session = Depends(get_db),
+    admin_context: Dict[str, Any] = Depends(get_required_recycle_admin),
+):
+    booking = BookingRecycleService.restore_booking(db, identifier, admin_context)
+    return BookingApiResponse(
+        success=True,
+        data=BookingService.format_booking_dict(booking),
+    )
+
+@router.delete("/admin/{identifier}/purge", response_model=BookingApiResponse)
+async def admin_purge_booking(
+    identifier: str,
+    db: Session = Depends(get_db),
+    super_admin: Dict[str, Any] = Depends(get_required_super_admin),
+):
+    result = BookingRecycleService.purge_booking(db, identifier, super_admin)
+    return BookingApiResponse(success=True, data=result)
 
 @router.get("/{identifier}", response_model=BookingApiResponse)
 async def get_booking_details(

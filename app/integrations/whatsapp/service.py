@@ -208,7 +208,7 @@ class WhatsAppBookingStateMachine:
             if text_lower in CANCEL_COMMANDS or input_id == "btn_cancel":
                 cls._transition_state(db, conv, "CANCELLED")
                 msg = (
-                    "*Shafsky Aviation Concierge*\n\n"
+                    "*Shafsky Aviation Services*\n\n"
                     "Your booking process has been cancelled.\n\n"
                     "Type *Hi* anytime to begin a new reservation."
                 )
@@ -218,13 +218,14 @@ class WhatsAppBookingStateMachine:
             HELP_COMMANDS = {"help", "support", "info"}
             if text_lower in HELP_COMMANDS and conv.current_state not in ("WAITING_PAYMENT", "PENDING_PAYMENT"):
                 help_msg = (
-                    "*Shafsky Aviation Concierge*\n\n"
+                    "*Shafsky Aviation Services*\n\n"
                     f"{wa_copy.SESSION_TIMEOUT_HINT}\n\n"
                     "• Type *Hi* to restart your booking.\n"
                     "• Type *BACK* to return to the previous step.\n"
                     "• Type *CANCEL* to cancel your current booking.\n"
                     "• Reply with a number to choose a listed service.\n\n"
-                    "For a representative, call *+91-9599087959*."
+                    "Airport services: 12 hours' notice for domestic, 24 hours for international.\n"
+                    "For urgent assistance, call our executive on *+91-9599087959*."
                 )
                 wa_delivery.send_text(conv.phone_number, help_msg, client=whatsapp_client)
                 return {"status": "help_sent", "state": conv.current_state}
@@ -248,18 +249,19 @@ class WhatsAppBookingStateMachine:
                 result = cls._send_category_menu(db, conv)
                 if not result.get("success") and result.get("status") != "category_menu_sent":
                     logger.warning(f"[WhatsApp Session] Failed to send category menu for {conv.phone_number}")
-                    cls._send_fallback_message(conv.phone_number, "Welcome to Shafsky Aviation. Please select a service category.")
+                    cls._send_fallback_message(conv.phone_number, "Welcome to Shafsky Aviation Services. Please select a service category.")
                 return result
 
             if text_lower in HELP_COMMANDS:
                 help_msg = (
-                    "*Shafsky Aviation Concierge*\n\n"
+                    "*Shafsky Aviation Services*\n\n"
                     f"{wa_copy.SESSION_TIMEOUT_HINT}\n\n"
                     "• Type *Hi* to restart your booking.\n"
                     "• Type *BACK* to return to the previous step.\n"
                     "• Type *CANCEL* to cancel your current booking.\n"
                     "• Reply with a number to choose a listed service.\n\n"
-                    "For a representative, call *+91-9599087959*."
+                    "Airport services: 12 hours' notice for domestic, 24 hours for international.\n"
+                    "For urgent assistance, call our executive on *+91-9599087959*."
                 )
                 wa_delivery.send_text(conv.phone_number, help_msg, client=whatsapp_client)
                 return {"status": "help_sent", "state": conv.current_state}
@@ -509,7 +511,7 @@ class WhatsAppBookingStateMachine:
             body_text=body_text,
             button_title="View Options",
             sections=sections,
-            header_text="Shafsky Aviation",
+            header_text=wa_copy.BRAND,
             fallback_text=wa_copy.category_menu_fallback(prefix_notice),
             client=whatsapp_client,
         )
@@ -596,7 +598,7 @@ class WhatsAppBookingStateMachine:
             buttons=buttons,
             header_text="Journey Type",
             fallback_text=(
-                "*Shafsky Aviation Concierge*\n\n"
+                "*Shafsky Aviation Services*\n\n"
                 "Please select your journey type by replying with a number:\n\n"
                 "1️⃣ Arrival\n"
                 "2️⃣ Departure\n"
@@ -622,7 +624,7 @@ class WhatsAppBookingStateMachine:
         if not jt:
             whatsapp_client.send_text_message(
                 conv.phone_number,
-                "✨ *Shafsky Aviation Concierge*\n\nPlease select a valid journey type:\n\n1️⃣ Arrival\n2️⃣ Departure\n3️⃣ Transit"
+                "✨ *Shafsky Aviation Services*\n\nPlease select a valid journey type:\n\n1️⃣ Arrival\n2️⃣ Departure\n3️⃣ Transit"
             )
             return {"status": "invalid_journey_type", "success": False}
 
@@ -656,7 +658,7 @@ class WhatsAppBookingStateMachine:
             buttons=buttons,
             header_text=f"{journey_name} Travel Type",
             fallback_text=(
-                f"*Shafsky Aviation Concierge*\n\n"
+                f"*Shafsky Aviation Services*\n\n"
                 f"*{journey_name}* selected.\n\n"
                 "Please select your travel type by replying with a number:\n\n"
                 "1️⃣ Domestic\n"
@@ -680,7 +682,7 @@ class WhatsAppBookingStateMachine:
         if not tt:
             whatsapp_client.send_text_message(
                 conv.phone_number,
-                "✨ *Shafsky Aviation Concierge*\n\nPlease select a valid travel type:\n\n1️⃣ Domestic\n2️⃣ International"
+                "✨ *Shafsky Aviation Services*\n\nPlease select a valid travel type:\n\n1️⃣ Domestic\n2️⃣ International"
             )
             return {"status": "invalid_travel_type", "success": False}
 
@@ -695,7 +697,7 @@ class WhatsAppBookingStateMachine:
         cls._transition_state(db, conv, "AIRPORT_SELECTION")
 
         msg = (
-            f"✨ *Shafsky Aviation Concierge*\n\n"
+            f"✨ *Shafsky Aviation Services*\n\n"
             f"*{tt.title()}* selected.\n\n"
             "Please enter your Airport Name, City, or IATA Code (e.g., *Delhi*, *DEL*, *Lucknow*):"
         )
@@ -728,7 +730,7 @@ class WhatsAppBookingStateMachine:
             sections=sections,
             header_text="Transit Options",
             fallback_text=(
-                "*Shafsky Aviation Concierge*\n\n"
+                "*Shafsky Aviation Services*\n\n"
                 "Please select your transit type by replying with a number:\n\n"
                 "1️⃣ Domestic → Domestic\n"
                 "2️⃣ Domestic → International\n"
@@ -757,7 +759,7 @@ class WhatsAppBookingStateMachine:
         if not tt:
             whatsapp_client.send_text_message(
                 conv.phone_number,
-                "✨ *Shafsky Aviation Concierge*\n\nPlease select a valid transit type (1-4):\n\n1️⃣ Domestic → Domestic\n2️⃣ Domestic → International\n3️⃣ International → Domestic\n4️⃣ International → International"
+                "✨ *Shafsky Aviation Services*\n\nPlease select a valid transit type (1-4):\n\n1️⃣ Domestic → Domestic\n2️⃣ Domestic → International\n3️⃣ International → Domestic\n4️⃣ International → International"
             )
             return {"status": "invalid_transit_type", "success": False}
 
@@ -773,7 +775,7 @@ class WhatsAppBookingStateMachine:
         cls._transition_state(db, conv, "AIRPORT_SELECTION")
 
         msg = (
-            f"✨ *Shafsky Aviation Concierge*\n\n"
+            f"✨ *Shafsky Aviation Services*\n\n"
             f"Transit Type: *{display_label}*\n\n"
             "Please enter your Airport Name, City, or IATA Code (e.g., *Delhi*, *DEL*, *Mumbai*):"
         )
@@ -790,7 +792,7 @@ class WhatsAppBookingStateMachine:
         query_clean = query.strip()
         logger.info(f"[WhatsApp Routing] state={conv.current_state} input={query_clean}")
         if not query_clean:
-            whatsapp_client.send_text_message(conv.phone_number, "✨ *Shafsky Aviation Concierge*\n\nPlease enter an Airport Name, City, or IATA Code (e.g. Delhi, DEL, Lucknow).")
+            whatsapp_client.send_text_message(conv.phone_number, "✨ *Shafsky Aviation Services*\n\nPlease enter an Airport Name, City, or IATA Code (e.g. Delhi, DEL, Lucknow).")
             return {"status": "empty_airport_query", "success": False}
 
         # Search exclusively in database SupportedAirport table where is_supported=True and is_active=True
@@ -810,7 +812,7 @@ class WhatsAppBookingStateMachine:
             airport = None
 
         if not airport:
-            msg = "✨ *Shafsky Aviation Concierge*\n\nWe regret to inform you that Airport Services are currently unavailable at this airport. Please enter another airport, or type *BACK* to return to the previous menu."
+            msg = "✨ *Shafsky Aviation Services*\n\nWe regret to inform you that Airport Services are currently unavailable at this airport. Please enter another airport, or type *BACK* to return to the previous menu."
             whatsapp_client.send_text_message(conv.phone_number, msg)
             return {"status": "unsupported_airport", "success": False}
 
@@ -1029,7 +1031,7 @@ class WhatsAppBookingStateMachine:
 
         if not selected_term:
             fallback = (
-                "✨ *Shafsky Aviation Concierge*\n\n"
+                "✨ *Shafsky Aviation Services*\n\n"
                 "Please select a valid terminal:\n\n"
             )
             for i, term in enumerate(terminals, 1):
@@ -1176,7 +1178,7 @@ class WhatsAppBookingStateMachine:
     def _send_route_classification_error(cls, conv: WhatsAppConversation, message: str) -> Dict[str, Any]:
         wa_delivery.send_text(
             conv.phone_number,
-            f"*Shafsky Aviation Concierge*\n\n{message}",
+            f"*Shafsky Aviation Services*\n\n{message}",
             client=whatsapp_client,
         )
         return {"status": "route_classification_error", "success": False, "error": message}
@@ -1202,7 +1204,7 @@ class WhatsAppBookingStateMachine:
         if not airport:
             wa_delivery.send_text(
                 conv.phone_number,
-                "*Shafsky Aviation Concierge*\n\nWe regret to inform you that Airport Services are currently unavailable at this airport. Please type *BACK* to select a different airport.",
+                "*Shafsky Aviation Services*\n\nWe regret to inform you that Airport Services are currently unavailable at this airport. Please type *BACK* to select a different airport.",
                 client=whatsapp_client,
             )
             return {"status": "unsupported_airport"}
@@ -1284,12 +1286,14 @@ class WhatsAppBookingStateMachine:
             terminal=selected_terminal,
         )
 
+        inheritance_info = wa_copy.compute_package_inheritance(available_services)
         list_rows = []
-        for svc in available_services[:10]:
+        for i, svc in enumerate(available_services[:10]):
+            info = inheritance_info[i] if i < len(inheritance_info) else None
             list_rows.append({
                 "id": f"svc_id_{svc['id']}",
                 "title": wa_copy.list_row_title(svc["title"], svc["price"]),
-                "description": wa_copy.list_row_description(svc["price"], svc.get("features"))[:72]
+                "description": wa_copy.list_row_description(svc["price"], svc.get("features"), info)[:72]
             })
 
         sections = [{"title": "Select Package", "rows": list_rows}]
@@ -1624,7 +1628,15 @@ class WhatsAppBookingStateMachine:
         # Progression based on category
         if category_name == "Airport Services":
             cls._transition_state(db, conv, "FLIGHT_INPUT")
-            msg = f"Selected Service: *{svc_title}*\n\nPlease enter your Flight Number (e.g., *EK501*, *AI2424*, *6E224*):"
+            inclusions_block = wa_copy.selected_package_details_text(
+                selected_svc, all_services=stored_menu or available_services or [selected_svc]
+            )
+            detail_part = f"\n\n{inclusions_block}" if inclusions_block else ""
+            msg = (
+                f"Selected: *{svc_title}* ({wa_copy.format_inr(price)}/person)"
+                f"{detail_part}\n\n"
+                "Please enter your Flight Number (e.g., *EK501*, *AI2424*, *6E224*):"
+            )
             whatsapp_client.send_text_message(conv.phone_number, msg)
             return {"status": "flight_prompt_sent", "success": True}
 
@@ -1784,6 +1796,17 @@ class WhatsAppBookingStateMachine:
                     new_meta["flight_type"] = derived_tt
             except ValueError:
                 pass
+
+        if pending.get("aligned_service_id"):
+            conv.selected_service_id = str(pending["aligned_service_id"])
+            if pending.get("aligned_service_name"):
+                conv.selected_service_name = str(pending["aligned_service_name"])
+            if pending.get("aligned_unit_price") is not None:
+                unit_p = float(pending["aligned_unit_price"])
+                new_meta["unit_price"] = unit_p
+                new_meta["base_price"] = unit_p
+                passengers = max(1, conv.passenger_count or 1)
+                conv.total_amount = unit_p * passengers
 
         conv.flight_num = pending.get("flight_number")
         conv.flight_details_json = new_meta
@@ -1956,6 +1979,57 @@ class WhatsAppBookingStateMachine:
             return {"status": "flight_incomplete", "success": False, "reason": as_svc.REASON_MALFORMED_RESPONSE}
 
         pending = cls._pending_flight_blob(flight, val_res)
+        dep_iata = dep.get("iata")
+        arr_iata = arr.get("iata")
+
+        # Smart Travel Type Auto-Alignment
+        derived_tt = None
+        if jt != "TRANSIT":
+            try:
+                from app.services.service_airport_rules import derive_flight_type_from_route
+                derived_tt = derive_flight_type_from_route(db, dep_iata, arr_iata, jt)
+            except Exception:
+                derived_tt = None
+
+        travel_type_switched = bool(derived_tt and derived_tt != tt)
+        effective_tt = derived_tt if derived_tt else tt
+
+        aligned_svc = None
+        if travel_type_switched and conv.selected_airport_iata:
+            airport_obj = db.execute(
+                select(SupportedAirport).where(SupportedAirport.iata_code == conv.selected_airport_iata)
+            ).scalar_one_or_none()
+            if airport_obj:
+                intl_or_dom_flight_types = [effective_tt, "ALL"]
+                matching_packages = cls._get_authoritative_airport_packages(
+                    db, airport_obj.id, jt, intl_or_dom_flight_types, terminal=terminal
+                )
+                current_svc_name = conv.selected_service_name or ""
+                current_tier = wa_copy._extract_tier_name(current_svc_name).lower()
+                for aps, s in matching_packages:
+                    s_name = (s.name or "").lower()
+                    if current_tier and current_tier in s_name:
+                        aligned_svc = (aps, s)
+                        break
+                if not aligned_svc and matching_packages:
+                    aligned_svc = matching_packages[0]
+
+        if aligned_svc:
+            aligned_aps, aligned_s = aligned_svc
+            aligned_price = float(aligned_aps.price)
+            aligned_name = aligned_s.name
+            pending["aligned_service_id"] = str(aligned_s.id)
+            pending["aligned_service_name"] = aligned_name
+            pending["aligned_unit_price"] = aligned_price
+            pending["aligned_travel_type"] = effective_tt
+            pending["travel_type_switched"] = True
+            pending["prior_travel_type"] = tt
+            pending["prior_price"] = unit_price
+        elif travel_type_switched:
+            pending["aligned_travel_type"] = effective_tt
+            pending["travel_type_switched"] = True
+            pending["prior_travel_type"] = tt
+
         new_meta = dict(old_meta)
         for stale_key in (
             "origin_iata", "destination_iata", "origin_city", "destination_city",
@@ -1964,14 +2038,17 @@ class WhatsAppBookingStateMachine:
         ):
             new_meta.pop(stale_key, None)
         new_meta["journey_type"] = jt
-        new_meta["travel_type"] = tt
-        new_meta["flight_type"] = tt
+        new_meta["travel_type"] = effective_tt
+        new_meta["flight_type"] = effective_tt
         new_meta["terminal"] = terminal
         new_meta["verification_status"] = "pending_confirmation"
         new_meta["status"] = "awaiting_flight_confirmation"
         new_meta["_pending_verified_flight"] = pending
         new_meta.pop("_pending_mismatch_flight", None)
-        if unit_price is not None:
+        if pending.get("aligned_unit_price") is not None:
+            new_meta["unit_price"] = pending["aligned_unit_price"]
+            new_meta["base_price"] = pending["aligned_unit_price"]
+        elif unit_price is not None:
             new_meta["unit_price"] = unit_price
             new_meta["base_price"] = unit_price
         conv.flight_details_json = new_meta
@@ -1984,13 +2061,33 @@ class WhatsAppBookingStateMachine:
             selected_airport_name=conv.selected_airport_name,
             journey_type=jt,
         )
-        body_text = f"{verified_body}\n\nPlease confirm your flight details."
 
-        buttons = [
-            {"id": "btn_confirm_flight", "title": "Confirm Flight"},
-            {"id": "btn_reenter_flight", "title": "Re-enter Flight"},
-            {"id": "btn_change_airport", "title": "Change Airport"},
-        ]
+        aligned_info = ""
+        if travel_type_switched:
+            if pending.get("aligned_service_name"):
+                p_str = wa_copy.format_inr(pending.get("aligned_unit_price"))
+                aligned_info = (
+                    f"\n\nℹ️ *Package aligned to {effective_tt.title()}:*\n"
+                    f"• {pending.get('aligned_service_name')} — {p_str}/person"
+                )
+            else:
+                aligned_info = f"\n\nℹ️ *Flight journey updated to {effective_tt.title()} {jt.title()}.*"
+
+        body_text = f"{verified_body}{aligned_info}\n\nPlease confirm your flight details to proceed."
+
+        if travel_type_switched:
+            buttons = [
+                {"id": "btn_confirm_flight", "title": "Confirm & Proceed"},
+                {"id": "btn_change_package", "title": "Change Package"},
+                {"id": "btn_reenter_flight", "title": "Re-enter Flight"},
+            ]
+        else:
+            buttons = [
+                {"id": "btn_confirm_flight", "title": "Confirm Flight"},
+                {"id": "btn_reenter_flight", "title": "Re-enter Flight"},
+                {"id": "btn_change_airport", "title": "Change Airport"},
+            ]
+
         res = whatsapp_client.send_interactive_buttons(
             to_phone=conv.phone_number,
             body_text=body_text,
@@ -1999,9 +2096,9 @@ class WhatsAppBookingStateMachine:
         )
         if not res.get("success"):
             fallback_text = (
-                f"{verified_body}\n\n"
-                "Reply *Confirm* to proceed, *Re-enter* to change flight number, "
-                "or *Change Airport*."
+                f"{verified_body}{aligned_info}\n\n"
+                "Reply *Confirm* to proceed, *Change Package* to select another package, "
+                "or *Re-enter* to change flight number."
             )
             whatsapp_client.send_text_message(conv.phone_number, fallback_text)
 
@@ -2015,8 +2112,20 @@ class WhatsAppBookingStateMachine:
         if text_u in ("BTN_CHANGE_AIRPORT", "CHANGE AIRPORT", "CHANGE_AIRPORT") or "CHANGE AIRPORT" in text_u:
             return cls._prompt_change_airport_from_flight(db, conv)
 
+        if text_u in ("BTN_CHANGE_PACKAGE", "CHANGE PACKAGE", "CHANGE_PACKAGE", "PACKAGES", "CHOOSE PACKAGE", "VIEW PACKAGES"):
+            meta = dict(conv.flight_details_json) if isinstance(conv.flight_details_json, dict) else {}
+            pending = meta.get("_pending_verified_flight") if isinstance(meta, dict) else {}
+            if isinstance(pending, dict) and pending.get("aligned_travel_type"):
+                meta["travel_type"] = pending["aligned_travel_type"]
+                meta["flight_type"] = pending["aligned_travel_type"]
+                conv.flight_details_json = meta
+                flag_modified(conv, "flight_details_json")
+                db.commit()
+            cls._transition_state(db, conv, "SERVICE_SELECTION")
+            return cls._send_airport_services_menu(db, conv)
+
         if "RE-ENTER" in text_u or "REENTER" in text_u or text_u == "BTN_REENTER_FLIGHT" or (
-            "CHANGE" in text_u and "AIRPORT" not in text_u and "CONFIRM" not in text_u
+            "CHANGE" in text_u and "AIRPORT" not in text_u and "PACKAGE" not in text_u and "CONFIRM" not in text_u
         ) or text_u == "NO":
             conv.flight_num = None
             meta = dict(conv.flight_details_json) if isinstance(conv.flight_details_json, dict) else {}
@@ -2029,7 +2138,7 @@ class WhatsAppBookingStateMachine:
             whatsapp_client.send_text_message(conv.phone_number, "Please enter your flight number (e.g., *EK501*, *AI2424*, *6E224*):")
             return {"status": "reprompt_flight", "success": True}
 
-        if "CONFIRM" in text_u or "YES" in text_u or text_u == "1" or text_u == "BTN_CONFIRM_FLIGHT":
+        if "CONFIRM" in text_u or "YES" in text_u or text_u == "1" or text_u == "BTN_CONFIRM_FLIGHT" or "PROCEED" in text_u:
             meta = conv.flight_details_json if isinstance(conv.flight_details_json, dict) else {}
             pending = meta.get("_pending_verified_flight") if isinstance(meta, dict) else None
             if not isinstance(pending, dict) or meta.get("verification_status") != "pending_confirmation":
@@ -2050,7 +2159,7 @@ class WhatsAppBookingStateMachine:
             whatsapp_client.send_text_message(conv.phone_number, msg)
             return {"status": "date_prompt_sent", "success": True}
 
-        whatsapp_client.send_text_message(conv.phone_number, "Please select *Confirm Flight*, *Re-enter Flight*, or *Change Airport*.")
+        whatsapp_client.send_text_message(conv.phone_number, "Please select *Confirm & Proceed*, *Change Package*, or *Re-enter Flight*.")
         return {"status": "invalid_flight_confirmation", "success": False}
 
     # ── 4. DYNAMIC DETAILS COLLECTION (DATE, PASSENGERS, CUSTOMER DETAILS) ──
@@ -2073,6 +2182,71 @@ class WhatsAppBookingStateMachine:
             return ZoneInfo(tz_name)
         except Exception:
             return timezone(timedelta(hours=5, minutes=30))
+
+    @classmethod
+    def _align_scheduled_datetimes_to_date(
+        cls,
+        metadata: Dict[str, Any],
+        travel_date: date,
+        tz: timezone,
+    ) -> Dict[str, Any]:
+        """
+        Authoritatively aligns API-derived departure_scheduled and arrival_scheduled
+        timestamps to the customer's selected travel date, preserving exact flight
+        operating times and overnight flight offsets.
+        """
+        from app.services.booking_cutoff import parse_scheduled_datetime
+
+        new_meta = dict(metadata)
+        new_meta["travel_date"] = travel_date.isoformat()
+
+        dep_raw = new_meta.get("departure_scheduled")
+        arr_raw = new_meta.get("arrival_scheduled")
+        dep_dt = parse_scheduled_datetime(dep_raw, tz)
+        arr_dt = parse_scheduled_datetime(arr_raw, tz)
+
+        if dep_dt:
+            aligned_dep = dep_dt.replace(
+                year=travel_date.year,
+                month=travel_date.month,
+                day=travel_date.day,
+            )
+            new_meta["departure_scheduled"] = aligned_dep.isoformat()
+
+            if arr_dt:
+                day_offset = max(0, (arr_dt.date() - dep_dt.date()).days)
+                target_arr_date = travel_date + timedelta(days=day_offset)
+                aligned_arr = arr_dt.replace(
+                    year=target_arr_date.year,
+                    month=target_arr_date.month,
+                    day=target_arr_date.day,
+                )
+                new_meta["arrival_scheduled"] = aligned_arr.isoformat()
+        elif arr_dt:
+            aligned_arr = arr_dt.replace(
+                year=travel_date.year,
+                month=travel_date.month,
+                day=travel_date.day,
+            )
+            new_meta["arrival_scheduled"] = aligned_arr.isoformat()
+        elif new_meta.get("flight_time") or new_meta.get("service_time"):
+            time_str = new_meta.get("flight_time") or new_meta.get("service_time")
+            try:
+                parts = [int(p) for p in str(time_str).split(":")[:2]]
+                dt_constructed = datetime(
+                    travel_date.year,
+                    travel_date.month,
+                    travel_date.day,
+                    parts[0],
+                    parts[1],
+                    tzinfo=tz,
+                )
+                new_meta["departure_scheduled"] = dt_constructed.isoformat()
+                new_meta["arrival_scheduled"] = (dt_constructed + timedelta(hours=2)).isoformat()
+            except Exception:
+                pass
+
+        return new_meta
 
     @classmethod
     def _validate_whatsapp_date(
@@ -2139,27 +2313,53 @@ class WhatsAppBookingStateMachine:
             )
             return False, None, error_msg, "past_date_rejected"
 
-        # 4. If selected date is today -> Validate against minimum booking window / cutoff rule
-        if parsed_date == today_in_tz:
-            metadata = conv.flight_details_json if isinstance(conv.flight_details_json, dict) else {}
-            service_time_str = metadata.get("flight_time") or metadata.get("service_time")
-            if service_time_str:
-                try:
-                    time_parts = [int(p) for p in str(service_time_str).split(":")[:2]]
-                    scheduled_dt = datetime(
-                        parsed_date.year, parsed_date.month, parsed_date.day,
-                        time_parts[0], time_parts[1],
-                        tzinfo=service_tz
-                    )
-                    # Minimum 4 hours lead time required for same-day scheduled services
-                    if scheduled_dt <= now_in_tz or (scheduled_dt - now_in_tz).total_seconds() < 4 * 3600:
-                        error_msg = (
-                            "❌ This booking is too close to the scheduled time.\n"
-                            "Please choose a later available time or another date."
-                        )
-                        return False, None, error_msg, "cutoff_violation"
-                except Exception:
-                    pass
+        # 4. Airport services: 12h domestic / 24h international when a service clock is known
+        metadata = conv.flight_details_json if isinstance(conv.flight_details_json, dict) else {}
+        service_time_str = metadata.get("flight_time") or metadata.get("service_time")
+        dep_raw = metadata.get("departure_scheduled")
+        arr_raw = metadata.get("arrival_scheduled")
+
+        from app.services.booking_cutoff import (
+            airport_min_notice_hours,
+            parse_scheduled_datetime,
+            EXECUTIVE_PHONE,
+            WHATSAPP_BRAND,
+        )
+        required = airport_min_notice_hours(
+            metadata.get("travel_type") or metadata.get("flight_type") or metadata.get("transit_type")
+        )
+        kind = "international" if required >= 24 else "domestic"
+
+        scheduled_dt = None
+        if service_time_str:
+            try:
+                time_parts = [int(p) for p in str(service_time_str).split(":")[:2]]
+                scheduled_dt = datetime(
+                    parsed_date.year, parsed_date.month, parsed_date.day,
+                    time_parts[0], time_parts[1],
+                    tzinfo=service_tz
+                )
+            except Exception:
+                pass
+        elif dep_raw or arr_raw:
+            raw_sched = dep_raw or arr_raw
+            parsed_sched = parse_scheduled_datetime(raw_sched, service_tz)
+            if parsed_sched:
+                scheduled_dt = parsed_sched.replace(
+                    year=parsed_date.year,
+                    month=parsed_date.month,
+                    day=parsed_date.day,
+                )
+
+        if scheduled_dt is not None:
+            if scheduled_dt <= now_in_tz or (scheduled_dt - now_in_tz).total_seconds() < required * 3600:
+                error_msg = (
+                    f"❌ Airport services need at least {required} hours' notice "
+                    f"for {kind} flights.\n\n"
+                    f"Need this urgently? Please call our executive on *{EXECUTIVE_PHONE}*.\n\n"
+                    f"{WHATSAPP_BRAND}"
+                )
+                return False, None, error_msg, "cutoff_violation"
 
         # 5. Valid date (tomorrow or later, or today with valid notice)
         return True, parsed_date, None, "valid_date"
@@ -2174,6 +2374,22 @@ class WhatsAppBookingStateMachine:
 
         date_formatted = parsed_date.strftime("%d %B %Y")
         conv.booking_date = date_formatted
+
+        # Align departure_scheduled and arrival_scheduled to chosen date
+        meta = dict(conv.flight_details_json) if isinstance(conv.flight_details_json, dict) else {}
+        service_tz = cls._get_service_timezone(
+            db.scalar(
+                select(SupportedAirport.timezone).where(
+                    SupportedAirport.iata_code == (conv.selected_airport_iata or "").upper()
+                )
+            ) if conv.selected_airport_iata else None
+        )
+        meta = cls._align_scheduled_datetimes_to_date(meta, parsed_date, service_tz)
+        meta["booking_date"] = date_formatted
+        conv.flight_details_json = meta
+        flag_modified(conv, "flight_details_json")
+        db.commit()
+
         cls._transition_state(db, conv, "PASSENGER_COUNT")
 
         msg = f"Date Saved: *{date_formatted}*\n\nHow many passengers will be travelling? (Enter a number, e.g., 2):"
@@ -2409,11 +2625,30 @@ class WhatsAppBookingStateMachine:
                 except (ValueError, Exception):
                     cutoff_type = None
             tz_name = lookup_airport_timezone(db, conv.selected_airport_iata)
+            tz = airport_tzinfo(tz_name)
+
+            if conv.booking_date:
+                try:
+                    b_date = None
+                    for fmt in ("%d %B %Y", "%d %b %Y", "%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d"):
+                        try:
+                            b_date = datetime.strptime(conv.booking_date.strip(), fmt).date()
+                            break
+                        except Exception:
+                            continue
+                    if b_date:
+                        metadata = cls._align_scheduled_datetimes_to_date(metadata, b_date, tz)
+                        conv.flight_details_json = metadata
+                        flag_modified(conv, "flight_details_json")
+                except Exception:
+                    pass
+
             scheduled = service_leg_scheduled_datetime(
                 jt_cut,
                 metadata.get("departure_scheduled"),
                 metadata.get("arrival_scheduled"),
-                airport_tzinfo(tz_name),
+                tz,
+                travel_date=conv.booking_date,
             )
             cutoff = evaluate_booking_cutoff(
                 scheduled_dt=scheduled,

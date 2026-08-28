@@ -419,13 +419,16 @@ class WhatsAppClient:
         body_text: str,
         buttons: List[Dict[str, str]],
         header_text: Optional[str] = None,
-        footer_text: Optional[str] = "Shafsky Aviation"
+        footer_text: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Sends Meta WhatsApp Interactive Reply Buttons (max 3 buttons).
         buttons format: [{"id": "btn_1", "title": "Button 1"}, ...]
         """
         self._load_config()
+        if footer_text is None:
+            from app.integrations.whatsapp.copy import BRAND
+            footer_text = BRAND
         clean_phone = "".join(filter(str.isdigit, str(to_phone)))
 
         formatted_buttons = []
@@ -465,12 +468,15 @@ class WhatsAppClient:
         button_title: str,
         sections: List[Dict[str, Any]],
         header_text: Optional[str] = None,
-        footer_text: Optional[str] = "Shafsky Aviation"
+        footer_text: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Sends Meta WhatsApp Interactive Radio/List Menu (up to 10 rows total).
         """
         self._load_config()
+        if footer_text is None:
+            from app.integrations.whatsapp.copy import BRAND
+            footer_text = BRAND
         clean_phone = "".join(filter(str.isdigit, str(to_phone)))
 
         sanitized_sections: List[Dict[str, Any]] = []

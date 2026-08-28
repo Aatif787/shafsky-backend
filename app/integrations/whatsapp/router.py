@@ -98,7 +98,7 @@ def test_send_whatsapp_message(
             error="WhatsApp Cloud API is not configured in backend environment. Please set WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID in .env."
         )
 
-    message_body = payload.message or "Shafsky Aviation WhatsApp Cloud API verification message."
+    message_body = payload.message or "Shafsky Aviation Services WhatsApp Cloud API verification message."
     
     result = whatsapp_client.send_message(
         to_phone=payload.recipient_phone,

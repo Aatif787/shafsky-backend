@@ -8,7 +8,7 @@ airport timezone. Transit classification is not altered here.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 from app.services.service_airport_rules import (
@@ -20,7 +20,17 @@ from app.services.service_airport_rules import (
 
 DOMESTIC_MIN_HOURS = 12
 INTERNATIONAL_MIN_HOURS = 24
+EXECUTIVE_PHONE = "+91-9599087959"
+WHATSAPP_BRAND = "Shafsky Aviation Services"
 IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def airport_min_notice_hours(flight_type: Optional[str]) -> int:
+    """12h domestic / 24h if any international leg (including transit mixes)."""
+    ft = (flight_type or "").upper().replace("-", "_").replace(" ", "_")
+    if "INTERNATIONAL" in ft:
+        return INTERNATIONAL_MIN_HOURS
+    return DOMESTIC_MIN_HOURS
 
 
 def airport_tzinfo(tz_name: Optional[str]):
@@ -76,18 +86,46 @@ def service_leg_scheduled_datetime(
     departure_scheduled: Any,
     arrival_scheduled: Any,
     airport_tz,
+    travel_date: Optional[Any] = None,
 ) -> Optional[datetime]:
     """
     ARRIVAL → scheduled arrival at the service airport.
     DEPARTURE → scheduled departure at the service airport.
     TRANSIT → None (existing transit notice rules stay unchanged).
+
+    If travel_date is provided, the scheduled datetime's date is aligned to travel_date
+    while preserving the scheduled time-of-day and overnight flight offset.
     """
     jt = normalize_journey_type(journey_type)
+    sched = None
     if jt == "ARRIVAL":
-        return parse_scheduled_datetime(arrival_scheduled, airport_tz)
-    if jt == "DEPARTURE":
-        return parse_scheduled_datetime(departure_scheduled, airport_tz)
-    return None
+        sched = parse_scheduled_datetime(arrival_scheduled, airport_tz)
+    elif jt == "DEPARTURE":
+        sched = parse_scheduled_datetime(departure_scheduled, airport_tz)
+
+    if sched is not None and travel_date is not None:
+        t_date = None
+        if isinstance(travel_date, datetime):
+            t_date = travel_date.date()
+        elif isinstance(travel_date, date):
+            t_date = travel_date
+        elif isinstance(travel_date, str) and travel_date.strip():
+            for fmt in ("%d %B %Y", "%d %b %Y", "%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d"):
+                try:
+                    t_date = datetime.strptime(travel_date.strip(), fmt).date()
+                    break
+                except Exception:
+                    continue
+        if t_date is not None:
+            day_offset = 0
+            if jt == "ARRIVAL" and departure_scheduled and arrival_scheduled:
+                dep_dt = parse_scheduled_datetime(departure_scheduled, airport_tz)
+                if dep_dt and sched.date() > dep_dt.date():
+                    day_offset = (sched.date() - dep_dt.date()).days
+            target_date = t_date + timedelta(days=max(0, day_offset))
+            sched = sched.replace(year=target_date.year, month=target_date.month, day=target_date.day)
+
+    return sched
 
 
 def required_notice_hours(flight_type: Optional[str]) -> Optional[int]:
@@ -143,10 +181,12 @@ def customer_cutoff_message(flight_type: str, remaining: timedelta, required_hou
         hours_txt = str(max(0, int(remaining.total_seconds() // 3600)))
     return (
         "❌ Booking cannot be completed\n\n"
-        f"This {kind} flight is scheduled in approximately {hours_txt} hours.\n"
-        f"Shafsky requires at least {required_hours} hours advance booking "
-        f"for {kind} services.\n\n"
-        "Please choose another eligible flight/date or contact the Shafsky team."
+        f"Airport services require at least {required_hours} hours' notice "
+        f"for {kind} flights.\n\n"
+        f"This {kind} flight is scheduled in approximately {hours_txt} hours, "
+        "so we cannot complete this booking online.\n\n"
+        f"Need this urgently? Please call our executive on *{EXECUTIVE_PHONE}*.\n\n"
+        f"{WHATSAPP_BRAND}"
     )
 
 
@@ -182,7 +222,8 @@ def evaluate_booking_cutoff(
             customer_message=(
                 "❌ Booking cannot be completed\n\n"
                 "We could not determine the scheduled flight time required to complete this booking.\n\n"
-                "Please choose another eligible flight/date or contact the Shafsky team."
+                f"Need this urgently? Please call our executive on *{EXECUTIVE_PHONE}*.\n\n"
+                f"{WHATSAPP_BRAND}"
             ),
             reason="missing_scheduled_datetime",
         )
@@ -224,14 +265,28 @@ def evaluate_cutoff_for_booking(db, booking, now_utc: Optional[datetime] = None)
         meta.get("journey_type") or meta.get("direction") or getattr(booking, "service_category", None)
     )
     if journey == "TRANSIT":
-        return CutoffResult(
-            allowed=True,
-            remaining=None,
-            required_hours=None,
-            flight_type=None,
-            scheduled=None,
-            customer_message="",
-            reason="transit_unchanged",
+        service_airport = (
+            meta.get("service_airport")
+            or meta.get("transit_code")
+            or meta.get("airport_code")
+        )
+        tz_name = lookup_airport_timezone(db, service_airport)
+        tz = airport_tzinfo(tz_name)
+        notice = airport_min_notice_hours(
+            meta.get("flight_type") or meta.get("travel_type") or meta.get("transit_type")
+        )
+        scheduled = parse_scheduled_datetime(
+            getattr(booking, "departure_time", None)
+            or getattr(booking, "arrival_time", None)
+            or meta.get("departure_scheduled")
+            or meta.get("arrival_scheduled"),
+            tz,
+        )
+        return evaluate_booking_cutoff(
+            scheduled_dt=scheduled,
+            now_utc=now,
+            airport_tz_name=tz_name,
+            flight_type="INTERNATIONAL" if notice == INTERNATIONAL_MIN_HOURS else "DOMESTIC",
         )
 
     origin = meta.get("origin_iata") or getattr(booking, "origin_code", None)

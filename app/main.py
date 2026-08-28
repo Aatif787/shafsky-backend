@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, Depends, Response, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -15,7 +16,6 @@ import app.models.schema  # Ensure models are loaded
 import app.models.shared_domain  # Phase B.5 Shared Domain models
 import app.models.airport  # Phase C.1 Airport Meet & Assist models
 import app.models.journey_models  # Phase 1 Journey Detection Engine models
-import app.models.operations_models  # Phase 6 Operations & Communication Engine models
 import app.models.charter_models  # Private Charter Engine models
 from app.security.middleware import SecurityMiddleware
 from app.security.dependencies import get_required_admin
@@ -64,13 +64,14 @@ async def startup_checks():
             try:
                 conn.execute(text("ALTER TABLE payment_transactions ADD COLUMN IF NOT EXISTS is_duplicate BOOLEAN DEFAULT FALSE"))
                 conn.execute(text("ALTER TABLE payment_transactions ADD COLUMN IF NOT EXISTS notes TEXT"))
+                conn.execute(text("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deleted_by_user_id UUID"))
+                conn.execute(text("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deleted_by_email VARCHAR"))
+                conn.execute(text("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deleted_by_role VARCHAR"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_bookings_deleted_at ON bookings (deleted_at)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_bookings_deleted_by_email ON bookings (deleted_by_email)"))
                 conn.commit()
             except Exception:
                 pass
-        try:
-            Base.metadata.create_all(bind=engine, checkfirst=True)
-        except Exception:
-            pass
     except Exception as err:
         structured_logger.critical("Database connectivity check failed on startup", extra={"error": str(err)})
         # In production/staging, fail fast
@@ -117,13 +118,15 @@ async def sqlalchemy_exception_handler(_request, _exc: SQLAlchemyError):
         content={"success": False, "error": "A database error occurred. Please try again later."}
     )
 
-from fastapi.encoders import jsonable_encoder
-
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(_request, exc: RequestValidationError):
     return JSONResponse(
         status_code=422,
-        content={"success": False, "error": "Validation error in request payload.", "details": jsonable_encoder(exc.errors())}
+        content={
+            "success": False,
+            "error": "Validation error in request payload.",
+            "details": jsonable_encoder(exc.errors()),
+        },
     )
 
 from app.routers import workflow_router
@@ -145,7 +148,6 @@ app.include_router(clean_flight_router)
 app.include_router(clean_flights_router)
 app.include_router(admin_router.router)
 app.include_router(booking_router.router)
-app.include_router(charter_router.router)
 app.include_router(notification_router.router)
 app.include_router(crm_router.router)
 app.include_router(dr_router.router)
@@ -160,6 +162,7 @@ app.include_router(ai_router.router)
 app.include_router(whatsapp_router)
 app.include_router(journey_router.router)
 app.include_router(operations_router.router)
+app.include_router(charter_router.router)
 
 # Direct Razorpay Standard Checkout Root Endpoints
 @app.post("/api/create-order", tags=["Razorpay Checkout"], status_code=201)
