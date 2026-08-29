@@ -18,6 +18,30 @@ from app.utils.customer_email import is_acceptable_customer_email, REAL_EMAIL_HE
 logger = logging.getLogger("shafsky.booking")
 
 class BookingService:
+    # Canonical package slugs used by the web catalog and WhatsApp menus.
+    _PACKAGE_SLUG_ALIASES = {
+        "gold-service": "gold",
+        "silver-service": "silver",
+        "elite-service": "elite",
+        "elite-plus-service": "elite-plus",
+        "eliteplus": "elite-plus",
+        "platinum-service": "platinum",
+        "bronze-service": "bronze",
+        "diamond-service": "diamond",
+    }
+
+    @classmethod
+    def normalize_package_slug(cls, service_tier_or_slug: Optional[str]) -> str:
+        """Normalize a client package id/slug to the catalog slug (exact, no fuzzy upgrade)."""
+        raw = (service_tier_or_slug or "silver").strip().lower()
+        raw = raw.replace("_", "-").replace(" ", "-")
+        # Strip accidental prefixes like "package-gold" / "tier-gold"
+        for prefix in ("package-", "tier-", "pkg-"):
+            if raw.startswith(prefix):
+                raw = raw[len(prefix):]
+                break
+        return cls._PACKAGE_SLUG_ALIASES.get(raw, raw)
+
     @classmethod
     def calculate_authoritative_price(
         cls,
@@ -28,25 +52,21 @@ class BookingService:
         flight_type: str = "DOMESTIC",
         pax_count: int = 1
     ) -> float:
+        """
+        Charge the same package unit price the catalog showed the customer.
+
+        Resolves AirportService by exact service slug + journey + flight type.
+        Never uses loose name matching (e.g. '%gold%') which can silently
+        upgrade Silver/Gold to Elite Gold and inflate the Razorpay amount.
+        """
         from app.models.journey_models import SupportedAirport, Service, AirportService
 
         code_clean = (airport_code or "").strip().upper()
-        slug_raw = (service_tier_or_slug or "silver").strip().lower().replace("_", "-").replace(" ", "-")
-        slug_aliases = {
-            "gold-service": "gold",
-            "silver-service": "silver",
-            "elite-service": "elite",
-            "elite-plus-service": "elite-plus",
-            "eliteplus": "elite-plus",
-            "platinum-service": "platinum",
-            "bronze-service": "bronze",
-            "diamond-service": "diamond",
-        }
-        slug_clean = slug_aliases.get(slug_raw, slug_raw)
+        slug_clean = cls.normalize_package_slug(service_tier_or_slug)
         j_type_clean = (journey_type or "DEPARTURE").strip().upper()
         f_type_clean = (flight_type or "DOMESTIC").strip().upper()
+        guests = max(1, int(pax_count or 1))
 
-        # 1. Lookup Airport
         airport = db.scalar(
             select(SupportedAirport).where(SupportedAirport.iata_code == code_clean)
         )
@@ -56,60 +76,76 @@ class BookingService:
                 detail=f"Airport '{code_clean}' is not registered or supported in the database."
             )
 
-        # 2. Lookup Service by slug or matching tier name
-        slug_candidates = {slug_clean, slug_clean.replace("-", "_"), slug_raw}
+        # Exact slug match only — do not ilike-match "gold" onto "Elite Gold".
+        slug_candidates = {slug_clean, slug_clean.replace("-", "_")}
         service = db.scalar(
-            select(Service).where(
-                or_(
-                    Service.slug.in_(list(slug_candidates)),
-                    Service.name.ilike(f"%{slug_clean.replace('-', ' ')}%"),
-                    Service.name.ilike(f"%{slug_raw.replace('-', ' ')}%"),
-                )
+            select(Service).where(Service.slug.in_(list(slug_candidates)))
+        )
+        if not service:
+            # Exact title match as a secondary path (e.g. admin renamed slug).
+            human = slug_clean.replace("-", " ")
+            service = db.scalar(
+                select(Service).where(func.lower(Service.name) == human)
             )
-        )
+        if not service:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Service package '{slug_clean}' was not found. "
+                    "Please re-select a package from the catalog and try again."
+                ),
+            )
 
-        # 3. Lookup AirportService relationship in DB
-        stmt = select(AirportService).where(
-            AirportService.airport_id == airport.id,
-            AirportService.is_available == True
-        )
-        if service:
-            stmt = stmt.where(AirportService.service_id == service.id)
-
-        mappings = list(db.scalars(stmt).all())
-
-        if not mappings and service:
-            # Check if any available mapping exists for this service_id at this airport
-            mappings = list(db.scalars(
+        mappings = list(
+            db.scalars(
                 select(AirportService).where(
                     AirportService.airport_id == airport.id,
-                    AirportService.is_available == True,
-                    AirportService.service_id == service.id
+                    AirportService.service_id == service.id,
+                    AirportService.is_available == True,  # noqa: E712
                 )
-            ).all())
-
+            ).all()
+        )
         if not mappings:
             raise HTTPException(
                 status_code=400,
-                detail=f"Service tier '{slug_clean}' is not available at airport '{code_clean}'."
+                detail=f"Service tier '{slug_clean}' is not available at airport '{code_clean}'.",
             )
 
-        # Filter by journey_type and flight_type for exact match
-        exact_match = None
-        for m in mappings:
-            if m.journey_type == j_type_clean and m.flight_type == f_type_clean and m.is_available:
-                exact_match = m
-                break
+        exact_match = next(
+            (
+                m
+                for m in mappings
+                if (m.journey_type or "").upper() == j_type_clean
+                and (m.flight_type or "").upper() == f_type_clean
+                and m.is_available
+            ),
+            None,
+        )
+        # Prefer an ALL / wildcard flight_type row over failing hard when the
+        # airport publishes one package price for both domestic and international.
+        if not exact_match:
+            exact_match = next(
+                (
+                    m
+                    for m in mappings
+                    if (m.journey_type or "").upper() == j_type_clean
+                    and (m.flight_type or "").upper() in ("ALL", "*")
+                    and m.is_available
+                ),
+                None,
+            )
 
         if not exact_match:
             raise HTTPException(
                 status_code=400,
-                detail=f"Service package '{slug_clean}' is not available at airport '{code_clean}' for {j_type_clean} {f_type_clean}."
+                detail=(
+                    f"Service package '{slug_clean}' is not available at airport "
+                    f"'{code_clean}' for {j_type_clean} {f_type_clean}."
+                ),
             )
 
         unit_price = float(exact_match.price)
-        total = round(unit_price * max(1, pax_count), 2)
-        return total
+        return round(unit_price * guests, 2)
 
     @staticmethod
     def generate_booking_ref() -> str:
@@ -317,7 +353,7 @@ class BookingService:
             raise HTTPException(status_code=400, detail=str(route_err))
 
 
-        target_service = payload.service_type or "silver"
+        target_service = cls.normalize_package_slug(payload.service_type or "silver")
 
         authoritative_price = cls.calculate_authoritative_price(
             db=db,
@@ -339,7 +375,28 @@ class BookingService:
         metadata_json["journey_type"] = journey_type
         metadata_json["flight_type"] = flight_type
         metadata_json["service_airport"] = target_airport
+        metadata_json["package"] = target_service
+        metadata_json["pax_adults"] = pax_count
+        metadata_json["guest_count"] = pax_count
+        # Unit price the catalog charged (so invoices / retries never re-inflate).
+        metadata_json["unit_price"] = round(subtotal / pax_count, 2) if pax_count else subtotal
 
+        # Guard: never silently charge more than the client showed without an
+        # explicit catalog reason. Log when the trusted DB total differs from
+        # the (untrusted) client total so support can diagnose catalog drift.
+        client_total = float(payload.total_amount or 0)
+        if client_total > 0 and abs(client_total - charge_amount) > 0.009:
+            logger.warning(
+                "[Booking Price] Client total ₹%.2f vs authoritative ₹%.2f "
+                "(airport=%s package=%s journey=%s flight_type=%s pax=%s)",
+                client_total,
+                charge_amount,
+                target_airport,
+                target_service,
+                journey_type,
+                flight_type,
+                pax_count,
+            )
         # 6. Generate unique booking reference with retry on concurrency collision
         max_attempts = 5
         for attempt in range(max_attempts):
@@ -360,7 +417,7 @@ class BookingService:
                 dest_code=payload.dest_code,
                 departure_time=dep_time,
                 arrival_time=arr_time,
-                service_type=payload.service_type,
+                service_type=target_service,
                 selected_services=selected_services,
                 service_options=service_options,
                 metadata_json=metadata_json,

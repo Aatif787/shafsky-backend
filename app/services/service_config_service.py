@@ -575,17 +575,40 @@ class ServiceConfigService:
                             continue
                         pkg_id = svc.slug
                         pkg_title = svc.name
-                        if pkg_id not in pkg_dict or (journey_type and m.journey_type == journey_type.upper()):
-                            pkg_dict[pkg_id] = {
-                                "id": pkg_id,
-                                "title": pkg_title,
-                                "tagline": m.short_description if m.short_description is not None else ((svc.description if svc else "") or ""),
-                                "basePrice": float(m.price),
-                                "currency": m.currency or "INR",
-                                "recommendedBadge": "Most Popular" if pkg_id in ["platinum", "elite", "gold"] else None,
-                                "features": m.features if isinstance(m.features, list) else [],
-                                "serviceIds": [pkg_id]
-                            }
+                        # Never silently overwrite a cheaper domestic package with an
+                        # international (or other) row when flight_type was not filtered.
+                        if pkg_id in pkg_dict:
+                            existing_ft = (pkg_dict[pkg_id].get("_flight_type") or "").upper()
+                            incoming_ft = (m.flight_type or "").upper()
+                            if flight_type:
+                                # Typed catalog: prefer exact flight_type over ALL
+                                want = (normalize_flight_type(flight_type) or str(flight_type).strip().upper())
+                                if existing_ft == want and incoming_ft != want:
+                                    continue
+                            else:
+                                # Untyped browse: keep the first row; do not replace
+                                # with a different flight_type's (often higher) price.
+                                if existing_ft and incoming_ft and existing_ft != incoming_ft:
+                                    continue
+                        pkg_dict[pkg_id] = {
+                            "id": pkg_id,
+                            "title": pkg_title,
+                            "tagline": m.short_description if m.short_description is not None else ((svc.description if svc else "") or ""),
+                            "basePrice": float(m.price),
+                            "currency": m.currency or "INR",
+                            "recommendedBadge": "Most Popular" if pkg_id in ["platinum", "elite", "gold"] else None,
+                            "features": m.features if isinstance(m.features, list) else [],
+                            "serviceIds": [pkg_id],
+                            "_flight_type": (m.flight_type or ""),
+                            "_journey_type": (m.journey_type or ""),
+                        }
+
+                    packages_out = []
+                    for pkg in pkg_dict.values():
+                        pkg = dict(pkg)
+                        pkg.pop("_flight_type", None)
+                        pkg.pop("_journey_type", None)
+                        packages_out.append(pkg)
 
                     return {
                         "code": airport.iata_code,
@@ -596,7 +619,7 @@ class ServiceConfigService:
                         "currency": "INR",
                         "operatingHours": "24/7",
                         "advanceNoticeHours": 6,
-                        "packages": list(pkg_dict.values()),
+                        "packages": packages_out,
                         "individualServices": [],
                     }
 

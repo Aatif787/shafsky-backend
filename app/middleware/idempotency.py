@@ -132,7 +132,7 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             response = await call_next(request)
 
             response_body = [section async for section in response.body_iterator]
-            response.body_iterator = iterate_in_threadpool(iter(response_body))
+            response.body_iterator = iterate_in_threadpool(iter(response_body))  # pyright: ignore[reportAttributeAccessIssue]
             body_bytes = b"".join(response_body)
             body_str = body_bytes.decode("utf-8", errors="replace")
 
