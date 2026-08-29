@@ -357,6 +357,40 @@ class DetailsFlowMixin:
         unit_price = metadata.get("unit_price") or metadata.get("base_price")
         passengers = max(1, conv.passenger_count or 1)
 
+        # Fallback: dynamically resolve price if unit_price or total_amount is missing
+        if (unit_price is None or conv.total_amount is None or float(conv.total_amount) <= 0) and conv.selected_airport_iata:
+            try:
+                from app.models.journey_models import SupportedAirport
+                from app.integrations.whatsapp import copy as wa_copy
+                airport_obj = db.execute(
+                    select(SupportedAirport).where(SupportedAirport.iata_code == conv.selected_airport_iata)
+                ).scalar_one_or_none()
+                if airport_obj:
+                    intl_or_dom = [tt or "DOMESTIC", "ALL"]
+                    matching = cls._get_authoritative_airport_packages(
+                        db, airport_obj.id, jt or "DEPARTURE", intl_or_dom, terminal=metadata.get("terminal")
+                    )
+                    if matching:
+                        current_tier = wa_copy._extract_tier_name(conv.selected_service_name or "").lower()
+                        picked = None
+                        for aps, s in matching:
+                            if current_tier and current_tier in (s.name or "").lower():
+                                picked = (aps, s)
+                                break
+                        if not picked:
+                            picked = matching[0]
+                        aps, s = picked
+                        unit_price = float(aps.price)
+                        conv.selected_service_id = str(s.id)
+                        conv.selected_service_name = s.name
+                        metadata["unit_price"] = unit_price
+                        metadata["base_price"] = unit_price
+                        metadata["package"] = s.name
+                        conv.flight_details_json = metadata
+                        flag_modified(conv, "flight_details_json")
+            except Exception:
+                pass
+
         if unit_price is not None and passengers > 0:
             conv.total_amount = float(unit_price) * passengers
             db.commit()

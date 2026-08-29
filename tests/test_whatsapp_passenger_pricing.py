@@ -58,11 +58,11 @@ def test_whatsapp_multiple_passengers_scales_price(mock_notify, mock_text, mock_
         conv.selected_service_name = "Silver Meet & Greet"
         conv.total_amount = 3000.0
         conv.passenger_count = 1
-        conv.flight_details_json = {"unit_price": 3000.0, "base_price": 3000.0, "journey_type": "DEPARTURE", "travel_type": "DOMESTIC"}
+        conv.flight_details_json = {"unit_price": 3000.0, "base_price": 3000.0, "journey_type": "DEPARTURE", "travel_type": "DOMESTIC", "origin_iata": "DEL", "destination_iata": "BOM", "departure_scheduled": "2026-08-31T18:00:00+00:00", "verification_status": "verified", "verification_provider": "AVIATIONSTACK"}
         conv.selected_airport_iata = "DEL"
         conv.selected_airport_name = "Indira Gandhi International Airport"
         conv.flight_num = "AI101"
-        conv.booking_date = "25 August 2026"
+        conv.booking_date = "31 August 2026"
         conv.current_state = "PASSENGER_COUNT"
         db.commit()
 
@@ -137,11 +137,11 @@ def test_whatsapp_single_passenger_keeps_base_price(mock_notify, mock_text, mock
         conv.selected_service_name = "Silver Meet & Greet"
         conv.total_amount = 3000.0
         conv.passenger_count = 1
-        conv.flight_details_json = {"unit_price": 3000.0, "base_price": 3000.0, "journey_type": "DEPARTURE", "travel_type": "DOMESTIC"}
+        conv.flight_details_json = {"unit_price": 3000.0, "base_price": 3000.0, "journey_type": "DEPARTURE", "travel_type": "DOMESTIC", "origin_iata": "DEL", "destination_iata": "BOM", "departure_scheduled": "2026-08-31T18:00:00+00:00", "verification_status": "verified", "verification_provider": "AVIATIONSTACK"}
         conv.selected_airport_iata = "DEL"
         conv.selected_airport_name = "Indira Gandhi International Airport"
         conv.flight_num = "AI101"
-        conv.booking_date = "25 August 2026"
+        conv.booking_date = "31 August 2026"
         conv.current_state = "PASSENGER_COUNT"
         db.commit()
 

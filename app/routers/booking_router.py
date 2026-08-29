@@ -350,8 +350,8 @@ async def estimate_booking_price(
 
     base_price = round(total_calculated / pax_adults, 2)
     subtotal = total_calculated
-    taxes = int(subtotal * 0.18)
-    total_amount = subtotal + taxes
+    taxes = 0
+    total_amount = subtotal
 
     return BookingApiResponse(
         success=True,

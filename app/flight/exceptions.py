@@ -43,6 +43,27 @@ class FlightNotFoundException(FlightDomainException):
         )
 
 
+class FlightScheduleUnavailableException(FlightDomainException):
+    """
+    Raised when the provider is reachable but publishes no schedule for the date.
+
+    Distinct from FlightNotFoundException: the flight number may be perfectly
+    valid, the provider simply has no data for that day yet. Callers should offer
+    manual entry rather than telling the customer the flight does not exist.
+    """
+    def __init__(self, flight_num: str, date: str, detail: str = ""):
+        suffix = f" {detail}" if detail else ""
+        super().__init__(
+            message=(
+                f"Schedule data for flight '{flight_num}' on '{date}' is not published "
+                f"by our flight data provider yet.{suffix} "
+                "Please enter the flight times and airports manually to continue."
+            ),
+            status_code=422,
+            code="FLIGHT_SCHEDULE_UNAVAILABLE"
+        )
+
+
 class FlightRateLimitExceededException(FlightDomainException):
     """Raised when the external provider rate limit has been exceeded."""
     def __init__(self, detail: str = "Provider API rate limit exceeded. Please try again shortly."):

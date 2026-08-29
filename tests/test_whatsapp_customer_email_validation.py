@@ -5,11 +5,12 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from app.integrations.whatsapp.service import (
-    WhatsAppBookingStateMachine,
-    is_acceptable_whatsapp_customer_email,
+from app.integrations.whatsapp.service import WhatsAppBookingStateMachine
+from app.utils.customer_email import (
+    is_acceptable_customer_email as is_acceptable_whatsapp_customer_email,
+    REAL_EMAIL_HELP as _REAL_EMAIL_HELP,
+    EMAIL_FORMAT_HELP as _EMAIL_FORMAT_HELP,
 )
-from app.utils.customer_email import REAL_EMAIL_HELP as _REAL_EMAIL_HELP, EMAIL_FORMAT_HELP as _EMAIL_FORMAT_HELP
 
 
 @pytest.fixture(autouse=True)

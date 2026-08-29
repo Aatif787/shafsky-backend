@@ -9,6 +9,42 @@ EXECUTIVE_PHONE = "+91-9599087959"
 
 WELCOME_HEADLINE = "✨ *Welcome to Shafsky Aviation Services ✈️*"
 EXPIRED_PREFIX = "Your previous session has expired. Let's start again.\n\n"
+# Shown when a session timed out but the customer has not typed Hi yet.
+# Never auto-send the full welcome menu without an explicit restart command.
+SESSION_EXPIRED_PROMPT = (
+    f"*{BRAND}*\n\n"
+    "Your previous session has expired.\n\n"
+    "Type *Hi* to start a new booking."
+)
+TYPE_HI_TO_START = (
+    f"*{BRAND}*\n\n"
+    "Type *Hi* to start a booking.\n\n"
+    f"{FOOTER}"
+)
+UNSUPPORTED_INBOUND = (
+    f"*{BRAND}*\n\n"
+    "Please reply with text, or tap a button from the menu.\n"
+    "Type *Hi* to start a booking."
+)
+
+# Services without a published online price are handled as quote requests
+# instead of being sent an unpayable Razorpay link.
+QUOTE_REQUEST_REGISTERED = (
+    f"*{BRAND}*\n\n"
+    "Thank you — your request *{booking_ref}* has been registered.\n\n"
+    "This service is priced individually, so one of our reservation executives "
+    "will contact you shortly with a tailored quote and a secure payment link.\n\n"
+    f"Need it sooner? Call our executive on *{EXECUTIVE_PHONE}*.\n\n"
+    "Type *Hi* anytime to start a different booking."
+)
+
+QUOTE_REQUEST_PENDING_ACK = (
+    f"*{BRAND}*\n\n"
+    "Your quote request *{booking_ref}* is with our reservations team. "
+    "They will send your tailored price and payment link shortly.\n\n"
+    f"For immediate assistance, call *{EXECUTIVE_PHONE}*.\n\n"
+    "Type *Hi* to start a new booking instead."
+)
 
 CATEGORY_LINES = (
     "1️⃣ Airport Services\n"

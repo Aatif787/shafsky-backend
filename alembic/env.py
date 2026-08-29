@@ -35,6 +35,7 @@ from app.database import Base
 import app.models.schema  # Ensure all model tables are registered on Base.metadata
 import app.models.journey_models  # Phase 1 Journey Detection Engine models
 import app.models.operations_models  # Phase 6 Operations & Communication Engine models
+import app.models.whatsapp_models
 
 target_metadata = Base.metadata
 

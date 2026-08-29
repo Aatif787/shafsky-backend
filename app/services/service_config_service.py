@@ -932,15 +932,14 @@ class ServiceConfigService:
                 "errors": errors
             }
 
-        # 7. Authoritative Pricing Calculation from DB
+        # 7. Authoritative Pricing Calculation from DB (All prices are GST-inclusive)
         pkg_price = selected_package["price"] if selected_package else 0.0
         services_price = sum(s["price"] for s in selected_services)
 
         unit_subtotal = pkg_price + services_price
         subtotal = round(unit_subtotal * guest_count, 2)
-        tax_rate = 0.18
-        taxes = round(subtotal * tax_rate, 2)
-        total = round(subtotal + taxes, 2)
+        taxes = 0.0
+        total = subtotal
         currency = config.get("currency", "INR")
 
         return {

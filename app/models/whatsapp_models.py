@@ -10,12 +10,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
-from app.database import Base, engine
-
-try:
-    Base.metadata.create_all(bind=engine)
-except Exception as _e:
-    pass
+from app.database import Base
 
 
 class WhatsAppConversation(Base):
@@ -79,6 +74,9 @@ class WhatsAppConversation(Base):
     razorpay_payment_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     payment_status: Mapped[str] = mapped_column(String(50), nullable=False, default="UNPAID")
 
+    # Transient WhatsApp UI state (menus, etc.) — kept separate from flight_details_json
+    whatsapp_state_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -86,6 +84,11 @@ class WhatsAppConversation(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
+    )
+    # Session activity: updated ONLY on meaningful inbound customer messages.
+    # Used for session timeout instead of updated_at (which changes on any DB write).
+    last_user_activity_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
     messages = relationship("WhatsAppMessage", back_populates="conversation", cascade="all, delete-orphan")
@@ -121,6 +124,7 @@ class WhatsAppMessage(Base):
 class WhatsAppWebhookEvent(Base):
     """
     Persistent log of received webhooks enforcing event idempotency.
+    Supports atomic claim mechanism for exactly-one-worker processing.
     """
     __tablename__ = "whatsapp_webhook_events"
     __table_args__ = (
@@ -131,13 +135,19 @@ class WhatsAppWebhookEvent(Base):
     event_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     event_type: Mapped[str] = mapped_column(String(100), nullable=False, default="message")
     payload: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    processed: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    processed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # Atomic claim lifecycle fields
+    processing_started_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    processed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    processing_worker_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
-
-try:
-    Base.metadata.create_all(bind=engine)
-except Exception:
-    pass

@@ -170,6 +170,37 @@ class ReviewPaymentFlowMixin:
             except Exception:
                 authoritative_travel_type = initial_tt
 
+        # Resolve authoritative package price if amount is missing or zero
+        if (amount <= 0 or not conv.selected_service_name) and conv.selected_airport_iata:
+            try:
+                from app.models.journey_models import SupportedAirport
+                from app.integrations.whatsapp import copy as wa_copy
+                airport_obj = db.execute(
+                    select(SupportedAirport).where(SupportedAirport.iata_code == conv.selected_airport_iata)
+                ).scalar_one_or_none()
+                if airport_obj:
+                    intl_or_dom = [authoritative_travel_type, "ALL"]
+                    matching = cls._get_authoritative_airport_packages(
+                        db, airport_obj.id, jt, intl_or_dom, terminal=metadata.get("terminal")
+                    )
+                    if matching:
+                        current_tier = wa_copy._extract_tier_name(conv.selected_service_name or "").lower()
+                        picked = None
+                        for aps, s in matching:
+                            if current_tier and current_tier in (s.name or "").lower():
+                                picked = (aps, s)
+                                break
+                        if not picked:
+                            picked = matching[0]
+                        aps, s = picked
+                        unit_p = float(aps.price)
+                        conv.selected_service_id = str(s.id)
+                        conv.selected_service_name = s.name
+                        amount = unit_p * passengers
+                        conv.total_amount = amount
+            except Exception:
+                pass
+
         from app.services.booking_cutoff import airport_tzinfo, lookup_airport_timezone, parse_scheduled_datetime
 
         booking_meta = {
@@ -197,28 +228,70 @@ class ReviewPaymentFlowMixin:
         arr_dt = parse_scheduled_datetime(metadata.get("arrival_scheduled"), tz)
 
         try:
-            new_booking = Booking(
-                id=uuid.uuid4(),
-                booking_ref=booking_ref,
-                passenger_name=conv.customer_name or "Guest",
-                passenger_email=conv.customer_email or "guest@shafsky.com",
-                passenger_phone=conv.customer_phone or conv.phone_number,
-                service_category=conv.selected_category or "Airport Services",
-                service_type=conv.selected_service_name or "VIP Service",
-                origin_code=metadata.get("origin_iata") or conv.selected_airport_iata,
-                dest_code=metadata.get("destination_iata"),
-                flight_num=conv.flight_num or "N/A",
-                departure_time=dep_dt,
-                arrival_time=arr_dt,
-                total_amount=amount,
-                currency="INR",
-                status=BookingStatus.PENDING,
-                notes=conv.additional_requirements,
-                metadata_json=booking_meta,
-                created_at=datetime.now(timezone.utc),
-                updated_at=datetime.now(timezone.utc)
-            )
-            db.add(new_booking)
+            # 1. Reuse existing PENDING booking for this conversation if present
+            existing_booking = None
+            if conv.booking_id:
+                existing_booking = db.scalar(
+                    select(Booking).where(Booking.id == conv.booking_id).where(Booking.status == BookingStatus.PENDING)
+                )
+
+            if existing_booking:
+                existing_booking.passenger_name = conv.customer_name or "Guest"
+                existing_booking.passenger_email = conv.customer_email or "guest@shafsky.com"
+                existing_booking.passenger_phone = conv.customer_phone or conv.phone_number
+                existing_booking.service_category = conv.selected_category or "Airport Services"
+                existing_booking.service_type = conv.selected_service_name or "VIP Service"
+                existing_booking.origin_code = metadata.get("origin_iata") or conv.selected_airport_iata or "N/A"
+                existing_booking.dest_code = metadata.get("destination_iata") or conv.selected_airport_iata or "N/A"
+                existing_booking.flight_num = conv.flight_num or "N/A"
+                existing_booking.departure_time = dep_dt
+                existing_booking.arrival_time = arr_dt
+                existing_booking.total_amount = amount
+                existing_booking.notes = conv.additional_requirements
+                existing_booking.metadata_json = booking_meta
+                existing_booking.updated_at = datetime.now(timezone.utc)
+                booking_ref = existing_booking.booking_ref
+                new_booking = existing_booking
+            else:
+                # 2. Cancel any stale uncompleted PENDING drafts for this customer phone
+                caller_phone = conv.customer_phone or conv.phone_number
+                if caller_phone:
+                    clean_digits = "".join(filter(str.isdigit, caller_phone))
+                    stale_bookings = db.scalars(
+                        select(Booking)
+                        .where(Booking.status == BookingStatus.PENDING)
+                        .where(Booking.deleted_at.is_(None))
+                    ).all()
+                    for sb in stale_bookings:
+                        sb_digits = "".join(filter(str.isdigit, sb.passenger_phone or ""))
+                        if sb_digits and (sb_digits.endswith(clean_digits[-10:]) or clean_digits.endswith(sb_digits[-10:])):
+                            sb.status = BookingStatus.CANCELLED
+                            sb.notes = f"Superseded by new booking request {booking_ref}"
+                            sb.updated_at = datetime.now(timezone.utc)
+
+                new_booking = Booking(
+                    id=uuid.uuid4(),
+                    booking_ref=booking_ref,
+                    passenger_name=conv.customer_name or "Guest",
+                    passenger_email=conv.customer_email or "guest@shafsky.com",
+                    passenger_phone=conv.customer_phone or conv.phone_number,
+                    service_category=conv.selected_category or "Airport Services",
+                    service_type=conv.selected_service_name or "VIP Service",
+                    origin_code=metadata.get("origin_iata") or conv.selected_airport_iata or "N/A",
+                    dest_code=metadata.get("destination_iata") or conv.selected_airport_iata or "N/A",
+                    flight_num=conv.flight_num or "N/A",
+                    departure_time=dep_dt,
+                    arrival_time=arr_dt,
+                    total_amount=amount,
+                    currency="INR",
+                    status=BookingStatus.PENDING,
+                    notes=conv.additional_requirements,
+                    metadata_json=booking_meta,
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc)
+                )
+                db.add(new_booking)
+
             conv.booking_ref = booking_ref
             conv.booking_id = new_booking.id
             conv.total_amount = amount
@@ -331,6 +404,13 @@ class ReviewPaymentFlowMixin:
                     "booking_ref": booking_ref,
                 }
 
+        # Services with no published online price (hotels, ground transport, bespoke
+        # charter) cannot be paid via Razorpay: a zero-amount link always fails, and
+        # telling the customer to "reply resend" would loop forever.
+        quote_amount = float(conv.total_amount or (booking.total_amount if booking else 0) or 0)
+        if quote_amount <= 0:
+            return cls._register_quote_request(db, conv, booking_ref, notify_officer=notify_officer)
+
         if force_new:
             link_result = PaymentService.replace_whatsapp_payment_link(db, booking_ref)
         else:
@@ -369,6 +449,10 @@ class ReviewPaymentFlowMixin:
         conv.payment_status = "PENDING"
         cls._transition_state(db, conv, "WAITING_PAYMENT")
         db.commit()
+        # Anchors the payment-session expiry window.
+        cls._set_wa_state_key(
+            db, conv, "payment_link_issued_at", datetime.now(timezone.utc).isoformat()
+        )
 
         cust_msg = cls._payment_link_customer_message(conv, short_url)
         whatsapp_client.send_text_message(conv.phone_number, cust_msg)
@@ -384,25 +468,78 @@ class ReviewPaymentFlowMixin:
         }
 
     @classmethod
-    def _notify_officer_booking(cls, conv: WhatsAppConversation, booking_ref: str, amount: float, link_sent: bool) -> None:
-        officer_phone = os.getenv("WHATSAPP_OFFICER_NOTIFY_PHONE", "919599087959").strip()
-        status_line = (
-            "PENDING — payment link sent to customer"
-            if link_sent
-            else "PENDING — payment link not yet issued (customer can retry)"
+    def _register_quote_request(
+        cls,
+        db: Session,
+        conv: WhatsAppConversation,
+        booking_ref: str,
+        notify_officer: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Park a booking that has no online price as a quote request, so the customer
+        gets a clear next step instead of a payment link that can never succeed.
+        """
+        from app.integrations.whatsapp import copy as wa_copy
+
+        conv.payment_status = "QUOTE_REQUESTED"
+        conv.razorpay_payment_link_id = None
+        conv.razorpay_payment_url = None
+        cls._transition_state(db, conv, "AWAITING_QUOTE")
+        db.commit()
+
+        whatsapp_client.send_text_message(
+            conv.phone_number,
+            wa_copy.QUOTE_REQUEST_REGISTERED.format(booking_ref=booking_ref),
         )
+        if notify_officer:
+            cls._notify_officer_booking(conv, booking_ref, 0.0, link_sent=False, quote_request=True)
+
+        logger.info(
+            "[WhatsApp Booking] Registered quote request %s for %s (no online price)",
+            booking_ref,
+            conv.phone_number,
+        )
+        return {
+            "status": "quote_request_registered",
+            "booking_ref": booking_ref,
+            "state": conv.current_state,
+            "success": True,
+        }
+
+    @classmethod
+    def _notify_officer_booking(
+        cls,
+        conv: WhatsAppConversation,
+        booking_ref: str,
+        amount: float,
+        link_sent: bool,
+        quote_request: bool = False,
+    ) -> None:
+        officer_phone = os.getenv("WHATSAPP_OFFICER_NOTIFY_PHONE", "919599087959").strip()
+        if quote_request:
+            status_line = "QUOTE REQUESTED — no online price, send a manual quote + payment link"
+        elif link_sent:
+            status_line = "PENDING — payment link sent to customer"
+        else:
+            status_line = "PENDING — payment link not yet issued (customer can retry)"
+        headline = (
+            "🚨 *NEW QUOTE REQUEST RECEIVED*\n\n"
+            if quote_request
+            else "🚨 *NEW BOOKING REQUEST RECEIVED*\n\n"
+        )
+        amount_line = "On request" if quote_request else f"₹{int(amount):,}"
         team_msg = (
-            "🚨 *NEW BOOKING REQUEST RECEIVED*\n\n"
-            f"• *Booking Ref*: {booking_ref}\n"
-            f"• *Customer*: {conv.customer_name} ({conv.customer_phone})\n"
-            f"• *Email*: {conv.customer_email}\n"
-            f"• *Service*: {conv.selected_service_name}\n"
-            f"• *Airport*: {conv.selected_airport_iata or 'N/A'}\n"
-            f"• *Flight*: {conv.flight_num or 'N/A'}\n"
-            f"• *Date*: {conv.booking_date}\n"
-            f"• *Passengers*: {conv.passenger_count}\n"
-            f"• *Amount*: ₹{int(amount):,}\n"
-            f"• *Status*: {status_line}"
+            headline
+            + f"• *Booking Ref*: {booking_ref}\n"
+            + f"• *Customer*: {conv.customer_name} ({conv.customer_phone})\n"
+            + f"• *Email*: {conv.customer_email}\n"
+            + f"• *Service*: {conv.selected_service_name}\n"
+            + f"• *Airport*: {conv.selected_airport_iata or 'N/A'}\n"
+            + f"• *Flight*: {conv.flight_num or 'N/A'}\n"
+            + f"• *Date*: {conv.booking_date}\n"
+            + f"• *Passengers*: {conv.passenger_count}\n"
+            + f"• *Amount*: {amount_line}\n"
+            + f"• *Status*: {status_line}"
         )
         try:
             whatsapp_client.send_text_message(officer_phone, team_msg)
@@ -490,6 +627,23 @@ class ReviewPaymentFlowMixin:
             conv.payment_status = "SUCCESSFUL"
             conv.current_state = "COMPLETED"
             conv.updated_at = datetime.now(timezone.utc)
+
+            # Cancel any older unpaid PENDING drafts for this customer phone
+            caller_phone = conv.customer_phone or conv.phone_number
+            if caller_phone:
+                clean_digits = "".join(filter(str.isdigit, caller_phone))
+                other_pending = db.scalars(
+                    select(Booking)
+                    .where(Booking.status == BookingStatus.PENDING)
+                    .where(Booking.booking_ref != booking_ref)
+                    .where(Booking.deleted_at.is_(None))
+                ).all()
+                for op in other_pending:
+                    op_digits = "".join(filter(str.isdigit, op.passenger_phone or ""))
+                    if op_digits and (op_digits.endswith(clean_digits[-10:]) or clean_digits.endswith(op_digits[-10:])):
+                        op.status = BookingStatus.CANCELLED
+                        op.notes = f"Superseded by confirmed booking {booking_ref}"
+                        op.updated_at = datetime.now(timezone.utc)
 
             if conv.customer_phone:
                 try:

@@ -73,7 +73,22 @@ async def handle_whatsapp_webhook_event(
 
     try:
         result = WhatsAppService.handle_incoming_webhook(db, payload)
+        if isinstance(result, dict) and result.get("status") == "retry":
+            # Only return 503 if ALL messages needed retry (lock contention / transient DB failure).
+            # Meta will retry the webhook after the Retry-After interval.
+            messages_handled = result.get("messages_handled", 0)
+            if messages_handled == 0:
+                return Response(
+                    content='{"success":false,"error":"Conversation lock busy. Please retry."}',
+                    status_code=503,
+                    media_type="application/json",
+                    headers={"Retry-After": "5"},
+                )
+            # Some messages succeeded, some failed — return 200 to prevent Meta
+            # from retrying the entire batch (the successful ones would be deduped anyway).
         return WhatsAppApiResponse(success=True, data=result)
+    except HTTPException:
+        raise
     except Exception as err:
         # Return 200 with error log so Meta does not continuously retry failing webhooks
         return WhatsAppApiResponse(success=False, error=str(err))

@@ -1679,6 +1679,15 @@ class PaymentService:
         customer_email: str
     ) -> Optional[Invoice]:
         """Generates a tax invoice for a transaction with duplicate prevention."""
+        # Safety guard: never generate an invoice for a non-successful payment
+        if transaction.status != PaymentStatus.SUCCESSFUL:
+            logger.warning(
+                "[PaymentService] generate_invoice called for non-SUCCESSFUL transaction %s (status=%s); skipping.",
+                transaction.transaction_ref,
+                transaction.status.value if hasattr(transaction.status, "value") else transaction.status,
+            )
+            return None
+
         existing_invoice = db.scalar(select(Invoice).where(Invoice.transaction_id == transaction.id))
         if existing_invoice:
             return existing_invoice

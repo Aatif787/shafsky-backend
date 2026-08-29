@@ -87,21 +87,8 @@ def test_resend_unconfigured_is_bypassed(monkeypatch):
     assert result["status"] == "BYPASSED"
 
 
-def test_notify_booking_created_does_not_raise_when_provider_fails(monkeypatch):
-    monkeypatch.setattr(
-        NotificationService,
-        "admin_notification_recipients",
-        classmethod(lambda cls: ["ops@example.com"]),
-    )
-    monkeypatch.setattr(
-        NotificationService,
-        "send_email_resend_sync",
-        classmethod(lambda cls, *a, **k: {"status": "FAILED", "error": "provider_rejected:401"}),
-    )
-    monkeypatch.setattr(NotificationService, "_already_notified", classmethod(lambda *a, **k: False))
-
+def test_notify_booking_created_suppresses_pending_customer_email():
     db = MagicMock()
-    db.scalars.return_value.all.return_value = []
     summary = NotificationService.notify_booking_created(
         db,
         {
@@ -111,13 +98,47 @@ def test_notify_booking_created_does_not_raise_when_provider_fails(monkeypatch):
             "service_type": "gold",
         },
     )
-    assert summary["customer"]["status"] == "FAILED"
-    assert summary["admin"][0]["status"] == "FAILED"
-    assert db.commit.called
+    assert summary["customer"]["status"] == "SKIPPED"
+    assert summary["customer"]["reason"] == "pending_payment_suppressed"
+
+
+def test_notify_booking_confirmed_sends_email_and_admin_alert(monkeypatch):
+    monkeypatch.setattr(
+        NotificationService,
+        "admin_notification_recipients",
+        classmethod(lambda cls: ["ops@example.com"]),
+    )
+    monkeypatch.setattr(
+        NotificationService,
+        "send_email_resend_sync",
+        classmethod(lambda cls, *a, **k: {"status": "DELIVERED", "message_id": "msg_conf_123"}),
+    )
+    monkeypatch.setattr(
+        NotificationService,
+        "_acquire_notification_claim",
+        classmethod(lambda *a, **k: (MagicMock(), "PROCEED")),
+    )
+
+    db = MagicMock()
+    summary = NotificationService.notify_booking_confirmed(
+        db,
+        {
+            "booking_ref": "SHF-CONF-1",
+            "passenger_email": "guest@example.com",
+            "passenger_name": "Valued Guest",
+            "service_type": "Elite Service",
+        },
+    )
+    assert summary["customer"]["status"] == "DELIVERED"
+    assert summary["admin"][0]["status"] == "DELIVERED"
 
 
 def test_duplicate_notification_is_skipped(monkeypatch):
-    monkeypatch.setattr(NotificationService, "_already_notified", classmethod(lambda *a, **k: True))
+    monkeypatch.setattr(
+        NotificationService,
+        "_acquire_notification_claim",
+        classmethod(lambda *a, **k: (None, "ALREADY_DELIVERED")),
+    )
     db = MagicMock()
     result = NotificationService._record_and_send(
         db,
@@ -126,5 +147,5 @@ def test_duplicate_notification_is_skipped(monkeypatch):
         payload={"booking_ref": "SHF-TEST-1"},
         booking_ref="SHF-TEST-1",
     )
-    assert result == {"status": "SKIPPED", "reason": "duplicate"}
-    assert not db.add.called
+    assert result["status"] == "SKIPPED"
+    assert result["reason"] == "duplicate"

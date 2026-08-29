@@ -26,7 +26,7 @@ class FlightFlowMixin:
     """Mixin for AviationStack flight lookup, mismatch resolution, and smart travel-type auto-alignment."""
 
     @classmethod
-    def _validate_flight_number_local(cls, flight_num_input: str) -> Optional[Dict[str, str]]:
+    def _validate_flight_number_local(cls, flight_num_input: str) -> Optional[str]:
         """First-pass format filter only. Never treated as verification."""
         from app.flight.aviationstack_service import normalize_flight_number_input
         return normalize_flight_number_input(flight_num_input)
@@ -92,15 +92,19 @@ class FlightFlowMixin:
 
     @classmethod
     def _pending_flight_blob(cls, flight: Dict[str, Any], val_res: Any) -> Dict[str, Any]:
-        dep = flight.get("departure") or {}
-        arr = flight.get("arrival") or {}
-        airline = flight.get("airline") or {}
+        dep = flight.get("departure") if isinstance(flight.get("departure"), dict) else {}
+        arr = flight.get("arrival") if isinstance(flight.get("arrival"), dict) else {}
+        airline_raw = flight.get("airline")
+        airline_dict = airline_raw if isinstance(airline_raw, dict) else {}
+        airline_name = airline_raw if isinstance(airline_raw, str) else airline_dict.get("name")
+        airline_code = flight.get("airline_iata") or airline_dict.get("iata")
+
         fn_str = val_res.get("flight_number") if isinstance(val_res, dict) else str(val_res) if val_res else None
         code_str = val_res.get("airline_code") if isinstance(val_res, dict) else None
         return {
             "flight_number": flight.get("flight_number") or fn_str,
-            "airline_code": airline.get("iata") or code_str,
-            "airline_name": airline.get("name"),
+            "airline_code": airline_code or code_str,
+            "airline_name": airline_name,
             "origin_iata": dep.get("iata"),
             "destination_iata": arr.get("iata"),
             "origin_city": dep.get("city"),
@@ -162,6 +166,8 @@ class FlightFlowMixin:
             except ValueError:
                 pass
 
+        effective_tt = new_meta.get("travel_type") or "DOMESTIC"
+
         if pending.get("aligned_service_id"):
             conv.selected_service_id = str(pending["aligned_service_id"])
             if pending.get("aligned_service_name"):
@@ -172,6 +178,44 @@ class FlightFlowMixin:
                 new_meta["base_price"] = unit_p
                 passengers = max(1, conv.passenger_count or 1)
                 conv.total_amount = unit_p * passengers
+        else:
+            # Re-align service package to the effective travel type (e.g., International) at selected airport
+            if conv.selected_airport_iata:
+                airport_obj = db.execute(
+                    select(SupportedAirport).where(SupportedAirport.iata_code == conv.selected_airport_iata)
+                ).scalar_one_or_none()
+                if airport_obj:
+                    intl_or_dom = [effective_tt, "ALL"]
+                    matching_packages = cls._get_authoritative_airport_packages(
+                        db, airport_obj.id, jt, intl_or_dom, terminal=new_meta.get("terminal")
+                    )
+                    current_svc_name = conv.selected_service_name or new_meta.get("package") or ""
+                    current_tier = wa_copy._extract_tier_name(current_svc_name).lower() if current_svc_name else ""
+                    aligned_svc = None
+                    for aps, s in matching_packages:
+                        s_name = (s.name or "").lower()
+                        if current_tier and current_tier in s_name:
+                            aligned_svc = (aps, s)
+                            break
+                    if not aligned_svc and matching_packages:
+                        aligned_svc = matching_packages[0]
+
+                    if aligned_svc:
+                        aligned_aps, aligned_s = aligned_svc
+                        unit_p = float(aligned_aps.price)
+                        conv.selected_service_id = str(aligned_s.id)
+                        conv.selected_service_name = aligned_s.name
+                        new_meta["unit_price"] = unit_p
+                        new_meta["base_price"] = unit_p
+                        new_meta["package"] = aligned_s.name
+                        passengers = max(1, conv.passenger_count or 1)
+                        conv.total_amount = unit_p * passengers
+
+        # Fallback if unit_price was already set in metadata
+        unit_p = new_meta.get("unit_price") or new_meta.get("base_price")
+        if unit_p is not None and (conv.total_amount is None or conv.total_amount <= 0):
+            passengers = max(1, conv.passenger_count or 1)
+            conv.total_amount = float(unit_p) * passengers
 
         conv.flight_num = pending.get("flight_number")
         conv.flight_details_json = new_meta

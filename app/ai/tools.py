@@ -174,8 +174,8 @@ class AiTools:
         base_rates = {"MEET_GREET": 2500, "FAST_TRACK": 1800, "VIP_ASSIST": 5000, "LOUNGE": 3000}
         rate = base_rates.get(service_code.upper(), 2500)
         subtotal = rate * pax_count
-        tax = round(subtotal * 0.18, 2)
-        total = subtotal + tax
+        tax = 0.0
+        total = subtotal
         return {"service_code": service_code, "pax_count": pax_count, "subtotal": subtotal, "tax_18_pct": tax, "total": total}
 
     @classmethod

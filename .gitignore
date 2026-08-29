@@ -17,6 +17,7 @@ ENV/
 # Testing & Logs
 .pytest_cache/
 *.log
+*.db
 backups/
 scratch/
 wa_diag.py

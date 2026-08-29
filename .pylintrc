@@ -1,0 +1,18 @@
+[MAIN]
+init-hook='import sys, os; sys.path.insert(0, os.path.abspath(".")); sys.path.insert(0, os.path.abspath(".."))'
+max-line-length=120
+
+[MESSAGES CONTROL]
+disable=
+    C0114, # missing-module-docstring
+    C0115, # missing-class-docstring
+    C0116, # missing-function-docstring
+    C0301, # line-too-long
+    W0718, # broad-exception-caught / catching too general exception
+    W1203, # logging-fstring-interpolation
+    W1202, # logging-format-interpolation
+    R0903, # too-few-public-methods
+    R0913, # too-many-arguments
+    R0914, # too-many-locals
+    R0915, # too-many-statements
+    R0912, # too-many-branches

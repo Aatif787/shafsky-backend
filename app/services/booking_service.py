@@ -328,14 +328,14 @@ class BookingService:
             pax_count=pax_count
         )
 
-        # Charge the same GST-inclusive total shown on the review screen.
+        # All catalog prices are GST-inclusive (do not add extra tax)
         subtotal = round(float(authoritative_price), 2)
-        taxes = round(subtotal * 0.18, 2) if service_category == "Airport Assistance" else 0.0
-        charge_amount = round(subtotal + taxes, 2)
+        taxes = 0.0
+        charge_amount = subtotal
         metadata_json = dict(metadata_json or {})
         metadata_json["subtotal"] = subtotal
         metadata_json["taxes"] = taxes
-        metadata_json["tax_rate"] = 0.18 if taxes else 0.0
+        metadata_json["tax_rate"] = 0.0
         metadata_json["journey_type"] = journey_type
         metadata_json["flight_type"] = flight_type
         metadata_json["service_airport"] = target_airport

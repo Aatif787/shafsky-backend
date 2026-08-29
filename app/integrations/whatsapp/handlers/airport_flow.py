@@ -39,8 +39,28 @@ class AirportFlowMixin:
 
     @classmethod
     def _state_start(cls, db: Session, conv: WhatsAppConversation, user_input: str) -> Dict[str, Any]:
-        """Greeting and display of final 4-option main menu."""
-        conv = cls._reset_conversation_fields(conv)
+        """
+        Idle / post-cancel / post-booking entry.
+
+        The welcome menu is only sent when the customer explicitly restarts
+        (Hi / Hello / Menu / …). Any other text gets a short prompt instead of
+        dumping the full service list unsolicited.
+        """
+        # Keep in sync with RESTART_COMMANDS in service.py (avoid circular import).
+        restart_triggers = {
+            "hi", "hello", "hey", "start", "menu", "restart", "main menu", "0",
+            "reset", "start over",
+        }
+        text_lower = (user_input or "").strip().lower()
+        if text_lower not in restart_triggers:
+            wa_delivery.send_text(
+                conv.phone_number,
+                wa_copy.TYPE_HI_TO_START,
+                client=whatsapp_client,
+            )
+            return {"status": "awaiting_hi", "success": True}
+
+        conv = cls._reset_conversation_fields(conv, db)
         cls._transition_state(db, conv, "CATEGORY_SELECTION")
         return cls._send_category_menu(db, conv)
 
@@ -919,9 +939,7 @@ class AirportFlowMixin:
                 return cls._send_service_menu(db, conv, category_name)
 
         selected_svc = None
-        stored_menu = []
-        if isinstance(conv.flight_details_json, dict):
-            stored_menu = list(conv.flight_details_json.get("_wa_menu") or [])
+        stored_menu = cls._get_wa_menu(conv)
 
         if category_name == "Airport Services":
             metadata = conv.flight_details_json if isinstance(conv.flight_details_json, dict) else {}

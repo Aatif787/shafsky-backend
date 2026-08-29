@@ -28,6 +28,11 @@ class Settings(BaseSettings):
 
     AVIATION_EDGE_API_KEY: str = os.getenv("AVIATION_EDGE_API_KEY", "")
     AVIATION_EDGE_BASE_URL: str = os.getenv("AVIATION_EDGE_BASE_URL", "https://aviation-edge.com/v2/public")
+    AVIATION_EDGE_TIMEOUT: float = float(os.getenv("AVIATION_EDGE_TIMEOUT", "12"))
+    AVIATION_EDGE_MAX_RETRIES: int = int(os.getenv("AVIATION_EDGE_MAX_RETRIES", "2"))
+    # `flightsFuture` refuses dates nearer than roughly a week out. Queries inside
+    # that window are skipped; the exact boundary is also learned at runtime.
+    AVIATION_EDGE_FUTURE_MIN_DAYS: int = int(os.getenv("AVIATION_EDGE_FUTURE_MIN_DAYS", "8"))
 
     # AviationStack — secondary provider (WhatsApp flight confirmation only)
     AVIATIONSTACK_API_KEY: str = os.getenv("AVIATIONSTACK_API_KEY", "")
@@ -56,6 +61,10 @@ class Settings(BaseSettings):
     )
     CORS_ALLOW_CREDENTIALS: bool = True
     TRUST_PROXY: bool = os.getenv("TRUST_PROXY", "false").lower() in ("1", "true", "yes")
+
+    IDEMPOTENCY_LOCK_TTL: int = int(os.getenv("IDEMPOTENCY_LOCK_TTL", "120"))
+    IDEMPOTENCY_CACHE_TTL: int = int(os.getenv("IDEMPOTENCY_CACHE_TTL", "86400"))
+    IDEMPOTENCY_MAX_KEY_LENGTH: int = int(os.getenv("IDEMPOTENCY_MAX_KEY_LENGTH", "256"))
 
     @property
     def is_production(self) -> bool:

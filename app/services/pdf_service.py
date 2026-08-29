@@ -671,6 +671,17 @@ def _fulfill_paid_invoice_inner(
             return {"success": False, "error": "invoice_not_found"}
 
         transaction = invoice.transaction
+        # Safety guard: never generate/send invoice if payment is not SUCCESSFUL
+        if transaction and hasattr(transaction, "status"):
+            from app.models.payment import PaymentStatus as _PS
+            if transaction.status != _PS.SUCCESSFUL:
+                logger.warning(
+                    "[InvoicePDF] Skipping invoice fulfillment for %s — transaction status is %s (not SUCCESSFUL)",
+                    invoice.invoice_number,
+                    transaction.status.value if hasattr(transaction.status, "value") else transaction.status,
+                )
+                return {"success": False, "error": "payment_not_successful", "status": str(transaction.status)}
+
         booking = None
         entity_id = getattr(transaction, "entity_id", None) if transaction else None
         if entity_id:

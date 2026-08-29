@@ -490,69 +490,20 @@ class NotificationService:
     @classmethod
     def notify_booking_created(cls, db: Session, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        After a booking is persisted, send customer confirmation and admin/team alert.
-        Failures are recorded and never raised to the booking caller.
+        After a booking is persisted, suppresses email notifications while payment is pending.
+        Official customer confirmation and operational alerts are sent upon successful payment
+        via `notify_booking_confirmed`.
         """
         booking_ref = str(context.get("booking_ref") or context.get("bookingRef") or "")
-        customer_email = str(context.get("passenger_email") or context.get("passengerEmail") or "").strip()
-        payload = {
+        summary: Dict[str, Any] = {
             "booking_ref": booking_ref,
-            "bookingRef": booking_ref,
-            "passengerName": context.get("passenger_name") or context.get("passengerName"),
-            "passengerEmail": customer_email,
-            "passengerPhone": context.get("passenger_phone") or context.get("passengerPhone"),
-            "passengerCount": context.get("passenger_count") or context.get("passengerCount") or context.get("pax_count") or 1,
-            "flightNum": context.get("flight_num") or context.get("flightNum"),
-            "originCode": context.get("origin_code") or context.get("originCode"),
-            "destCode": context.get("dest_code") or context.get("destCode"),
-            "airportCode": context.get("airport_code") or context.get("airportCode"),
-            "journeyType": context.get("journey_type") or context.get("journeyType"),
-            "service_type": context.get("service_type") or context.get("serviceType"),
-            "service_name": context.get("service_name") or context.get("package") or context.get("service_type"),
-            "departureTime": context.get("departure_time") or context.get("service_date"),
-            "terminal": context.get("terminal"),
-            "totalAmount": float(context.get("total_amount") or context.get("totalAmount") or 0.0),
-            "currency": context.get("currency") or "INR",
-            "status": context.get("status") or "PENDING",
+            "customer": {"status": "SKIPPED", "reason": "pending_payment_suppressed"},
+            "admin": [],
         }
-
-        summary: Dict[str, Any] = {"booking_ref": booking_ref, "customer": None, "admin": []}
-        logger.info("Booking notification requested", extra={"booking_ref": booking_ref})
-
-        try:
-            if customer_email:
-                summary["customer"] = cls._record_and_send(
-                    db,
-                    recipient_email=customer_email,
-                    template_type="BOOKING_RECEIVED",
-                    payload=payload,
-                    booking_ref=booking_ref,
-                    recipient_phone=str(context.get("passenger_phone") or context.get("passengerPhone") or "").strip() or None,
-                )
-            else:
-                logger.warning("Customer confirmation skipped: missing email", extra={"booking_ref": booking_ref})
-                summary["customer"] = {"status": "FAILED", "error": "missing_recipient"}
-
-            for admin_email in cls.admin_notification_recipients():
-                summary["admin"].append(
-                    {
-                        "recipient_domain": admin_email.split("@")[-1],
-                        **cls._record_and_send(
-                            db,
-                            recipient_email=admin_email,
-                            template_type="ADMIN_NEW_BOOKING",
-                            payload=payload,
-                            booking_ref=booking_ref,
-                        ),
-                    }
-                )
-            if not summary["admin"]:
-                logger.warning(
-                    "Admin notification skipped: set ADMIN_NOTIFICATION_EMAILS",
-                    extra={"booking_ref": booking_ref},
-                )
-        except Exception as exc:
-            logger.exception("Booking notification failed for %s: %s", booking_ref, type(exc).__name__)
+        logger.info(
+            "Booking created with pending payment. Customer email suppressed until payment confirmation.",
+            extra={"booking_ref": booking_ref},
+        )
         return summary
 
     @classmethod

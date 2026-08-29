@@ -9,6 +9,7 @@ Strictly validates carrier IATA/ICAO codes to prevent cross-carrier flight subst
 import json
 import logging
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
@@ -25,6 +26,7 @@ from app.flight.exceptions import (
     FlightProviderTimeoutException,
     FlightProviderUnavailableException,
     FlightRateLimitExceededException,
+    FlightScheduleUnavailableException,
     InvalidFlightDateException,
     InvalidFlightNumberException,
 )
@@ -116,6 +118,133 @@ CARRIER_NAME_MAP: Dict[str, str] = {
 
 _IN_MEMORY_CACHE: Dict[str, Tuple[float, Any]] = {}
 
+# Aviation Edge only serves `flightsFuture` from roughly a week out and answers
+# anything nearer with `{"error": "date must be above YYYY-MM-DD"}`. The boundary
+# moves with the current date, so it is learned from the response and cached here
+# rather than hardcoded.
+_COVERAGE_ERROR_RE = re.compile(
+    r"date\s+must\s+be\s+(?:above|greater\s+than|after)\s*:?\s*(\d{4}-\d{2}-\d{2})",
+    re.IGNORECASE,
+)
+_FUTURE_WINDOW_LOCK = threading.Lock()
+_LEARNED_FUTURE_MIN_DATE: Optional[str] = None
+
+_TIME_ONLY_RE = re.compile(r"^(\d{1,2}):(\d{2})(?::(\d{2}))?$")
+_DATE_TIME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})[T ](\d{1,2}):(\d{2})(?::(\d{2}))?")
+
+
+class _ScheduleOutOfProviderRange(FlightDomainException):
+    """Internal signal: the provider refused the date rather than missing the flight."""
+
+    def __init__(self, provider_message: str, boundary_date: Optional[str] = None):
+        self.provider_message = provider_message
+        self.boundary_date = boundary_date
+        super().__init__(
+            message=provider_message,
+            status_code=422,
+            code="PROVIDER_DATE_OUT_OF_RANGE",
+        )
+
+
+def _record_future_window_boundary(boundary_date: str) -> None:
+    """Remember the first date `flightsFuture` will accept (boundary + 1 day)."""
+    global _LEARNED_FUTURE_MIN_DATE
+    try:
+        first_ok = datetime.strptime(boundary_date, "%Y-%m-%d").date() + timedelta(days=1)
+    except ValueError:
+        return
+    with _FUTURE_WINDOW_LOCK:
+        current = _LEARNED_FUTURE_MIN_DATE
+        if current is None or first_ok.isoformat() > current:
+            _LEARNED_FUTURE_MIN_DATE = first_ok.isoformat()
+            logger.info(
+                "[PROVIDER WINDOW LEARNED] flightsFuture accepts dates from %s onward.",
+                _LEARNED_FUTURE_MIN_DATE,
+            )
+
+
+def _future_schedule_min_date() -> str:
+    """Earliest date worth sending to `flightsFuture`."""
+    configured_days = int(getattr(settings, "AVIATION_EDGE_FUTURE_MIN_DAYS", 8))
+    static_min = (datetime.now(timezone.utc).date() + timedelta(days=configured_days)).isoformat()
+    with _FUTURE_WINDOW_LOCK:
+        learned = _LEARNED_FUTURE_MIN_DATE
+    if learned and learned > static_min:
+        return learned
+    return static_min
+
+
+def _split_date_and_time(value: Any) -> Tuple[Optional[str], Optional[str]]:
+    """Split a provider schedule value into (date, HH:MM:SS). Either part may be absent."""
+    text = str(value or "").strip().replace(" ", "T")
+    if not text:
+        return None, None
+
+    dated = _DATE_TIME_RE.match(text)
+    if dated:
+        hour, minute, second = dated.group(2), dated.group(3), dated.group(4) or "00"
+        return dated.group(1), f"{int(hour):02d}:{minute}:{second}"
+
+    time_only = _TIME_ONLY_RE.match(text)
+    if time_only:
+        hour, minute, second = time_only.group(1), time_only.group(2), time_only.group(3) or "00"
+        return None, f"{int(hour):02d}:{minute}:{second}"
+
+    return None, None
+
+
+def _retarget_schedule_dates(
+    dep_value: Any,
+    arr_value: Any,
+    target_date: Optional[str],
+) -> Tuple[Any, Any]:
+    """
+    Force provider schedule strings onto the requested travel date.
+
+    Two provider quirks make this necessary:
+      * `timetable` ignores the requested date and always answers with today's rows.
+      * `flightsFuture` returns time-only values such as '09:30' with no date at all.
+
+    The time of day is correct in both cases, so only the date is rewritten. The
+    original departure-to-arrival day gap is preserved so red-eye flights keep
+    landing on the following day.
+    """
+    if not target_date:
+        return dep_value, arr_value
+
+    dep_date, dep_time = _split_date_and_time(dep_value)
+    arr_date, arr_time = _split_date_and_time(arr_value)
+    if dep_time is None and arr_time is None:
+        return dep_value, arr_value
+
+    try:
+        target = datetime.strptime(target_date, "%Y-%m-%d").date()
+    except ValueError:
+        return dep_value, arr_value
+
+    day_offset = 0
+    if dep_date and arr_date:
+        try:
+            day_offset = max(
+                0,
+                (
+                    datetime.strptime(arr_date, "%Y-%m-%d").date()
+                    - datetime.strptime(dep_date, "%Y-%m-%d").date()
+                ).days,
+            )
+        except ValueError:
+            day_offset = 0
+    elif dep_time and arr_time and arr_time < dep_time:
+        day_offset = 1
+
+    new_dep = f"{target.isoformat()}T{dep_time}" if dep_time else dep_value
+    new_arr = (
+        f"{(target + timedelta(days=day_offset)).isoformat()}T{arr_time}"
+        if arr_time
+        else arr_value
+    )
+    return new_dep, new_arr
+
 
 def get_redis_client():
     """Returns optional Redis client for caching if available."""
@@ -166,7 +295,7 @@ def validate_date_string(date_str: str) -> str:
     if not date_str or not isinstance(date_str, str):
         raise InvalidFlightDateException(str(date_str), "Date cannot be empty.")
 
-    cleaned = str(date_str).strip()[:10]
+    cleaned = date_str.strip()[:10]
     try:
         dt = datetime.strptime(cleaned, "%Y-%m-%d")
         return dt.strftime("%Y-%m-%d")
@@ -199,7 +328,7 @@ def split_flight_number(flight_clean: str) -> Tuple[str, str]:
 
 def canonical_flight_iata(value: str) -> str:
     """Compare flight IATA values ignoring spaces, case, and leading zeros in the numeric part."""
-    cleaned = re.sub(r"[\s\-_]+", "", str(value or "")).strip().upper()
+    cleaned = re.sub(r"[\s\-_]+", "", value or "").strip().upper()
     if not cleaned:
         return ""
     match = re.match(r"^([A-Z]{3}|[A-Z0-9]{2})(\d+)([A-Z]?)$", cleaned)
@@ -304,12 +433,17 @@ def _timetable_types_for_direction(direction: Optional[str]) -> List[str]:
 
 
 def _future_schedule_date_ok(date_clean: str) -> bool:
+    """
+    True only when `flightsFuture` can actually serve this date.
+
+    Querying nearer dates is pointless: the provider rejects them outright, so the
+    calls only add latency and burn rate limit on every lookup.
+    """
     try:
-        requested = datetime.strptime(date_clean, "%Y-%m-%d").date()
-        earliest = datetime.now(timezone.utc).date() + timedelta(days=7)
-        return requested >= earliest
-    except Exception:
+        datetime.strptime(date_clean, "%Y-%m-%d")
+    except (TypeError, ValueError):
         return False
+    return date_clean >= _future_schedule_min_date()
 
 
 def _candidate_flight_tokens(candidate: Dict[str, Any]) -> List[str]:
@@ -322,14 +456,17 @@ def _candidate_flight_tokens(candidate: Dict[str, Any]) -> List[str]:
     for raw in (
         flight_obj.get("iataNumber"),
         flight_obj.get("icaoNumber"),
+        flight_obj.get("number"),
         candidate.get("flight_iata"),
         candidate.get("flightIata"),
         candidate.get("flight_icao"),
         candidate.get("flightIcao"),
         candidate.get("flight_num"),
         candidate.get("flightNum"),
+        candidate.get("flightNumber"),
         cs_flight.get("iataNumber"),
         cs_flight.get("icaoNumber"),
+        cs_flight.get("number"),
     ):
         if raw:
             tokens.append(str(raw))
@@ -345,6 +482,15 @@ def _candidate_flight_tokens(candidate: Dict[str, Any]) -> List[str]:
             tokens.append(f"{airline_iata}{flight_number}")
     elif flight_number:
         tokens.append(flight_number)
+
+    airline_icao = str(
+        airline_obj.get("icaoCode") or airline_obj.get("icao") or candidate.get("airlineIcao") or ""
+    ).strip().upper()
+    if airline_icao and flight_number:
+        if flight_number.startswith(airline_icao):
+            tokens.append(flight_number)
+        else:
+            tokens.append(f"{airline_icao}{flight_number}")
 
     return tokens
 
@@ -440,6 +586,16 @@ class AviationEdgeProvider(FlightProvider):
 
                         if isinstance(data, dict) and "error" in data:
                             error_msg = str(data.get("error", "No Record Found"))
+                            coverage = _COVERAGE_ERROR_RE.search(error_msg)
+                            if coverage:
+                                # Not a missing flight — the provider will not serve
+                                # this date at all. Surface it so the caller can say so.
+                                _record_future_window_boundary(coverage.group(1))
+                                logger.warning(
+                                    "[API DATE OUT OF RANGE] Endpoint: %s | Params: %s | Response: %s",
+                                    endpoint, masked_params, error_msg,
+                                )
+                                raise _ScheduleOutOfProviderRange(error_msg, coverage.group(1))
                             logger.info(f"[FAILED API LOOKUP] Endpoint: {endpoint} | Params: {masked_params} | Response: {error_msg}")
                             return []
 
@@ -483,7 +639,7 @@ class AviationEdgeProvider(FlightProvider):
         """Parse datetime string into timezone-aware datetime object gracefully using airport timezone."""
         if not dt_str:
             return None
-        dt_clean = str(dt_str).replace(" ", "T")
+        dt_clean = dt_str.replace(" ", "T")
         try:
             dt = datetime.fromisoformat(dt_clean)
             if dt.tzinfo is not None:
@@ -587,12 +743,17 @@ class AviationEdgeProvider(FlightProvider):
                 score_route += 1
             score_date = 1 if dep_date == requested_date else 0
             stamp = _scheduled_departure_stamp(item) or "9999-12-31"
-            # Negated scores first so better matches sort first; earliest stamp wins ties.
+            # 1. Exact flight number match (-score_flight_iata)
+            # 2. Sector/route matching (-score_route) takes precedence
+            # 3. Exact departure date matching (-score_date)
+            # 4. Source priority (-score_source) prefers live timetable/flightsFuture over static routes
+            # 5. Airline match (-score_airline_iata)
+            # 6. Earliest scheduled departure stamp
             return (
                 -score_flight_iata,
-                -score_source,
                 -score_route,
                 -score_date,
+                -score_source,
                 -score_airline_iata,
                 stamp,
             )
@@ -694,6 +855,16 @@ class AviationEdgeProvider(FlightProvider):
             d_time = str(raw["departureTime"]).strip()
             date_prefix = date_context or datetime.now().strftime("%Y-%m-%d")
             dep_sched = f"{date_prefix}T{d_time}"
+        elif dep_sched:
+            dep_sched = str(dep_sched).replace(" ", "T")
+
+        dep_est = dep_obj.get("estimatedTime") or dep_obj.get("estimated")
+        if dep_est:
+            dep_est = str(dep_est).replace(" ", "T")
+
+        dep_act = dep_obj.get("actualTime") or dep_obj.get("actual")
+        if dep_act:
+            dep_act = str(dep_act).replace(" ", "T")
 
         dep_details = LocationEndpointDetails(
             airport=dep_code.upper() if dep_code else None,
@@ -703,8 +874,8 @@ class AviationEdgeProvider(FlightProvider):
             terminal=dep_terminal,
             gate=dep_gate,
             scheduled=dep_sched,
-            estimated=dep_obj.get("estimatedTime") or dep_obj.get("estimated"),
-            actual=dep_obj.get("actualTime") or dep_obj.get("actual"),
+            estimated=dep_est,
+            actual=dep_act,
             delay=int(dep_obj.get("delay")) if dep_obj.get("delay") is not None else None,
             timezone=dep_airport_obj.timezone if dep_airport_obj else dep_obj.get("timezone")
         )
@@ -733,6 +904,16 @@ class AviationEdgeProvider(FlightProvider):
                 except Exception:
                     pass
             arr_sched = f"{date_prefix}T{a_time}"
+        elif arr_sched:
+            arr_sched = str(arr_sched).replace(" ", "T")
+
+        arr_est = arr_obj.get("estimatedTime") or arr_obj.get("estimated")
+        if arr_est:
+            arr_est = str(arr_est).replace(" ", "T")
+
+        arr_act = arr_obj.get("actualTime") or arr_obj.get("actual")
+        if arr_act:
+            arr_act = str(arr_act).replace(" ", "T")
 
         arr_details = LocationEndpointDetails(
             airport=arr_code.upper() if arr_code else None,
@@ -742,11 +923,48 @@ class AviationEdgeProvider(FlightProvider):
             terminal=arr_terminal,
             gate=arr_gate,
             scheduled=arr_sched,
-            estimated=arr_obj.get("estimatedTime") or arr_obj.get("estimated"),
-            actual=arr_obj.get("actualTime") or arr_obj.get("actual"),
+            estimated=arr_est,
+            actual=arr_act,
             delay=int(arr_obj.get("delay")) if arr_obj.get("delay") is not None else None,
             timezone=arr_airport_obj.timezone if arr_airport_obj else arr_obj.get("timezone")
         )
+
+        if date_context:
+            row_date = _split_date_and_time(dep_details.scheduled)[0]
+            retargeted_dep, retargeted_arr = _retarget_schedule_dates(
+                dep_details.scheduled, arr_details.scheduled, date_context
+            )
+            dep_update: Dict[str, Any] = {}
+            arr_update: Dict[str, Any] = {}
+
+            if retargeted_dep != dep_details.scheduled:
+                dep_update["scheduled"] = retargeted_dep
+            if retargeted_arr != arr_details.scheduled:
+                arr_update["scheduled"] = retargeted_arr
+
+            # `timetable` only serves today, so a future-dated booking arrives with
+            # today's live actual/estimated/delay attached. Those describe a
+            # different operating day: keeping them skews duration and cutoff.
+            if row_date and row_date != date_context:
+                for update in (dep_update, arr_update):
+                    update["estimated"] = None
+                    update["actual"] = None
+                    update["delay"] = None
+
+            if dep_update or arr_update:
+                logger.info(
+                    "[SCHEDULE RETARGETED] source=%s row_date=%s -> %s | dep %r -> %r | arr %r -> %r | live_fields_dropped=%s",
+                    raw.get("_source") or "provider",
+                    row_date,
+                    date_context,
+                    dep_details.scheduled,
+                    retargeted_dep,
+                    arr_details.scheduled,
+                    retargeted_arr,
+                    bool(row_date and row_date != date_context),
+                )
+                dep_details = dep_details.model_copy(update=dep_update)
+                arr_details = arr_details.model_copy(update=arr_update)
 
         dep_tz = dep_details.timezone or (dep_airport_obj.timezone if dep_airport_obj else None)
         arr_tz = arr_details.timezone or (arr_airport_obj.timezone if arr_airport_obj else None)
@@ -793,8 +1011,8 @@ class AviationEdgeProvider(FlightProvider):
         direction: Optional[str] = None,
         origin_code: Optional[str] = None,
         destination_code: Optional[str] = None,
-        allow_fallback: bool = False,
         airport_code: Optional[str] = None,
+        allow_fallback: bool = False,
     ) -> FlightStatusData:
         """
         Validate a flight number against Aviation Edge using airport-scoped timetable
@@ -875,17 +1093,28 @@ class AviationEdgeProvider(FlightProvider):
             add_timetable_lookups(origin_iata, "departure")
             add_timetable_lookups(dest_iata, "arrival")
         elif direction_clean in ("arrival", "arrive") and (dest_iata or service_iata):
-            add_timetable_lookups(dest_iata or service_iata, "arrival")
+            arr_target = dest_iata or service_iata
+            if arr_target:
+                add_timetable_lookups(arr_target, "arrival")
             if origin_iata:
                 add_timetable_lookups(origin_iata, "departure")
         elif direction_clean in ("departure", "depart") and (origin_iata or service_iata):
-            add_timetable_lookups(origin_iata or service_iata, "departure")
+            dep_target = origin_iata or service_iata
+            if dep_target:
+                add_timetable_lookups(dep_target, "departure")
             if dest_iata:
                 add_timetable_lookups(dest_iata, "arrival")
-        else:
+        elif context_airports:
             for airport in context_airports:
                 for schedule_type in timetable_types:
                     add_timetable_lookups(airport, schedule_type)
+        else:
+            # When no airport context is passed, search timetable and flightsFuture globally by flight number
+            queries.append(("timetable", {"flight_iata": flight_clean}))
+            queries.append(("timetable", {"flight_number": numeric_flight, "airline_iata": carrier_code}))
+            if use_future:
+                queries.append(("flightsFuture", {"date": date_clean, "flight_iata": flight_clean}))
+                queries.append(("flightsFuture", {"date": date_clean, "flight_num": numeric_flight, "airline_iata": carrier_code}))
 
         # Static routes / live tracker are last-resort only and tagged so timetable rows win.
         fallback_queries: List[Tuple[str, Dict[str, Any]]] = [
@@ -902,6 +1131,7 @@ class AviationEdgeProvider(FlightProvider):
         queries.extend(fallback_queries)
 
         raw_candidates: List[Dict[str, Any]] = []
+        out_of_range_detail: Optional[str] = None
         with ThreadPoolExecutor(max_workers=8) as executor:
             future_to_query = {
                 executor.submit(self._make_request, ep, params): (ep, params)
@@ -917,6 +1147,8 @@ class AviationEdgeProvider(FlightProvider):
                                 tagged = dict(item)
                                 tagged["_source"] = ep
                                 raw_candidates.append(tagged)
+                except _ScheduleOutOfProviderRange as err:
+                    out_of_range_detail = err.provider_message
                 except Exception as err:
                     logger.warning("Flight lookup query error for %s: %s", ep, type(err).__name__)
 
@@ -936,8 +1168,13 @@ class AviationEdgeProvider(FlightProvider):
                 f"[FLIGHT SEARCH REJECTED DECISION]\n"
                 f"  • Flight: {flight_clean} on {date_clean} (REJECTED)\n"
                 f"  • Reason: No verified schedule match found for '{flight_clean}'.\n"
+                f"  • Provider date coverage issue: {out_of_range_detail or 'none'}\n"
                 f"======================================================"
             )
+            if out_of_range_detail:
+                raise FlightScheduleUnavailableException(
+                    flight_num=flight_clean, date=date_clean
+                )
             raise FlightNotFoundException(flight_num=flight_clean, date=date_clean)
 
         target_item = self._rank_and_select_candidate(
@@ -1062,14 +1299,22 @@ class AviationEdgeProvider(FlightProvider):
             raise FlightNotFoundException(flight_num=flight_clean, date=datetime.now().strftime("%Y-%m-%d"))
 
         target = results[0]
-        geography = target.get("geography", {}) if isinstance(target.get("geography"), dict) else {}
-        speed_obj = target.get("speed", {}) if isinstance(target.get("speed"), dict) else {}
+        geography = target.get("geography") if isinstance(target.get("geography"), dict) else {}
+        speed_obj = target.get("speed") if isinstance(target.get("speed"), dict) else {}
 
-        lat = float(geography.get("latitude") or target.get("latitude") or 0.0)
-        lng = float(geography.get("longitude") or target.get("longitude") or 0.0)
-        alt = float(geography.get("altitude") or target.get("altitude") or 0.0)
-        heading = float(geography.get("direction") or target.get("heading") or 0.0)
-        speed = float(speed_obj.get("horizontal") or target.get("speed") or 0.0)
+        def _to_float(val: Any) -> float:
+            if val is None or isinstance(val, (dict, list)):
+                return 0.0
+            try:
+                return float(val)
+            except (ValueError, TypeError):
+                return 0.0
+
+        lat = _to_float(geography.get("latitude") if geography.get("latitude") is not None else target.get("latitude"))
+        lng = _to_float(geography.get("longitude") if geography.get("longitude") is not None else target.get("longitude"))
+        alt = _to_float(geography.get("altitude") if geography.get("altitude") is not None else target.get("altitude"))
+        heading = _to_float(geography.get("direction") if geography.get("direction") is not None else target.get("heading"))
+        speed = _to_float(speed_obj.get("horizontal") if speed_obj.get("horizontal") is not None else target.get("speed"))
 
         telemetry = FlightTelemetry(
             latitude=lat,
