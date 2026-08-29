@@ -15,14 +15,17 @@ logger = logging.getLogger("shafsky.core.redis")
 
 _redis_client: Optional[redis.Redis] = None
 _redis_pool: Optional[redis.ConnectionPool] = None
+_last_failure_time: float = 0.0
+_FAILURE_COOLDOWN_SECONDS: float = 30.0
 
 
 def get_redis_client() -> Optional[redis.Redis]:
     """
     Retrieves or initializes the centralized Redis client connection.
-    Returns None gracefully if Redis server is unreachable.
+    Returns None gracefully if Redis server is unreachable with fast cooldown bypass.
     """
-    global _redis_client, _redis_pool
+    global _redis_client, _redis_pool, _last_failure_time
+    now = time.monotonic()
 
     if _redis_client is not None:
         try:
@@ -31,6 +34,11 @@ def get_redis_client() -> Optional[redis.Redis]:
         except Exception as err:
             logger.warning(f"Redis connection dropped ({err}). Reconnecting...")
             _redis_client = None
+            _last_failure_time = now
+
+    # If recent connection attempt failed, do not block the thread with retries on every single call
+    if (now - _last_failure_time) < _FAILURE_COOLDOWN_SECONDS:
+        return None
 
     try:
         host = getattr(settings, "REDIS_HOST", "localhost")
@@ -44,18 +52,20 @@ def get_redis_client() -> Optional[redis.Redis]:
                 password=password,
                 decode_responses=True,
                 max_connections=20,
-                socket_timeout=1.5,
-                socket_connect_timeout=1.5,
+                socket_timeout=0.5,
+                socket_connect_timeout=0.5,
                 retry_on_timeout=False
             )
 
         client = redis.Redis(connection_pool=_redis_pool)
         client.ping()
         _redis_client = client
+        _last_failure_time = 0.0
         logger.info(f"Centralized Redis client connected to {host}:{port}")
         return _redis_client
     except Exception as err:
-        logger.warning(f"Redis connection failed ({err}). Graceful fallback active.")
+        _last_failure_time = now
+        logger.warning(f"Redis connection failed ({err}). Graceful fallback active (cooldown {_FAILURE_COOLDOWN_SECONDS}s).")
         _redis_client = None
         return None
 

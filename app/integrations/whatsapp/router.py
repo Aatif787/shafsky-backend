@@ -47,6 +47,9 @@ def verify_whatsapp_webhook_challenge(
     )
 
 
+from starlette.concurrency import run_in_threadpool
+
+
 @router.post(
     "/webhook",
     response_model=WhatsAppApiResponse,
@@ -59,6 +62,7 @@ async def handle_whatsapp_webhook_event(
 ):
     """
     Receives and processes incoming WhatsApp webhook events from Meta Cloud API.
+    Executes business logic in worker threadpool to prevent blocking the async event loop.
     """
     body_bytes = await request.body()
     signature = request.headers.get("X-Hub-Signature-256") or request.headers.get("x-hub-signature-256")
@@ -72,7 +76,7 @@ async def handle_whatsapp_webhook_event(
         return WhatsAppApiResponse(success=True, data={"status": "ignored", "reason": "Invalid JSON body"})
 
     try:
-        result = WhatsAppService.handle_incoming_webhook(db, payload)
+        result = await run_in_threadpool(WhatsAppService.handle_incoming_webhook, db, payload)
         if isinstance(result, dict) and result.get("status") == "retry":
             # Only return 503 if ALL messages needed retry (lock contention / transient DB failure).
             # Meta will retry the webhook after the Retry-After interval.

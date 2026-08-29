@@ -1135,22 +1135,20 @@ class WhatsAppService:
         while time.time() < deadline:
             token = RedisDistributedLock.acquire_lock(lock_name, ttl_seconds=cls._CONV_LOCK_TTL)
             if token:
-                backend = "redis" if get_redis_client() is not None else "memory"
-                return {"backend": backend, "token": token, "phone": clean}
+                return {"token": token, "phone": clean}
             time.sleep(0.05)
 
         logger.warning("[WhatsApp] Conversation lock unavailable for %s", clean)
-        return {"backend": "none", "token": None, "phone": clean}
+        return {"token": None, "phone": clean}
 
     @classmethod
     def _release_conversation_lock(cls, lock_state: Optional[Dict[str, Any]]) -> None:
         if not lock_state:
             return
-        backend = lock_state.get("backend")
         phone = lock_state.get("phone") or "unknown"
         token = lock_state.get("token")
         lock_name = f"whatsapp:conv:{phone}"
-        if backend in ("redis", "memory") and token:
+        if token:
             RedisDistributedLock.release_lock(lock_name, token)
 
     @classmethod
@@ -1245,7 +1243,7 @@ class WhatsAppService:
                         lock_state = None
                         try:
                             lock_state = cls._acquire_conversation_lock(from_phone)
-                            if not lock_state or lock_state.get("backend") == "none":
+                            if not lock_state or not lock_state.get("token"):
                                 needs_retry = True
                                 # Release the claim so Meta's retry can reprocess at once
                                 cls._release_event_claim(
