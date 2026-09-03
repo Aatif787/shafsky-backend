@@ -1,4 +1,4 @@
-"""
+﻿"""
 Comprehensive Unit Test Suite for Shafsky Aviation WhatsApp Booking Automation System.
 Covers all core acceptance test scenarios: 4-option menu, database airport resolution,
 local flight validation, 30m session expiry, back/cancel/restart, and payment-free booking creation.
@@ -226,14 +226,15 @@ def test_scenario_04_list_response_handling(mock_send_buttons):
 # 5. Conversation State Transition (Start -> Category Selection)
 def test_scenario_05_state_transitions():
     from app.database import SessionLocal
+    phone = f"91{uuid.uuid4().int % 10**10:010d}"
     db = SessionLocal()
     try:
-        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, "918888877777")
+        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
         conv.current_state = "START"
         db.commit()
         assert conv.current_state == "START"
 
-        WhatsAppBookingStateMachine.process_incoming_event(db, "918888877777", "Hi")
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "Hi")
         db.refresh(conv)
         assert conv.current_state == "CATEGORY_SELECTION"
     finally:
@@ -247,14 +248,15 @@ def test_scenario_06_airport_resolution(mock_text, mock_list):
     mock_list.return_value = {"success": True, "message_id": "wamid.airport_res"}
     mock_text.return_value = {"success": True, "message_id": "wamid.airport_txt"}
     from app.database import SessionLocal
+    phone = f"91{uuid.uuid4().int % 10**10:010d}"
     db = SessionLocal()
     try:
-        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, "917777766666")
+        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
         conv.flight_details_json = {"journey_type": "DEPARTURE", "travel_type": "DOMESTIC"}
         conv.current_state = "AIRPORT_SELECTION"
         db.commit()
 
-        res = WhatsAppBookingStateMachine.process_incoming_event(db, "917777766666", "Delhi")
+        res = WhatsAppBookingStateMachine.process_incoming_event(db, phone, "Delhi")
         db.refresh(conv)
         assert conv.selected_airport_iata == "DEL"
         assert conv.current_state == "SERVICE_SELECTION"
@@ -262,7 +264,7 @@ def test_scenario_06_airport_resolution(mock_text, mock_list):
         # Test BBI resolution
         conv.current_state = "AIRPORT_SELECTION"
         db.commit()
-        res_bbi = WhatsAppBookingStateMachine.process_incoming_event(db, "917777766666", "Bhubaneswar")
+        res_bbi = WhatsAppBookingStateMachine.process_incoming_event(db, phone, "Bhubaneswar")
         db.refresh(conv)
         assert conv.selected_airport_iata == "BBI"
         assert conv.current_state == "SERVICE_SELECTION"
@@ -275,9 +277,10 @@ def test_scenario_06_airport_resolution(mock_text, mock_list):
 def test_scenario_07_airport_services_flow(mock_text):
     mock_text.return_value = {"success": True, "message_id": "wamid.scen07"}
     from app.database import SessionLocal
+    phone = f"91{uuid.uuid4().int % 10**10:010d}"
     db = SessionLocal()
     try:
-        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, "916666655555")
+        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
         conv.selected_category = "Airport Services"
         conv.selected_airport_iata = "DEL"
         conv.selected_airport_name = "Indira Gandhi International Airport"
@@ -288,7 +291,7 @@ def test_scenario_07_airport_services_flow(mock_text):
         db.commit()
 
         # User selects service (e.g. "Silver Meet & Assist" or "1")
-        res = WhatsAppBookingStateMachine.process_incoming_event(db, "916666655555", "1")
+        res = WhatsAppBookingStateMachine.process_incoming_event(db, phone, "1")
         db.refresh(conv)
         assert conv.current_state == "FLIGHT_INPUT"
         assert conv.selected_service_name is not None
@@ -301,15 +304,16 @@ def test_scenario_07_airport_services_flow(mock_text):
 def test_scenario_08_travel_services_flow(mock_text):
     mock_text.return_value = {"success": True, "message_id": "wamid.scen08"}
     from app.database import SessionLocal
+    phone = f"91{uuid.uuid4().int % 10**10:010d}"
     db = SessionLocal()
     try:
-        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, "915555544444")
+        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
         conv.selected_category = "Travel Services"
         conv.current_state = "SERVICE_SELECTION"
         db.commit()
 
         # Select travel service (e.g., Visa Assistance or "1")
-        WhatsAppBookingStateMachine.process_incoming_event(db, "915555544444", "1")
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "1")
         db.refresh(conv)
         assert conv.requires_flight is True or conv.requires_airport is False
         assert conv.current_state == "DATE_SELECTION"
@@ -321,23 +325,24 @@ def test_scenario_08_travel_services_flow(mock_text):
 @patch("app.integrations.whatsapp.client.WhatsAppClient.send_interactive_buttons")
 def test_scenario_09_booking_summary(mock_buttons):
     from app.database import SessionLocal
+    phone = f"91{uuid.uuid4().int % 10**10:010d}"
     db = SessionLocal()
     try:
-        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, "914444433333")
+        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
         conv.selected_service_name = "Meet & Greet"
         conv.selected_airport_name = "Indira Gandhi International Airport"
         conv.selected_airport_iata = "DEL"
         conv.flight_num = "AI2424"
-        conv.booking_date = "15 August 2026"
+        conv.booking_date = (datetime.now(timezone.utc) + timedelta(days=7)).strftime("%d %B %Y")
         conv.passenger_count = 2
         conv.customer_name = "Aariz Farooqui"
         conv.customer_email = "aariz@example.com"
-        conv.customer_phone = "914444433333"
+        conv.customer_phone = phone
         conv.total_amount = 5000.0
         conv.current_state = "ADDITIONAL_REQUIREMENTS"
         db.commit()
 
-        WhatsAppBookingStateMachine.process_incoming_event(db, "914444433333", "None")
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "None")
         db.refresh(conv)
         assert conv.current_state == "BOOKING_REVIEW"
         assert mock_buttons.called
@@ -347,10 +352,25 @@ def test_scenario_09_booking_summary(mock_buttons):
 
 # 10. Booking Request Creation (No Payment Gateway - Pending Payment Status)
 @patch("app.integrations.whatsapp.client.WhatsAppClient.send_text_message")
-def test_scenario_10_booking_request_creation_no_payment_gateway(mock_text):
+def test_scenario_10_booking_request_creation_no_payment_gateway(mock_text, monkeypatch):
     from app.database import SessionLocal
     db = SessionLocal()
     try:
+        from app.providers import razorpay_provider as _rzp
+        _fake_link_resp = {
+            "success": True,
+            "payment_link_id": f"plink_{uuid.uuid4().hex[:10]}",
+            "short_url": f"https://rzp.io/i/{uuid.uuid4().hex[:8]}",
+            "order_id": None,
+            "amount": 4500.0,
+            "currency": "INR",
+            "status": "created",
+            "simulated": False,
+            "expire_by": int((datetime.now(timezone.utc) + timedelta(hours=24)).timestamp()),
+            "notes": {"channel": "whatsapp"},
+        }
+        monkeypatch.setattr(_rzp, "create_payment_link", lambda *a, **k: dict(_fake_link_resp))
+        monkeypatch.setattr(_rzp, "list_payment_links_by_reference", lambda reference_id: {"success": True, "items": []})
         phone = f"91{uuid.uuid4().int % 10**10:010d}"
         conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
         conv.selected_service_name = "Meet & Greet"
@@ -360,7 +380,18 @@ def test_scenario_10_booking_request_creation_no_payment_gateway(mock_text):
         conv.customer_name = "Test Guest"
         conv.customer_email = "guest@example.com"
         conv.customer_phone = phone
-        conv.booking_date = "20 August 2026"
+        conv.flight_num = "AI2424"
+        conv.flight_details_json = {
+            "journey_type": "DEPARTURE",
+            "travel_type": "DOMESTIC",
+            "verification_status": "verified",
+            "verification_provider": "AVIATION_STACK",
+            "origin_iata": "DEL",
+            "destination_iata": "BOM",
+            "departure_scheduled": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+            "arrival_scheduled": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+        }
+        conv.booking_date = (datetime.now(timezone.utc) + timedelta(days=7)).strftime("%d %B %Y")
         conv.current_state = "BOOKING_REVIEW"
         db.commit()
 
@@ -422,17 +453,43 @@ def test_scenario_14_duplicate_webhook_idempotency():
 
 # 12. Customer WhatsApp Confirmation on Request Created
 @patch("app.integrations.whatsapp.client.WhatsAppClient.send_text_message")
-def test_scenario_15_customer_whatsapp_notification(mock_send):
+def test_scenario_15_customer_whatsapp_notification(mock_send, monkeypatch):
     from app.database import SessionLocal
     db = SessionLocal()
     try:
+        from app.providers import razorpay_provider as _rzp
+        _fake_link_resp = {
+            "success": True,
+            "payment_link_id": f"plink_{uuid.uuid4().hex[:10]}",
+            "short_url": f"https://rzp.io/i/{uuid.uuid4().hex[:8]}",
+            "order_id": None,
+            "amount": 4500.0,
+            "currency": "INR",
+            "status": "created",
+            "simulated": False,
+            "expire_by": int((datetime.now(timezone.utc) + timedelta(hours=24)).timestamp()),
+            "notes": {"channel": "whatsapp"},
+        }
+        monkeypatch.setattr(_rzp, "create_payment_link", lambda *a, **k: dict(_fake_link_resp))
+        monkeypatch.setattr(_rzp, "list_payment_links_by_reference", lambda reference_id: {"success": True, "items": []})
         phone = f"91{uuid.uuid4().int % 10**10:010d}"
         conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
         conv.selected_service_name = "Meet & Greet"
         conv.total_amount = 3500.0
         conv.customer_name = "John Doe"
         conv.customer_email = "john@example.com"
-        conv.booking_date = "25 August 2026"
+        conv.flight_num = "AI2424"
+        conv.flight_details_json = {
+            "journey_type": "DEPARTURE",
+            "travel_type": "DOMESTIC",
+            "verification_status": "verified",
+            "verification_provider": "AVIATION_STACK",
+            "origin_iata": "DEL",
+            "destination_iata": "BOM",
+            "departure_scheduled": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+            "arrival_scheduled": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+        }
+        conv.booking_date = (datetime.now(timezone.utc) + timedelta(days=7)).strftime("%d %B %Y")
         conv.current_state = "BOOKING_REVIEW"
         db.commit()
 
@@ -449,17 +506,43 @@ def test_scenario_15_customer_whatsapp_notification(mock_send):
 
 # 13. Team WhatsApp Notification on Request Created
 @patch("app.integrations.whatsapp.client.WhatsAppClient.send_text_message")
-def test_scenario_16_team_whatsapp_notification(mock_send):
+def test_scenario_16_team_whatsapp_notification(mock_send, monkeypatch):
     from app.database import SessionLocal
     db = SessionLocal()
     try:
+        from app.providers import razorpay_provider as _rzp
+        _fake_link_resp = {
+            "success": True,
+            "payment_link_id": f"plink_{uuid.uuid4().hex[:10]}",
+            "short_url": f"https://rzp.io/i/{uuid.uuid4().hex[:8]}",
+            "order_id": None,
+            "amount": 4500.0,
+            "currency": "INR",
+            "status": "created",
+            "simulated": False,
+            "expire_by": int((datetime.now(timezone.utc) + timedelta(hours=24)).timestamp()),
+            "notes": {"channel": "whatsapp"},
+        }
+        monkeypatch.setattr(_rzp, "create_payment_link", lambda *a, **k: dict(_fake_link_resp))
+        monkeypatch.setattr(_rzp, "list_payment_links_by_reference", lambda reference_id: {"success": True, "items": []})
         phone = f"91{uuid.uuid4().int % 10**10:010d}"
         conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
         conv.selected_service_name = "Gold VIP Package"
         conv.total_amount = 6500.0
         conv.customer_name = "Team Tester"
         conv.customer_email = "team@example.com"
-        conv.booking_date = "26 August 2026"
+        conv.flight_num = "AI2424"
+        conv.flight_details_json = {
+            "journey_type": "DEPARTURE",
+            "travel_type": "DOMESTIC",
+            "verification_status": "verified",
+            "verification_provider": "AVIATION_STACK",
+            "origin_iata": "DEL",
+            "destination_iata": "BOM",
+            "departure_scheduled": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+            "arrival_scheduled": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+        }
+        conv.booking_date = (datetime.now(timezone.utc) + timedelta(days=7)).strftime("%d %B %Y")
         conv.current_state = "BOOKING_REVIEW"
         db.commit()
 
@@ -474,13 +557,14 @@ def test_scenario_16_team_whatsapp_notification(mock_send):
 # 14. Invalid Email Re-prompting
 def test_scenario_19_invalid_input_reprompting():
     from app.database import SessionLocal
+    phone = f"91{uuid.uuid4().int % 10**10:010d}"
     db = SessionLocal()
     try:
-        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, "919000033333")
+        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
         conv.current_state = "CUSTOMER_EMAIL"
         db.commit()
 
-        res = WhatsAppBookingStateMachine.process_incoming_event(db, "919000033333", "not_an_email")
+        res = WhatsAppBookingStateMachine.process_incoming_event(db, phone, "not_an_email")
         db.refresh(conv)
         assert res["status"] == "invalid_email"
         assert conv.current_state == "CUSTOMER_EMAIL"
@@ -1152,7 +1236,7 @@ def test_scenario_40_dynamic_travel_type_switch_during_service_selection(mock_li
 @patch("app.integrations.whatsapp.client.WhatsAppClient.send_interactive_list")
 @patch("app.integrations.whatsapp.client.WhatsAppClient.send_text_message")
 @patch("app.flight.aviationstack_service.verify_flight_for_whatsapp")
-def test_scenario_41_complete_separated_airport_service_booking(mock_verify, mock_text, mock_list, mock_buttons):
+def test_scenario_41_complete_separated_airport_service_booking(mock_verify, mock_text, mock_list, mock_buttons, monkeypatch):
     mock_text.return_value = {"success": True, "message_id": "wamid.txt"}
     mock_list.return_value = {"success": True, "message_id": "wamid.lst"}
     mock_buttons.return_value = {"success": True, "message_id": "wamid.btn"}
@@ -1172,6 +1256,21 @@ def test_scenario_41_complete_separated_airport_service_booking(mock_verify, moc
     from app.database import SessionLocal
     db = SessionLocal()
     try:
+        from app.providers import razorpay_provider as _rzp
+        _fake_link_resp = {
+            "success": True,
+            "payment_link_id": f"plink_{uuid.uuid4().hex[:10]}",
+            "short_url": f"https://rzp.io/i/{uuid.uuid4().hex[:8]}",
+            "order_id": None,
+            "amount": 4500.0,
+            "currency": "INR",
+            "status": "created",
+            "simulated": False,
+            "expire_by": int((datetime.now(timezone.utc) + timedelta(hours=24)).timestamp()),
+            "notes": {"channel": "whatsapp"},
+        }
+        monkeypatch.setattr(_rzp, "create_payment_link", lambda *a, **k: dict(_fake_link_resp))
+        monkeypatch.setattr(_rzp, "list_payment_links_by_reference", lambda reference_id: {"success": True, "items": []})
         phone = f"91{uuid.uuid4().int % 10**10:010d}"
 
         # 1. Main menu

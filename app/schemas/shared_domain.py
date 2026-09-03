@@ -1,11 +1,11 @@
-"""
+﻿"""
 Pydantic Request/Response Schemas for Phase B.5 — Shared Domain Services.
 """
 
 from typing import Optional, List, Dict, Any
 from uuid import UUID
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ─────────────────────────────────────────────
@@ -35,8 +35,7 @@ class AssignmentResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class AssignmentHistoryResponse(BaseModel):
     id: UUID
@@ -49,8 +48,7 @@ class AssignmentHistoryResponse(BaseModel):
     metadata_json: Dict[str, Any] = {}
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class WorkloadResponse(BaseModel):
     staff_id: UUID
@@ -78,8 +76,7 @@ class TimelineEntryResponse(BaseModel):
     reference_id: Optional[str] = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class PaginatedTimelineResponse(BaseModel):
     success: bool = True
@@ -116,8 +113,7 @@ class NoteResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class NoteRevisionResponse(BaseModel):
     id: UUID
@@ -127,8 +123,7 @@ class NoteRevisionResponse(BaseModel):
     revision_number: int
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ─────────────────────────────────────────────
@@ -159,8 +154,7 @@ class AttachmentResponse(BaseModel):
     is_deleted: bool = False
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ─────────────────────────────────────────────
@@ -184,8 +178,7 @@ class SLADefinitionResponse(BaseModel):
     is_active: bool
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class SLAStartRequest(BaseModel):
     entity_type: str = Field(..., description="Polymorphic entity type")
@@ -212,8 +205,7 @@ class SLAInstanceResponse(BaseModel):
     resolved_by: Optional[str] = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class SLAOverdueResponse(BaseModel):
     success: bool = True

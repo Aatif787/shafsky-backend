@@ -1,11 +1,11 @@
-"""
+﻿"""
 Pydantic Schemas for Phase B.4 — Workflow Administration & Operations API.
 """
 
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 from uuid import UUID
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from app.schemas.workflow import WorkflowInstanceResponse
 
 
@@ -25,8 +25,7 @@ class ActiveWorkflowItem(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class PaginatedActiveDashboardResponse(BaseModel):

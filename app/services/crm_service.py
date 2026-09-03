@@ -1,4 +1,4 @@
-import uuid
+﻿import uuid
 import secrets
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select, func, or_, desc
 from fastapi import HTTPException
 
+from app.services.auth_service import AuthService
 from app.models.schema import (
     UserAuth,
     Profile,
@@ -72,7 +73,7 @@ class CrmService:
             user_auth = UserAuth(
                 id=uuid.uuid4(),
                 email=payload.email,
-                password_hash="ShafskyCustomerPlaceholderHash2026",
+                password_hash=AuthService.hash_password(secrets.token_urlsafe(48)),  # unusable credential: hash of a discarded random secret
                 role=Role.CUSTOMER,
                 is_verified=True,
                 created_at=datetime.now(timezone.utc),

@@ -1,17 +1,17 @@
-"""
+﻿"""
 Pydantic Schemas for Workflow Engine API Endpoints.
 """
 
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 from uuid import UUID
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class WorkflowDefinitionCreate(BaseModel):
-    service_type: str = Field(..., description="Service domain code (e.g. VISA_ASSISTANCE, AIR_CARGO, AIRPORT_MEET_AND_ASSIST)", example="VISA_ASSISTANCE")
-    name: str = Field(..., description="Human readable workflow name", example="Custom Visa Workflow")
-    initial_state: str = Field(..., description="Starting state name", example="DOCUMENT_COLLECTION")
+    service_type: str = Field(..., description="Service domain code (e.g. VISA_ASSISTANCE, AIR_CARGO, AIRPORT_MEET_AND_ASSIST)", json_schema_extra={"example": "VISA_ASSISTANCE"})
+    name: str = Field(..., description="Human readable workflow name", json_schema_extra={"example": "Custom Visa Workflow"})
+    initial_state: str = Field(..., description="Starting state name", json_schema_extra={"example": "DOCUMENT_COLLECTION"})
     states_config: Dict[str, Any] = Field(..., description="Complete states configuration dictionary with allowed actions, roles, and guards")
     description: Optional[str] = Field(None, description="Optional workflow description")
 
@@ -26,13 +26,12 @@ class WorkflowDefinitionResponse(BaseModel):
     is_active: bool
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class WorkflowInstanceCreate(BaseModel):
-    service_type: str = Field(..., description="Service domain code", example="AIRPORT_MEET_AND_ASSIST")
-    entity_id: str = Field(..., description="Target domain entity reference ID", example="SHF-20260731-9090")
+    service_type: str = Field(..., description="Service domain code", json_schema_extra={"example": "AIRPORT_MEET_AND_ASSIST"})
+    entity_id: str = Field(..., description="Target domain entity reference ID", json_schema_extra={"example": "SHF-20260731-9090"})
     initial_context: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Initial context payload dictionary")
     version: Optional[int] = Field(None, description="Optional version pin for workflow definition")
 
@@ -48,12 +47,11 @@ class WorkflowInstanceResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class WorkflowTransitionRequest(BaseModel):
-    action: str = Field(..., description="Action name to execute from current state", example="CONFIRM")
+    action: str = Field(..., description="Action name to execute from current state", json_schema_extra={"example": "CONFIRM"})
     payload: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Payload attributes for transition guard evaluation")
 
 
@@ -69,8 +67,7 @@ class WorkflowHistoryResponse(BaseModel):
     transition_metadata: Dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class WorkflowAuditLogResponse(BaseModel):
@@ -81,8 +78,7 @@ class WorkflowAuditLogResponse(BaseModel):
     details: Dict[str, Any]
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class WorkflowHistoryDetailsResponse(BaseModel):

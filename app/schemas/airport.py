@@ -1,19 +1,19 @@
-"""
+﻿"""
 Pydantic Schemas for Airport Meet & Assist Module — Phase C.1.
 """
 
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from uuid import UUID
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PassengerCreate(BaseModel):
-    full_name: str = Field(..., min_length=1, description="Full passenger name", example="John Doe")
-    gender: Optional[str] = Field(None, example="MALE")
-    dob: Optional[str] = Field(None, example="1985-06-15")
-    nationality: Optional[str] = Field(None, example="United States")
-    passport_number: Optional[str] = Field(None, example="A12345678")
+    full_name: str = Field(..., min_length=1, description="Full passenger name", json_schema_extra={"example": "John Doe"})
+    gender: Optional[str] = Field(None, json_schema_extra={"example": "MALE"})
+    dob: Optional[str] = Field(None, json_schema_extra={"example": "1985-06-15"})
+    nationality: Optional[str] = Field(None, json_schema_extra={"example": "United States"})
+    passport_number: Optional[str] = Field(None, json_schema_extra={"example": "A12345678"})
     contact_email: Optional[str] = None
     contact_phone: Optional[str] = None
     is_primary: bool = Field(default=False, description="Is primary contact passenger")
@@ -32,16 +32,15 @@ class PassengerResponse(BaseModel):
     is_primary: bool
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class FlightDetailCreate(BaseModel):
-    airline: str = Field(..., example="Emirates")
-    flight_number: str = Field(..., example="EK-202")
-    departure_airport: str = Field(..., min_length=3, max_length=3, example="DXB")
-    arrival_airport: str = Field(..., min_length=3, max_length=3, example="JFK")
-    terminal: Optional[str] = Field(None, example="Terminal 3")
+    airline: str = Field(..., json_schema_extra={"example": "Emirates"})
+    flight_number: str = Field(..., json_schema_extra={"example": "EK-202"})
+    departure_airport: str = Field(..., min_length=3, max_length=3, json_schema_extra={"example": "DXB"})
+    arrival_airport: str = Field(..., min_length=3, max_length=3, json_schema_extra={"example": "JFK"})
+    terminal: Optional[str] = Field(None, json_schema_extra={"example": "Terminal 3"})
     scheduled_time: datetime = Field(..., description="Scheduled departure/arrival UTC timestamp")
     flight_type: str = Field(default="ARRIVAL", description="ARRIVAL, DEPARTURE, or TRANSIT")
 
@@ -58,12 +57,11 @@ class FlightDetailResponse(BaseModel):
     flight_type: str
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ServiceAddonCreate(BaseModel):
-    service_code: str = Field(..., description="MEET_GREET, FAST_TRACK, BUGGY, LOUNGE, PORTER, VIP_ASSIST", example="FAST_TRACK")
+    service_code: str = Field(..., description="MEET_GREET, FAST_TRACK, BUGGY, LOUNGE, PORTER, VIP_ASSIST", json_schema_extra={"example": "FAST_TRACK"})
     quantity: int = Field(default=1, ge=1)
 
 
@@ -76,14 +74,13 @@ class ServiceAddonResponse(BaseModel):
     total_price: float
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AirportBookingCreate(BaseModel):
     service_package: str = Field(default="STANDARD_MEET_GREET", description="Service package name")
     special_instructions: Optional[str] = None
-    passengers: List[PassengerCreate] = Field(..., min_items=1, description="List of passengers")
+    passengers: List[PassengerCreate] = Field(..., min_length=1, description="List of passengers")
     flight_detail: FlightDetailCreate = Field(..., description="Flight information")
     addons: List[ServiceAddonCreate] = Field(default_factory=list, description="Addon service selections")
 
@@ -115,8 +112,7 @@ class AirportBookingResponse(BaseModel):
     assignments: List[Dict[str, Any]] = []
     attachments: List[Dict[str, Any]] = []
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class PaginatedAirportBookingResponse(BaseModel):

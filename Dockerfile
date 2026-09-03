@@ -1,6 +1,9 @@
-# Production hardened multi-stage Dockerfile for Shafsky FastAPI backend
+﻿# Production hardened multi-stage Dockerfile for Shafsky FastAPI backend
 
-FROM python:3.11.8-slim AS builder
+# python:3.13-slim aligns the container runtime with the tested dev/test Python (3.13.x).
+# TODO: pin to an explicit digest for supply-chain integrity, e.g.:
+#   docker buildx imagetools inspect python:3.13-slim
+FROM python:3.13-slim AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -21,8 +24,7 @@ RUN python -m pip install --upgrade pip setuptools wheel \
 
 COPY . /src
 
-FROM python:3.11.8-slim AS runtime
-# TODO: Pin the above image to an explicit digest for supply-chain integrity, e.g.: python@sha256:...
+FROM python:3.13-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
@@ -47,9 +49,9 @@ USER shafsky
 EXPOSE 4000
 
 # Lightweight Python healthcheck (uses stdlib urllib)
-HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-  CMD python -c "import urllib.request, sys; resp=urllib.request.urlopen('http://127.0.0.1:4000/health'); sys.exit(0 if resp.status==200 else 1)"
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD python -c 'import os, urllib.request, sys; port=os.environ.get("PORT", "4000"); resp=urllib.request.urlopen("http://127.0.0.1:%s/live" % port); sys.exit(0 if resp.status == 200 else 1)'
 
 ENV PORT=4000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "4000"]
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-4000}"]

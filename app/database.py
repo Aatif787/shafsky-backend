@@ -1,4 +1,4 @@
-"""
+﻿"""
 Database Connection & Engine Singleton Module.
 Configures persistent, high-performance PostgreSQL connection pooling (QueuePool)
 with LIFO checkout, TCP keepalive socket settings, and proactive health checks
@@ -19,6 +19,23 @@ def _database_url() -> str:
         url = f"{url}{sep}sslmode=require"
     return url
 
+
+
+
+def _json_serializer(value):
+    """JSON serializer that tolerates Decimal / datetime values in JSON columns."""
+    import json as _json
+    from decimal import Decimal as _Decimal
+    import datetime as _dt
+
+    def _default(obj):
+        if isinstance(obj, _Decimal):
+            return float(obj)
+        if isinstance(obj, (_dt.datetime, _dt.date, _dt.time)):
+            return obj.isoformat()
+        return str(obj)
+
+    return _json.dumps(value, default=_default)
 
 def _create_database_engine() -> Engine:
     """
@@ -43,6 +60,7 @@ def _create_database_engine() -> Engine:
 
     return create_engine(
         db_url,
+        json_serializer=_json_serializer,
         poolclass=QueuePool,
         pool_size=20,            # Maintain 20 hot, persistent connections
         max_overflow=30,         # Handle up to 30 burst connections

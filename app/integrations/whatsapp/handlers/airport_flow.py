@@ -1,4 +1,4 @@
-"""
+﻿"""
 Airport Flow Mixin for WhatsApp Booking State Machine.
 Handles:
 - Main category selection (Airport, Travel, Charter, Hotel/Transport)
@@ -11,6 +11,7 @@ Handles:
 - Service selection & progression to Flight/Charter/Date input
 """
 
+from decimal import Decimal
 import logging
 from typing import Dict, Any, Optional, List, Tuple
 from sqlalchemy.orm import Session
@@ -883,7 +884,7 @@ class AirportFlowMixin(BaseFlowMixin):
         menu_items = []
         for svc in cat_services[:10]:
             raw_price = svc.get("base_price") or svc.get("price") or 0.0
-            price_val = float(raw_price) if isinstance(raw_price, (int, float, str)) else 0.0
+            price_val = float(raw_price) if isinstance(raw_price, (int, float, str, Decimal)) else 0.0
             menu_items.append({
                 "id": str(svc.get("id")),
                 "title": svc.get("title", svc.get("name", "Service")),
@@ -1063,7 +1064,7 @@ class AirportFlowMixin(BaseFlowMixin):
         svc_id = str(selected_svc.get("id"))
         svc_title = str(selected_svc.get("title", selected_svc.get("name", "VIP Service")))
         raw_price = selected_svc.get("base_price") or selected_svc.get("price") or 2500.0
-        price = float(raw_price) if isinstance(raw_price, (int, float, str)) else 2500.0
+        price = float(raw_price) if isinstance(raw_price, (int, float, str, Decimal)) else 2500.0
 
         conv.selected_service_id = svc_id
         conv.selected_service_name = svc_title

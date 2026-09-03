@@ -1,4 +1,4 @@
-"""
+﻿"""
 WhatsApp Integration Service & Persistent Booking State Machine Engine.
 Coordinator module composing domain flow mixins:
 - AirportFlowMixin: Categories, Journey Types, Airports, Terminals, Service Packages
@@ -720,7 +720,18 @@ class WhatsAppBookingStateMachine(
     @classmethod
     def _store_wa_menu(cls, db: Session, conv: WhatsAppConversation, items: list) -> None:
         """Store WhatsApp UI menu state in whatsapp_state_json (not flight_details_json)."""
-        cls._set_wa_state_key(db, conv, "_wa_menu", items)
+        from decimal import Decimal as _Decimal
+
+        def _json_safe(value):
+            if isinstance(value, _Decimal):
+                return float(value)
+            if isinstance(value, dict):
+                return {k: _json_safe(v) for k, v in value.items()}
+            if isinstance(value, (list, tuple)):
+                return [_json_safe(v) for v in value]
+            return value
+
+        cls._set_wa_state_key(db, conv, "_wa_menu", _json_safe(list(items)))
 
     @classmethod
     def _get_wa_menu(cls, conv: WhatsAppConversation) -> list:

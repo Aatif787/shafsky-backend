@@ -1,10 +1,10 @@
-"""
+﻿"""
 Pydantic Schemas for Payment & Invoicing API.
 """
 
 from typing import Optional, Dict, Any, List
 from datetime import datetime
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, ConfigDict, Field, EmailStr
 from app.models.payment import PaymentStatus, PaymentMethod, InvoiceStatus
 
 
@@ -35,8 +35,7 @@ class PaymentTransactionResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class WebhookPayload(BaseModel):
@@ -64,8 +63,7 @@ class RefundResponse(BaseModel):
     reason: Optional[str] = None
     processed_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class InvoiceResponse(BaseModel):
@@ -81,8 +79,7 @@ class InvoiceResponse(BaseModel):
     status: str
     issued_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class PaymentVerifyRequest(BaseModel):

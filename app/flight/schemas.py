@@ -1,6 +1,6 @@
-from typing import Optional, List
+﻿from typing import Optional, List
 from datetime import datetime
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 
 class FlightAirport(BaseModel):
@@ -156,8 +156,7 @@ class FlightStatusData(BaseModel):
     def durationFormatted(self) -> str:
         return self.duration.formatted or "0m"
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class FlightTelemetry(BaseModel):
@@ -198,16 +197,14 @@ class FlightValidateRequest(BaseModel):
     def resolved_direction(self) -> str:
         return self.direction or self.trip_type or self.service_type or self.mode or "any"
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class FlightValidateResponseData(BaseModel):
     valid: bool
     flight_data: Optional[FlightStatusData] = Field(default=None, alias="flightData")
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class FlightValidateResponse(BaseModel):

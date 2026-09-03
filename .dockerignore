@@ -1,0 +1,38 @@
+# ---- secrets: never bake into images ----
+.env
+.env.*
+*.env
+
+# ---- VCS & tooling ----
+.git
+.gitignore
+.vscode
+.idea
+.pytest_cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pylintrc
+pyrightconfig.json
+
+# ---- virtualenvs ----
+.venv/
+venv/
+
+# ---- tests, scratch, local data ----
+tests/
+scratch/
+backups/
+*.db
+*.log
+
+# ---- local diagnostics & audit artifacts ----
+wa_diag.py
+wa_ownership.py
+audit_atq.py
+bandit-report*.txt
+pip-audit*
+safety-report*
+scratch_mapping.txt
+regression_audit_out.txt
+audit_p3.txt

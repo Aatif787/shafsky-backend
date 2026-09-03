@@ -1,9 +1,22 @@
-"""Live-shaped tests for service-airport resolution against the FastAPI app."""
+﻿"""Live-shaped tests for service-airport resolution against the FastAPI app."""
 
 from fastapi.testclient import TestClient
 from app.main import app
 
 client = TestClient(app)
+
+import pytest
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _seed_journey_catalog():
+    """Seed the production journey catalog (airports + services + packages)."""
+    from app.database import Base, engine, SessionLocal  # noqa: F401
+    Base.metadata.create_all(bind=engine)
+    from app.seeds.seed_journey_data import run_seed
+    run_seed()
+    yield
+
 
 
 def test_resolve_arrival_london_delhi():

@@ -102,10 +102,16 @@ app.add_middleware(SecurityMiddleware)
 app.add_middleware(IdempotencyMiddleware)
 
 # CORS Middleware
+# The permissive tunnel/localhost origin regex is a DEVELOPMENT convenience.
+# In production only explicit ALLOWED_ORIGINS are honoured, so credentialed
+# cross-origin requests cannot be made from arbitrary ngrok/vercel origins.
+_CORS_DEV_ORIGIN_REGEX = (
+    r"^https?://(localhost|127\.0\.0\.1|.*\.ngrok-free\.(dev|app)|.*\.ngrok\.io|.*\.vercel\.app)(:\d+)?$"
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=getattr(settings, "ALLOWED_ORIGINS", []),
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|.*\.ngrok-free\.(dev|app)|.*\.ngrok\.io|.*\.vercel\.app)(:\d+)?$",
+    allow_origin_regex=None if getattr(settings, "is_production", False) else _CORS_DEV_ORIGIN_REGEX,
     allow_credentials=getattr(settings, "CORS_ALLOW_CREDENTIALS", False),
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],

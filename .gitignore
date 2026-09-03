@@ -1,4 +1,4 @@
-# Environment variables & secrets
+﻿# Environment variables & secrets
 .env
 *.env
 
@@ -22,3 +22,13 @@ backups/
 scratch/
 wa_diag.py
 wa_ownership.py
+
+# Security-scanner & audit artifacts (may contain partial secrets / endpoint inventories)
+bandit-report*.txt
+pip-audit*
+safety-report*
+regression_audit_out.txt
+audit_p3.txt
+scratch_mapping.txt
+.coverage
+htmlcov/

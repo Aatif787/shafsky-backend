@@ -1,10 +1,12 @@
-import uuid
+﻿import uuid
+import secrets
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func, or_, desc
 from fastapi import HTTPException
 
+from app.services.auth_service import AuthService
 from app.models.schema import (
     UserAuth,
     Profile,
@@ -104,7 +106,7 @@ class AdminService:
             user = UserAuth(
                 id=user_id,
                 email=email,
-                password_hash="ShafskyAdminHashedPassword2026",
+                password_hash=AuthService.hash_password(secrets.token_urlsafe(48)),  # unusable credential: hash of a discarded random secret
                 role=role,
                 is_verified=True,
                 created_at=datetime.now(timezone.utc),

@@ -1,4 +1,4 @@
-"""
+﻿"""
 Comprehensive Unit Test Suite for Official Meta WhatsApp Cloud API Backend Integration.
 Tests Webhook Verification GET, Event Ingestion POST, Status Parsing, Outbound Error Handling,
 Health Checks, and Test Dispatch Endpoints.
@@ -20,6 +20,8 @@ client = TestClient(app)
 # 1. Webhook GET Verification Success
 def test_whatsapp_webhook_verification_success(monkeypatch):
     monkeypatch.setenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "shafsky_test_verify_token_123")
+    whatsapp_client._config_loaded = False
+    whatsapp_client._load_config(force=True)
     res = client.get(
         "/api/whatsapp/webhook",
         params={
@@ -35,6 +37,8 @@ def test_whatsapp_webhook_verification_success(monkeypatch):
 # 2. Webhook GET Verification Failure
 def test_whatsapp_webhook_verification_failure(monkeypatch):
     monkeypatch.setenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "shafsky_test_verify_token_123")
+    whatsapp_client._config_loaded = False
+    whatsapp_client._load_config(force=True)
     res = client.get(
         "/api/whatsapp/webhook",
         params={
@@ -51,6 +55,8 @@ def test_whatsapp_webhook_verification_failure(monkeypatch):
 @patch("app.integrations.whatsapp.client.whatsapp_client.send_text_message")
 def test_whatsapp_webhook_post_message_parsing(mock_send, monkeypatch):
     monkeypatch.setenv("WHATSAPP_APP_SECRET", "")
+    whatsapp_client._config_loaded = False
+    whatsapp_client._load_config(force=True)
     mock_send.return_value = {"success": True, "message_id": "wamid.test_reply_123"}
 
     payload = {
@@ -91,6 +97,8 @@ def test_whatsapp_webhook_post_message_parsing(mock_send, monkeypatch):
 # 4. Webhook POST Status Event Parsing (Sent, Delivered, Read, Failed)
 def test_whatsapp_webhook_post_status_event_parsing(monkeypatch):
     monkeypatch.setenv("WHATSAPP_APP_SECRET", "")
+    whatsapp_client._config_loaded = False
+    whatsapp_client._load_config(force=True)
     payload = {
         "object": "whatsapp_business_account",
         "entry": [
@@ -247,6 +255,8 @@ def test_whatsapp_integration_status_endpoint(monkeypatch):
 def test_whatsapp_webhook_signature_verification_success(monkeypatch):
     test_secret = "test_meta_app_secret_12345"
     monkeypatch.setenv("WHATSAPP_APP_SECRET", test_secret)
+    whatsapp_client._config_loaded = False
+    whatsapp_client._load_config(force=True)
 
     payload = {
         "object": "whatsapp_business_account",
@@ -267,6 +277,8 @@ def test_whatsapp_webhook_signature_verification_success(monkeypatch):
 def test_whatsapp_webhook_signature_verification_failure(monkeypatch):
     test_secret = "test_meta_app_secret_12345"
     monkeypatch.setenv("WHATSAPP_APP_SECRET", test_secret)
+    whatsapp_client._config_loaded = False
+    whatsapp_client._load_config(force=True)
 
     payload = {"object": "whatsapp_business_account", "entry": []}
     import json
@@ -294,6 +306,8 @@ def test_whatsapp_webhook_signature_verification_failure(monkeypatch):
 def test_whatsapp_webhook_signature_raw_bytes_and_formats(monkeypatch):
     test_secret = "meta_32char_secret_0123456789abc"
     monkeypatch.setenv("WHATSAPP_APP_SECRET", test_secret)
+    whatsapp_client._config_loaded = False
+    whatsapp_client._load_config(force=True)
 
     # Test with precise raw bytes containing whitespace and nested UTF-8 JSON
     raw_payload_bytes = b'{\n  "object": "whatsapp_business_account",\n  "entry": []\n}'
@@ -330,6 +344,8 @@ def test_whatsapp_webhook_signature_quoted_env_secret(monkeypatch):
     # Simulate user putting quotes in .env file like WHATSAPP_APP_SECRET="abcdef12345"
     raw_secret = "quoted_secret_value_999"
     monkeypatch.setenv("WHATSAPP_APP_SECRET", f'"{raw_secret}"')
+    whatsapp_client._config_loaded = False
+    whatsapp_client._load_config(force=True)
 
     raw_body = b'{"object":"whatsapp_business_account","entry":[]}'
     import hmac, hashlib

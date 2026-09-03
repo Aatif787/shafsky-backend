@@ -1,4 +1,4 @@
-"""
+﻿"""
 WhatsApp Razorpay Payment Link initiation, reuse/expiry, and webhook correlation.
 """
 
@@ -81,7 +81,7 @@ def _seed_review_conv(db, phone: str, amount: float = 4500.0) -> WhatsAppConvers
     conv.customer_name = "Test Guest"
     conv.customer_email = "guest@shafsky.com"
     conv.customer_phone = phone
-    conv.booking_date = "20 August 2026"
+    conv.booking_date = (datetime.now(timezone.utc) + timedelta(days=7)).strftime("%d %B %Y")
     conv.passenger_count = 1
     conv.flight_num = "AI101"
     future = (datetime.now(timezone.utc) + timedelta(hours=48)).isoformat()

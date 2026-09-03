@@ -1,11 +1,11 @@
-"""
+﻿"""
 Pydantic Schemas for Air Ticketing Domain Foundation.
 """
 
 import uuid
 from datetime import datetime
 from typing import Optional, List
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, ConfigDict, Field, EmailStr
 from app.models.ticketing import AirTicketStatus, AirTicketPassengerType
 
 
@@ -27,8 +27,7 @@ class AirTicketPassengerResponse(AirTicketPassengerCreate):
     ticket_booking_id: str
     created_at: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AirTicketBookingCreateRequest(BaseModel):
@@ -79,8 +78,7 @@ class AirTicketBookingResponse(BaseModel):
     updated_at: str
     passengers: List[AirTicketPassengerResponse] = []
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AirTicketTransitionRequest(BaseModel):

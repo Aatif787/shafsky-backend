@@ -1,9 +1,9 @@
-"""
+﻿"""
 Meta WhatsApp Cloud API Webhook & Outbound Payload Schemas.
 """
 
 from typing import Optional, Dict, Any, List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class WhatsAppProfile(BaseModel):
@@ -26,8 +26,7 @@ class WhatsAppIncomingMessage(BaseModel):
     type: str
     text: Optional[TextMessageContent] = None
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class WhatsAppValue(BaseModel):

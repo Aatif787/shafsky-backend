@@ -1,11 +1,11 @@
-"""
+﻿"""
 Pydantic Schemas for Journey Detection Engine — Phase 1.
 """
 
 from typing import Optional, List
 from datetime import datetime
 from uuid import UUID
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 
 # ─── Airport Schemas ───
@@ -23,8 +23,7 @@ class SupportedAirportResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
     @computed_field
     @property
@@ -56,8 +55,7 @@ class ServiceResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ServiceListResponse(BaseModel):
@@ -90,8 +88,7 @@ class AirportServiceResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AirportServiceListResponse(BaseModel):
