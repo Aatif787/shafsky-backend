@@ -1,4 +1,4 @@
-"""
+﻿"""
 AviationStack secondary flight verification for WhatsApp booking confirmation.
 
 Aviation Edge remains the primary provider for website /api/flights/validate.
@@ -391,33 +391,8 @@ def verify_flight_for_whatsapp(
     # ── 1. Check Unified Cross-Provider Flight Cache (RAM -> Redis -> DB) ─
     fast_cache_key = f"fast_flight:wa:{normalized}:{svc or 'ALL'}:{jt or 'ALL'}:{travel_date or 'ALL'}"
     if os.getenv("TESTING") != "1":
-        try:
-            from app.flight.unified_cache import get_unified_flight, to_aviationstack_record
-            unified_hit = get_unified_flight(normalized, travel_date)
-            if unified_hit:
-                as_record = to_aviationstack_record(unified_hit, normalized)
-                cached_flight, cached_reason = _select_best_record(
-                    [as_record], normalized, svc, jt, travel_date=travel_date
-                )
-                if cached_flight and cached_reason == REASON_OK:
-                    logger.info("Unified Flight Cache Hit in WhatsApp (<1ms) | Flight: %s", normalized)
-                    return {
-                        "success": True,
-                        "reason": REASON_OK,
-                        "flight": cached_flight,
-                        "message_context": {
-                            "flight_number": cached_flight.get("flight_number") or normalized,
-                            "airline": cached_flight.get("airline"),
-                            "route_label": format_route_label(cached_flight),
-                            "selected_airport_iata": svc,
-                            "selected_airport_name": selected_airport_name or svc,
-                            "journey_type": jt,
-                            "departure": cached_flight.get("departure"),
-                            "arrival": cached_flight.get("arrival"),
-                        },
-                    }
-        except Exception as err:
-            logger.debug("Unified cache check in verify_flight_for_whatsapp error: %s", err)
+        # unified-cache try-block removed: provider-untagged cache served stale/
+        # Edge-sourced records into WhatsApp verification (see commit notes).
 
         # ── High-Performance Redis L1 Cache Check (< 1ms) ──────────────────────
         try:

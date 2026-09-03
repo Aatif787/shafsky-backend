@@ -394,3 +394,75 @@ async def toggle_coupon_status(
             "message": f"Coupon '{cp.code}' status updated to {cp.is_active}.",
         }
     )
+
+
+# ─── Airport Services & Pricing Matrix Endpoints ───
+@router.get("/airport-services", response_model=AdminApiResponse)
+async def list_admin_airport_services(
+    airport: Optional[str] = Query(None, description="IATA code filter, e.g. LKO, DEL"),
+    journey_type: Optional[str] = Query(None, description="ARRIVAL, DEPARTURE, TRANSIT"),
+    flight_type: Optional[str] = Query(None, description="DOMESTIC, INTERNATIONAL, ALL"),
+    is_available: Optional[bool] = Query(None, description="Active status filter"),
+    limit: int = Query(300, le=1000),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    _admin_context: Dict[str, Any] = Depends(get_required_admin),
+):
+    services = AdminService.list_airport_services(
+        db,
+        airport_code=airport,
+        journey_type=journey_type,
+        flight_type=flight_type,
+        is_available=is_available,
+        limit=limit,
+        offset=offset,
+    )
+    return AdminApiResponse(success=True, data=services)
+
+
+@router.patch("/airport-services/{mapping_id}", response_model=AdminApiResponse)
+async def update_admin_airport_service(
+    mapping_id: str,
+    payload: Dict[str, Any],
+    db: Session = Depends(get_db),
+    admin_context: Dict[str, Any] = Depends(get_required_admin),
+):
+    admin_email = admin_context.get("email", "admin@shafskyaviation.com")
+    updated = AdminService.update_airport_service(
+        db=db,
+        mapping_id=mapping_id,
+        updates=payload,
+        admin_email=admin_email,
+    )
+    return AdminApiResponse(success=True, data=updated)
+
+
+@router.post("/airport-services", response_model=AdminApiResponse)
+async def create_admin_airport_service(
+    payload: Dict[str, Any],
+    db: Session = Depends(get_db),
+    admin_context: Dict[str, Any] = Depends(get_required_admin),
+):
+    admin_email = admin_context.get("email", "admin@shafskyaviation.com")
+    created = AdminService.create_airport_service(
+        db=db,
+        payload=payload,
+        admin_email=admin_email,
+    )
+    return AdminApiResponse(success=True, data=created)
+
+
+@router.delete("/airport-services/{mapping_id}", response_model=AdminApiResponse)
+async def delete_admin_airport_service(
+    mapping_id: str,
+    db: Session = Depends(get_db),
+    admin_context: Dict[str, Any] = Depends(get_required_admin),
+):
+    admin_email = admin_context.get("email", "admin@shafskyaviation.com")
+    result = AdminService.delete_airport_service(
+        db=db,
+        mapping_id=mapping_id,
+        admin_email=admin_email,
+    )
+    return AdminApiResponse(success=True, data=result)
+

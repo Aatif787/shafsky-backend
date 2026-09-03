@@ -324,6 +324,7 @@ class BookingService:
                     pax_count = 1
 
         from app.models.journey_models import SupportedAirport
+        from app.services.service_airport_rules import normalize_iata
 
         meta = metadata_json or {}
         journey_type = normalize_journey_type(
@@ -338,6 +339,24 @@ class BookingService:
         )
         if not target_airport:
             target_airport = (meta.get("service_airport") or "").strip().upper()
+
+        if not target_airport and payload.service_options:
+            opts = payload.service_options if isinstance(payload.service_options, dict) else {}
+            for opt_key in ("airport", "origin", "destination", "pickup_location", "dropoff_location"):
+                opt_val = str(opts.get(opt_key) or "").strip()
+                if opt_val:
+                    if len(opt_val) == 3:
+                        cand = normalize_iata(opt_val)
+                        if cand:
+                            target_airport = cand
+                            break
+                    import re
+                    iata_match = re.search(r'\b([A-Z]{3})\b', opt_val.upper())
+                    if iata_match:
+                        cand = normalize_iata(iata_match.group(1))
+                        if cand and len(cand) == 3:
+                            target_airport = cand
+                            break
 
         if not target_airport:
             raise HTTPException(
