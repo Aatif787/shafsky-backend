@@ -27,10 +27,12 @@ from app.utils.customer_email import (
     REAL_EMAIL_HELP as _REAL_EMAIL_HELP,
 )
 
+from app.integrations.whatsapp.handlers.base import BaseFlowMixin
+
 logger = logging.getLogger(__name__)
 
 
-class ReviewPaymentFlowMixin:
+class ReviewPaymentFlowMixin(BaseFlowMixin):
     """Mixin for booking confirmation, Razorpay payment link issuance, and reconciliation."""
 
     @classmethod
@@ -106,6 +108,27 @@ class ReviewPaymentFlowMixin:
                     cutoff_type = derive_flight_type_from_route(db, origin_for_route, dest_for_route, jt_cut)
                 except (ValueError, Exception):
                     cutoff_type = None
+
+            # Defensive check: ensure verified route type matches selected travel type
+            selected_tt_def = (metadata.get("travel_type") or "DOMESTIC").upper()
+            if (
+                jt_cut != "TRANSIT"
+                and cutoff_type in ("DOMESTIC", "INTERNATIONAL")
+                and selected_tt_def in ("DOMESTIC", "INTERNATIONAL")
+                and cutoff_type != selected_tt_def
+            ):
+                logger.error(
+                    f"[Booking Creation Blocked] Flight type mismatch: selected={selected_tt_def}, verified={cutoff_type}"
+                )
+                conv.flight_num = None
+                cls._transition_state(db, conv, "FLIGHT_INPUT")
+                whatsapp_client.send_text_message(
+                    conv.phone_number,
+                    "⚠️ Inconsistent booking: Your flight route does not match the selected service type. "
+                    "Please enter your flight number again."
+                )
+                return {"status": "flight_type_mismatch_blocked", "success": False}
+
             tz_name = lookup_airport_timezone(db, conv.selected_airport_iata)
             tz = airport_tzinfo(tz_name)
 
@@ -150,7 +173,7 @@ class ReviewPaymentFlowMixin:
 
         booking_ref = BookingService.generate_booking_ref()
         passengers = max(1, conv.passenger_count or 1)
-        amount = float(conv.total_amount or 0.0)
+        amount = conv.total_amount or 0.0
 
         jt = metadata.get("journey_type") or "DEPARTURE"
         initial_tt = metadata.get("travel_type") or "DOMESTIC"
@@ -247,7 +270,7 @@ class ReviewPaymentFlowMixin:
                 existing_booking.departure_time = dep_dt
                 existing_booking.arrival_time = arr_dt
                 existing_booking.total_amount = amount
-                existing_booking.notes = conv.additional_requirements
+                existing_booking.notes = conv.additional_requirements or ""
                 existing_booking.metadata_json = booking_meta
                 existing_booking.updated_at = datetime.now(timezone.utc)
                 booking_ref = existing_booking.booking_ref
@@ -337,7 +360,7 @@ class ReviewPaymentFlowMixin:
         metadata = conv.flight_details_json if isinstance(conv.flight_details_json, dict) else {}
         jt = metadata.get("journey_type")
         tt = metadata.get("travel_type")
-        amount = float(conv.total_amount or 0.0)
+        amount = conv.total_amount or 0.0
         lines = ["✅ *Booking Summary*\n"]
         lines.append(f"Service: {conv.selected_service_name or 'VIP Service'}")
         if conv.selected_airport_iata:
@@ -442,10 +465,10 @@ class ReviewPaymentFlowMixin:
                 "reason": link_result.get("reason") or link_result.get("error"),
             }
 
-        short_url = link_result.get("short_url")
+        short_url = str(link_result.get("short_url") or "")
         plink_id = link_result.get("payment_link_id")
         conv.razorpay_payment_link_id = plink_id
-        conv.razorpay_payment_url = short_url
+        conv.razorpay_payment_url = short_url or None
         conv.payment_status = "PENDING"
         cls._transition_state(db, conv, "WAITING_PAYMENT")
         db.commit()
@@ -679,7 +702,7 @@ class ReviewPaymentFlowMixin:
                     "service_name": meta.get("package") or booking.service_type,
                     "departure_time": booking.departure_time or booking.arrival_time,
                     "arrival_time": booking.arrival_time,
-                    "total_amount": float(booking.total_amount or 0.0),
+                    "total_amount": booking.total_amount or 0.0,
                     "currency": booking.currency or "INR",
                     "payment_id": payment_id,
                     "status": "CONFIRMED",

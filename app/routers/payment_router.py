@@ -499,6 +499,25 @@ def reconcile_sync_endpoint(
 
 
 @router.post(
+    "/reconcile-pending",
+    response_model=PaymentApiResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Reconcile and promote pending captured payments"
+)
+def reconcile_pending_endpoint(
+    max_lookback_hours: int = 24,
+    db: Session = Depends(get_db)
+):
+    """
+    Background-safe reconciliation worker. Scans pending transactions, queries Razorpay,
+    and automatically confirms any captured orders or paid links.
+    """
+    from app.services.payment_reconciliation_service import PaymentReconciliationService
+    result = PaymentReconciliationService.reconcile_pending_payments(db, max_lookback_hours=max_lookback_hours)
+    return PaymentApiResponse(success=True, data=result)
+
+
+@router.post(
     "/admin/expire-stale",
     response_model=PaymentApiResponse,
     status_code=status.HTTP_200_OK,

@@ -6,7 +6,28 @@ from typing import Dict, Any
 from app.config import settings
 from app.monitoring.tracing import TracingEngine
 
-SENSITIVE_KEYS = {"password", "password_hash", "accesstoken", "refreshtoken", "authorization", "x-api-key", "secret", "cvv"}
+SENSITIVE_KEYS = {
+    "password", "password_hash", "accesstoken", "refreshtoken", "authorization",
+    "x-api-key", "secret", "cvv", "passport", "passport_number", "aadhaar",
+    "pan", "pan_number", "razorpay_signature", "whatsapp_access_token", "api_key",
+    "card_number", "card_cvv"
+}
+
+def _mask_pii_string(key: str, val: Any) -> Any:
+    if not isinstance(val, str) or not val:
+        return val
+    k = key.lower()
+    if "email" in k and "@" in val:
+        parts = val.split("@")
+        name = parts[0]
+        domain = parts[1] if len(parts) > 1 else ""
+        masked_name = name[0] + "***" + (name[-1] if len(name) > 1 else "")
+        return f"{masked_name}@{domain}"
+    if "phone" in k or "contact" in k:
+        clean = "".join(filter(str.isdigit, val))
+        if len(clean) >= 10:
+            return clean[:2] + "****" + clean[-4:]
+    return val
 
 def sanitize_data(data: Any) -> Any:
     if isinstance(data, dict):
@@ -14,8 +35,10 @@ def sanitize_data(data: Any) -> Any:
         for k, v in data.items():
             if k.lower() in SENSITIVE_KEYS:
                 cleaned[k] = "[REDACTED]"
-            else:
+            elif isinstance(v, (dict, list)):
                 cleaned[k] = sanitize_data(v)
+            else:
+                cleaned[k] = _mask_pii_string(k, v)
         return cleaned
     elif isinstance(data, list):
         return [sanitize_data(item) for item in data]

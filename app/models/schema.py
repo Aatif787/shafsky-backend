@@ -471,8 +471,8 @@ class BrandingProfile(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     company_name: Mapped[str] = mapped_column(String, nullable=False, default="Shafsky Aviation")
-    tagline: Mapped[str] = mapped_column(String, nullable=True)
-    logo_url: Mapped[str] = mapped_column(String, nullable=True)
+    tagline: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    logo_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     primary_color: Mapped[str] = mapped_column(String, default="#5ed3ff")
     secondary_color: Mapped[str] = mapped_column(String, default="#06090f")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)

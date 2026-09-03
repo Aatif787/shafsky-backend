@@ -373,6 +373,13 @@ class WhatsAppBookingStateMachine(
             conv.updated_at = now_utc
             db.commit()
 
+            # Immediate read receipt for instant perceived responsiveness
+            if msg_id:
+                try:
+                    whatsapp_client.mark_message_as_read(msg_id)
+                except Exception:
+                    pass
+
             text_clean = (user_input or "").strip()
             text_lower = text_clean.lower()
 
@@ -549,6 +556,8 @@ class WhatsAppBookingStateMachine(
                 result = cls._state_hotel_nights(db, conv, user_input)
             elif state == "FLIGHT_INPUT":
                 result = cls._state_flight_input(db, conv, user_input, input_id)
+            elif state == "FLIGHT_TYPE_MISMATCH":
+                result = cls._state_flight_type_mismatch(db, conv, user_input, input_id)
             elif state == "FLIGHT_CONFIRMATION":
                 result = cls._state_flight_confirmation(db, conv, user_input, input_id)
             elif state == "DATE_SELECTION":
@@ -577,6 +586,8 @@ class WhatsAppBookingStateMachine(
                 "invalid_service",
                 "invalid_flight_format",
                 "invalid_flight_confirmation",
+                "flight_type_mismatch",
+                "invalid_mismatch_choice",
                 "flight_airport_mismatch",
                 "flight_not_found",
                 "flight_verify_failed",
@@ -842,7 +853,7 @@ class WhatsAppBookingStateMachine(
                 )
             else:
                 cls._send_category_menu(db, conv)
-        elif curr in ["FLIGHT_INPUT", "FLIGHT_CONFIRMATION"]:
+        elif curr in ["FLIGHT_INPUT", "FLIGHT_CONFIRMATION", "FLIGHT_TYPE_MISMATCH"]:
             # Clear flight-specific fields, preserve journey/travel/terminal metadata
             conv.flight_num = None
             if isinstance(conv.flight_details_json, dict):

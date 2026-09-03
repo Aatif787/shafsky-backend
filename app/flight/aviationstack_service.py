@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -39,9 +40,37 @@ REASON_RATE_LIMITED = "RATE_LIMITED"
 REASON_TIMEOUT = "TIMEOUT"
 REASON_AMBIGUOUS = "AMBIGUOUS"
 
+ICAO_TO_IATA: Dict[str, str] = {
+    "AIC": "AI",  # Air India
+    "IGO": "6E",  # IndiGo
+    "SEJ": "SG",  # SpiceJet
+    "VTI": "UK",  # Vistara
+    "AXB": "IX",  # Air India Express
+    "FLG": "9I",  # Alliance Air
+    "GOW": "G8",  # Go First
+    "AKJ": "QP",  # Akasa Air
+    "UAE": "EK",  # Emirates
+    "QTR": "QR",  # Qatar Airways
+    "ETD": "EY",  # Etihad Airways
+    "BAW": "BA",  # British Airways
+    "SIA": "SQ",  # Singapore Airlines
+    "DLH": "LH",  # Lufthansa
+    "AFR": "AF",  # Air France
+    "KLM": "KL",  # KLM
+    "THA": "TG",  # Thai Airways
+    "MAS": "MH",  # Malaysia Airlines
+    "CXA": "CX",  # Cathay Pacific
+    "FDB": "FZ",  # flydubai
+    "GFA": "GF",  # Gulf Air
+    "KAC": "KU",  # Kuwait Airways
+    "OMA": "WY",  # Oman Air
+    "SVA": "SV",  # Saudia
+    "JZR": "J9",  # Jazeera Airways
+}
+
 
 def normalize_flight_number_input(flight_num_input: str) -> Optional[str]:
-    """Normalize user flight input without inventing a different flight."""
+    """Normalize user flight input and convert standard 3-letter ICAO codes to 2-letter IATA."""
     if not flight_num_input or not isinstance(flight_num_input, str):
         return None
     clean = re.sub(r"[\s\-_]+", "", str(flight_num_input).strip().upper())
@@ -53,6 +82,11 @@ def normalize_flight_number_input(flight_num_input: str) -> Optional[str]:
     airline_code, flight_digits = match.group(1), match.group(2)
     if not re.search(r"[A-Z]", airline_code) or not re.search(r"\d", flight_digits):
         return None
+
+    # Auto-convert ICAO to IATA where available
+    if airline_code in ICAO_TO_IATA:
+        airline_code = ICAO_TO_IATA[airline_code]
+
     return f"{airline_code}{flight_digits}"
 
 
@@ -354,6 +388,49 @@ def verify_flight_for_whatsapp(
     svc = normalize_iata(selected_airport_iata)
     jt = normalize_journey_type(journey_type) if journey_type else "DEPARTURE"
 
+    # ── 1. Check Unified Cross-Provider Flight Cache (RAM -> Redis -> DB) ─
+    fast_cache_key = f"fast_flight:wa:{normalized}:{svc or 'ALL'}:{jt or 'ALL'}:{travel_date or 'ALL'}"
+    if os.getenv("TESTING") != "1":
+        try:
+            from app.flight.unified_cache import get_unified_flight, to_aviationstack_record
+            unified_hit = get_unified_flight(normalized, travel_date)
+            if unified_hit:
+                as_record = to_aviationstack_record(unified_hit, normalized)
+                cached_flight, cached_reason = _select_best_record(
+                    [as_record], normalized, svc, jt, travel_date=travel_date
+                )
+                if cached_flight and cached_reason == REASON_OK:
+                    logger.info("Unified Flight Cache Hit in WhatsApp (<1ms) | Flight: %s", normalized)
+                    return {
+                        "success": True,
+                        "reason": REASON_OK,
+                        "flight": cached_flight,
+                        "message_context": {
+                            "flight_number": cached_flight.get("flight_number") or normalized,
+                            "airline": cached_flight.get("airline"),
+                            "route_label": format_route_label(cached_flight),
+                            "selected_airport_iata": svc,
+                            "selected_airport_name": selected_airport_name or svc,
+                            "journey_type": jt,
+                            "departure": cached_flight.get("departure"),
+                            "arrival": cached_flight.get("arrival"),
+                        },
+                    }
+        except Exception as err:
+            logger.debug("Unified cache check in verify_flight_for_whatsapp error: %s", err)
+
+        # ── High-Performance Redis L1 Cache Check (< 1ms) ──────────────────────
+        try:
+            from app.core.redis import get_redis_client
+            r_client = get_redis_client()
+            if r_client:
+                cached_raw = r_client.get(fast_cache_key)
+                if cached_raw:
+                    logger.info("Flight verification Redis L1 cache hit (<1ms) | Flight: %s", normalized)
+                    return json.loads(cached_raw)
+        except Exception:
+            pass
+
     ttl = int(getattr(settings, "AVIATIONSTACK_CACHE_TTL_SECONDS", 300) or 300)
 
     lock_id = zlib.crc32(normalized.encode("utf-8"))
@@ -488,7 +565,7 @@ def verify_flight_for_whatsapp(
         (flight.get("departure") or {}).get("iata"),
         (flight.get("arrival") or {}).get("iata"),
     )
-    return {
+    success_payload = {
         "success": True,
         "reason": REASON_OK,
         "flight": flight,
@@ -503,6 +580,26 @@ def verify_flight_for_whatsapp(
             "arrival": flight.get("arrival"),
         },
     }
+    try:
+        from app.core.redis import get_redis_client
+        rc = get_redis_client()
+        if rc:
+            rc.setex(fast_cache_key, 3600, json.dumps(success_payload))
+    except Exception:
+        pass
+
+    try:
+        from app.flight.unified_cache import store_unified_flight
+        store_unified_flight(
+            normalized,
+            flight if isinstance(flight, dict) else {},
+            provider="aviationstack",
+            flight_date=travel_date,
+        )
+    except Exception:
+        pass
+
+    return success_payload
 
 
 def _format_endpoint_when(endpoint: Optional[Dict[str, Any]]) -> str:

@@ -18,11 +18,12 @@ from app.models.whatsapp_models import WhatsAppConversation
 from app.models.journey_models import SupportedAirport
 from app.integrations.whatsapp.client import whatsapp_client
 from app.integrations.whatsapp import copy as wa_copy
+from app.integrations.whatsapp.handlers.base import BaseFlowMixin
 
 logger = logging.getLogger(__name__)
 
 
-class FlightFlowMixin:
+class FlightFlowMixin(BaseFlowMixin):
     """Mixin for AviationStack flight lookup, mismatch resolution, and smart travel-type auto-alignment."""
 
     @classmethod
@@ -69,6 +70,59 @@ class FlightFlowMixin:
                 "Reply *Re-enter* to enter another flight, *Confirm* to proceed anyway, "
                 "or *Change Airport* to update your selected airport."
             )
+
+    @classmethod
+    def _send_flight_type_mismatch_message(
+        cls,
+        conv: WhatsAppConversation,
+        flight: Dict[str, Any],
+        flight_number: str,
+        selected_type: str,
+        actual_type: str,
+    ) -> None:
+        sel_title = selected_type.title()
+        act_title = actual_type.title()
+
+        fn = flight.get("flight_number") or flight_number
+        dep = flight.get("departure") or {}
+        arr = flight.get("arrival") or {}
+        dep_iata = dep.get("iata") or ""
+        arr_iata = arr.get("iata") or ""
+        dep_name = dep.get("city") or dep.get("airport") or dep_iata
+        arr_name = arr.get("city") or arr.get("airport") or arr_iata
+        route_str = f"{dep_name} ({dep_iata}) → {arr_name} ({arr_iata})"
+
+        body_text = (
+            "⚠️ *Flight Type Mismatch*\n\n"
+            f"You selected {sel_title}, but the flight number you entered is an {act_title} flight.\n\n"
+            f"✈️ *Flight:* {fn}\n"
+            f"📍 *Route:* {route_str}\n"
+            f"🌍 *Actual Type:* {act_title}\n\n"
+            "Please choose how you'd like to continue:"
+        )
+
+        switch_btn_title = "Switch to Intl" if actual_type == "INTERNATIONAL" else "Switch to Domestic"
+        buttons = [
+            {"id": "btn_switch_travel_type", "title": switch_btn_title},
+            {"id": "btn_reenter_flight", "title": "Re-enter Flight"},
+            {"id": "btn_change_airport", "title": "Change Airport"},
+        ]
+
+        res = whatsapp_client.send_interactive_buttons(
+            to_phone=conv.phone_number,
+            body_text=body_text,
+            buttons=buttons,
+            header_text="Flight Type Mismatch",
+        )
+        if not res.get("success"):
+            fallback_text = (
+                f"{body_text}\n\n"
+                f"1️⃣ Switch to {act_title}\n"
+                "2️⃣ Re-enter Flight\n"
+                "3️⃣ Change Airport\n\n"
+                "Please reply with *1*, *2*, or *3*, or tap an option above."
+            )
+            whatsapp_client.send_text_message(conv.phone_number, fallback_text)
 
     @classmethod
     def _prompt_change_airport_from_flight(cls, db: Session, conv: WhatsAppConversation) -> Dict[str, Any]:
@@ -307,7 +361,7 @@ class FlightFlowMixin:
             )
             return {"status": "invalid_flight_format", "success": False}
 
-        norm_flight_num = val_res.get("flight_number") if isinstance(val_res, dict) else str(val_res)
+        norm_flight_num = val_res.get("flight_number") if isinstance(val_res, dict) else val_res
 
         conv.flight_num = None
         old_meta = conv.flight_details_json if isinstance(conv.flight_details_json, dict) else {}
@@ -389,54 +443,53 @@ class FlightFlowMixin:
         dep_iata = dep.get("iata")
         arr_iata = arr.get("iata")
 
-        # Smart Travel Type Auto-Alignment
-        derived_tt = None
+        # Strict consistency validation: compare user selected type vs actual verified flight type
+        actual_flight_type = None
         if jt != "TRANSIT":
             try:
                 from app.services.service_airport_rules import derive_flight_type_from_route
-                derived_tt = derive_flight_type_from_route(db, dep_iata, arr_iata, jt)
-            except Exception:
-                derived_tt = None
+                actual_flight_type = derive_flight_type_from_route(db, dep_iata, arr_iata, jt)
+            except Exception as exc:
+                logger.error(f"[Flight Verification] Failed to derive flight type from route: {exc}")
+                actual_flight_type = None
 
-        travel_type_switched = bool(derived_tt and derived_tt != tt)
-        effective_tt = derived_tt if derived_tt else tt
+        selected_type = (tt or "DOMESTIC").upper()
+        if (
+            jt != "TRANSIT"
+            and actual_flight_type in ("DOMESTIC", "INTERNATIONAL")
+            and selected_type in ("DOMESTIC", "INTERNATIONAL")
+            and actual_flight_type != selected_type
+        ):
+            # STOP FLOW IMMEDIATELY on flight type mismatch
+            logger.warning(
+                f"[Flight Type Mismatch] User selected {selected_type}, but flight {norm_flight_num} "
+                f"route {dep_iata}->{arr_iata} is {actual_flight_type}. Halting booking flow."
+            )
+            pending["actual_flight_type"] = actual_flight_type
+            pending["selected_flight_type"] = selected_type
 
-        aligned_svc = None
-        if travel_type_switched and conv.selected_airport_iata:
-            airport_obj = db.execute(
-                select(SupportedAirport).where(SupportedAirport.iata_code == conv.selected_airport_iata)
-            ).scalar_one_or_none()
-            if airport_obj:
-                intl_or_dom_flight_types = [effective_tt, "ALL"]
-                matching_packages = cls._get_authoritative_airport_packages(
-                    db, airport_obj.id, jt, intl_or_dom_flight_types, terminal=terminal
-                )
-                current_svc_name = conv.selected_service_name or ""
-                current_tier = wa_copy._extract_tier_name(current_svc_name).lower()
-                for aps, s in matching_packages:
-                    s_name = (s.name or "").lower()
-                    if current_tier and current_tier in s_name:
-                        aligned_svc = (aps, s)
-                        break
-                if not aligned_svc and matching_packages:
-                    aligned_svc = matching_packages[0]
+            new_meta = dict(old_meta)
+            new_meta.pop("_pending_verified_flight", None)
+            new_meta["_pending_mismatch_flight"] = pending
+            new_meta["verification_status"] = "flight_type_mismatch"
+            new_meta["status"] = "flight_type_mismatch"
+            conv.flight_num = None
+            conv.flight_details_json = new_meta
+            flag_modified(conv, "flight_details_json")
+            cls._transition_state(db, conv, "FLIGHT_TYPE_MISMATCH")
+            db.commit()
 
-        if aligned_svc:
-            aligned_aps, aligned_s = aligned_svc
-            aligned_price = float(aligned_aps.price)
-            aligned_name = aligned_s.name
-            pending["aligned_service_id"] = str(aligned_s.id)
-            pending["aligned_service_name"] = aligned_name
-            pending["aligned_unit_price"] = aligned_price
-            pending["aligned_travel_type"] = effective_tt
-            pending["travel_type_switched"] = True
-            pending["prior_travel_type"] = tt
-            pending["prior_price"] = unit_price
-        elif travel_type_switched:
-            pending["aligned_travel_type"] = effective_tt
-            pending["travel_type_switched"] = True
-            pending["prior_travel_type"] = tt
+            cls._send_flight_type_mismatch_message(
+                conv, flight, norm_flight_num, selected_type, actual_flight_type
+            )
+            return {
+                "status": "flight_type_mismatch",
+                "success": False,
+                "selected_type": selected_type,
+                "actual_type": actual_flight_type,
+            }
 
+        # Route matches selected travel type -> proceed with normal verification
         new_meta = dict(old_meta)
         for stale_key in (
             "origin_iata", "destination_iata", "origin_city", "destination_city",
@@ -445,22 +498,20 @@ class FlightFlowMixin:
         ):
             new_meta.pop(stale_key, None)
         new_meta["journey_type"] = jt
-        new_meta["travel_type"] = effective_tt
-        new_meta["flight_type"] = effective_tt
+        new_meta["travel_type"] = selected_type
+        new_meta["flight_type"] = selected_type
         new_meta["terminal"] = terminal
         new_meta["verification_status"] = "pending_confirmation"
         new_meta["status"] = "awaiting_flight_confirmation"
         new_meta["_pending_verified_flight"] = pending
         new_meta.pop("_pending_mismatch_flight", None)
-        if pending.get("aligned_unit_price") is not None:
-            new_meta["unit_price"] = pending["aligned_unit_price"]
-            new_meta["base_price"] = pending["aligned_unit_price"]
-        elif unit_price is not None:
+        if unit_price is not None:
             new_meta["unit_price"] = unit_price
             new_meta["base_price"] = unit_price
         conv.flight_details_json = new_meta
         flag_modified(conv, "flight_details_json")
         cls._transition_state(db, conv, "FLIGHT_CONFIRMATION")
+        db.commit()
 
         verified_body = as_svc.build_whatsapp_verified_message(
             flight=flight,
@@ -468,33 +519,12 @@ class FlightFlowMixin:
             selected_airport_name=conv.selected_airport_name,
             journey_type=jt,
         )
-
-        aligned_info = ""
-        if travel_type_switched:
-            if pending.get("aligned_service_name"):
-                p_str = wa_copy.format_inr(pending.get("aligned_unit_price"))
-                aligned_info = (
-                    f"\n\nℹ️ *Package aligned to {effective_tt.title()}:*\n"
-                    f"• {pending.get('aligned_service_name')} — {p_str}/person"
-                )
-            else:
-                aligned_info = f"\n\nℹ️ *Flight journey updated to {effective_tt.title()} {jt.title()}.*"
-
-        body_text = f"{verified_body}{aligned_info}\n\nPlease confirm your flight details to proceed."
-
-        if travel_type_switched:
-            buttons = [
-                {"id": "btn_confirm_flight", "title": "Confirm & Proceed"},
-                {"id": "btn_change_package", "title": "Change Package"},
-                {"id": "btn_reenter_flight", "title": "Re-enter Flight"},
-            ]
-        else:
-            buttons = [
-                {"id": "btn_confirm_flight", "title": "Confirm Flight"},
-                {"id": "btn_reenter_flight", "title": "Re-enter Flight"},
-                {"id": "btn_change_airport", "title": "Change Airport"},
-            ]
-
+        body_text = f"{verified_body}\n\nPlease confirm your flight details to proceed."
+        buttons = [
+            {"id": "btn_confirm_flight", "title": "Confirm Flight"},
+            {"id": "btn_reenter_flight", "title": "Re-enter Flight"},
+            {"id": "btn_change_airport", "title": "Change Airport"},
+        ]
         res = whatsapp_client.send_interactive_buttons(
             to_phone=conv.phone_number,
             body_text=body_text,
@@ -503,9 +533,8 @@ class FlightFlowMixin:
         )
         if not res.get("success"):
             fallback_text = (
-                f"{verified_body}{aligned_info}\n\n"
-                "Reply *Confirm* to proceed, *Change Package* to select another package, "
-                "or *Re-enter* to change flight number."
+                f"{verified_body}\n\n"
+                "Reply *Confirm* to proceed, or *Re-enter* to change flight number."
             )
             whatsapp_client.send_text_message(conv.phone_number, fallback_text)
 
@@ -568,3 +597,143 @@ class FlightFlowMixin:
 
         whatsapp_client.send_text_message(conv.phone_number, "Please select *Confirm & Proceed*, *Change Package*, or *Re-enter Flight*.")
         return {"status": "invalid_flight_confirmation", "success": False}
+
+    @classmethod
+    def _state_flight_type_mismatch(
+        cls,
+        db: Session,
+        conv: WhatsAppConversation,
+        user_text: str,
+        input_id: Optional[str],
+    ) -> Dict[str, Any]:
+        """
+        Handles interactive responses when a customer flight type mismatch was detected:
+        Option 1: Switch to International / Switch to Domestic
+        Option 2: Re-enter Flight
+        Option 3: Change Airport
+        """
+        text_u = (input_id or user_text).strip().upper()
+        meta = dict(conv.flight_details_json) if isinstance(conv.flight_details_json, dict) else {}
+        pending = meta.get("_pending_mismatch_flight")
+
+        # Option 3: Change Airport
+        if (
+            text_u in ("BTN_CHANGE_AIRPORT", "CHANGE AIRPORT", "CHANGE_AIRPORT", "3")
+            or "CHANGE AIRPORT" in text_u
+        ):
+            return cls._prompt_change_airport_from_flight(db, conv)
+
+        # Option 2: Re-enter Flight
+        if (
+            text_u in ("BTN_REENTER_FLIGHT", "RE-ENTER FLIGHT", "REENTER FLIGHT", "RE-ENTER", "REENTER", "2")
+            or "RE-ENTER" in text_u
+            or "REENTER" in text_u
+        ):
+            meta.pop("_pending_mismatch_flight", None)
+            meta.pop("_pending_verified_flight", None)
+            meta["verification_status"] = "not_verified"
+            conv.flight_num = None
+            conv.flight_details_json = meta
+            flag_modified(conv, "flight_details_json")
+            cls._transition_state(db, conv, "FLIGHT_INPUT")
+            db.commit()
+            whatsapp_client.send_text_message(
+                conv.phone_number,
+                "Please enter your Flight Number (e.g., *EK501*, *AI2424*, *6E224*):",
+            )
+            return {"status": "reprompt_flight", "success": True}
+
+        # Option 1: Switch Travel Type
+        if (
+            text_u in (
+                "BTN_SWITCH_TRAVEL_TYPE",
+                "BTN_SWITCH_INTERNATIONAL",
+                "BTN_SWITCH_DOMESTIC",
+                "1",
+            )
+            or "SWITCH" in text_u
+            or "INTERNATIONAL" in text_u
+            or "DOMESTIC" in text_u
+        ):
+            if not isinstance(pending, dict) or not pending.get("flight_number"):
+                cls._transition_state(db, conv, "FLIGHT_INPUT")
+                conv.flight_num = None
+                whatsapp_client.send_text_message(
+                    conv.phone_number,
+                    "Please enter your Flight Number (e.g., *EK501*, *AI2424*, *6E224*):",
+                )
+                return {"status": "reprompt_flight", "success": True}
+
+            target_tt = pending.get("actual_flight_type")
+            if not target_tt:
+                current_tt = meta.get("travel_type", "DOMESTIC")
+                target_tt = "INTERNATIONAL" if current_tt == "DOMESTIC" else "DOMESTIC"
+
+            # 1. Update travel_type and flight_type
+            meta["travel_type"] = target_tt
+            meta["flight_type"] = target_tt
+
+            # 2. Preserve already verified flight
+            meta["_pending_verified_flight"] = pending
+            meta.pop("_pending_mismatch_flight", None)
+            meta["verification_status"] = "pending_confirmation"
+
+            # 3. Invalidate old incompatible service/pricing
+            conv.selected_service_id = None
+            conv.selected_service_name = None
+            conv.total_amount = None
+            meta.pop("unit_price", None)
+            meta.pop("base_price", None)
+            meta.pop("package", None)
+
+            # 4. Resolve terminal for the target travel type
+            jt = meta.get("journey_type", "DEPARTURE")
+            if conv.selected_airport_iata:
+                airport_obj = db.execute(
+                    select(SupportedAirport).where(SupportedAirport.iata_code == conv.selected_airport_iata)
+                ).scalar_one_or_none()
+                if airport_obj:
+                    applicable_terminals = cls._get_applicable_terminals(db, airport_obj, jt, target_tt)
+                    api_flight = pending.get("api_flight") or {}
+                    dep_term = (api_flight.get("departure") or {}).get("terminal")
+                    arr_term = (api_flight.get("arrival") or {}).get("terminal")
+                    fl_term = dep_term if jt == "DEPARTURE" else arr_term
+
+                    matched_term = None
+                    if fl_term and applicable_terminals:
+                        fl_term_clean = str(fl_term).strip().upper()
+                        for term in applicable_terminals:
+                            if fl_term_clean in term.upper():
+                                matched_term = term
+                                break
+
+                    if matched_term:
+                        meta["terminal"] = matched_term
+                    elif len(applicable_terminals) == 1:
+                        meta["terminal"] = applicable_terminals[0]
+                    elif len(applicable_terminals) > 1:
+                        meta.pop("terminal", None)
+                        conv.flight_details_json = meta
+                        flag_modified(conv, "flight_details_json")
+                        db.commit()
+                        cls._transition_state(db, conv, "TERMINAL_SELECTION")
+                        return cls._prompt_terminal_selection(conv, airport_obj, applicable_terminals)
+                    else:
+                        meta.pop("terminal", None)
+
+            conv.flight_details_json = meta
+            flag_modified(conv, "flight_details_json")
+            db.commit()
+
+            # 5. Transition to SERVICE_SELECTION with authoritative packages for target travel type
+            cls._transition_state(db, conv, "SERVICE_SELECTION")
+            return cls._send_airport_services_menu(db, conv)
+
+        # Invalid response in mismatch state: re-prompt choices
+        flight_data = (pending.get("api_flight") if isinstance(pending, dict) else None) or {}
+        fn = pending.get("flight_number") or "" if isinstance(pending, dict) else ""
+        sel_t = str(pending.get("selected_flight_type") or meta.get("travel_type") or "DOMESTIC") if isinstance(pending, dict) else "DOMESTIC"
+        act_t = str(pending.get("actual_flight_type") or "INTERNATIONAL") if isinstance(pending, dict) else "INTERNATIONAL"
+        cls._send_flight_type_mismatch_message(conv, flight_data, fn, sel_t, act_t)
+        return {"status": "invalid_mismatch_choice", "success": False}
+

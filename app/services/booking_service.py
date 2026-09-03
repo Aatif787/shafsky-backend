@@ -65,7 +65,7 @@ class BookingService:
         slug_clean = cls.normalize_package_slug(service_tier_or_slug)
         j_type_clean = (journey_type or "DEPARTURE").strip().upper()
         f_type_clean = (flight_type or "DOMESTIC").strip().upper()
-        guests = max(1, int(pax_count or 1))
+        guests = max(1, pax_count or 1)
 
         airport = db.scalar(
             select(SupportedAirport).where(SupportedAirport.iata_code == code_clean)
@@ -144,8 +144,7 @@ class BookingService:
                 ),
             )
 
-        unit_price = float(exact_match.price)
-        return round(unit_price * guests, 2)
+        return round(exact_match.price * guests, 2)
 
     @staticmethod
     def generate_booking_ref() -> str:
@@ -253,6 +252,27 @@ class BookingService:
                     )
                 except (ValueError, Exception):
                     derived_ft = None
+
+            # Strict consistency safeguard: check if requested travel type matches verified route
+            selected_ft = (early_meta or {}).get("travel_type") or (early_meta or {}).get("flight_type")
+            if (
+                early_jt != "TRANSIT"
+                and payload.origin_code
+                and payload.dest_code
+                and derived_ft in ("DOMESTIC", "INTERNATIONAL")
+                and selected_ft
+            ):
+                from app.services.service_airport_rules import normalize_flight_type
+                norm_selected = normalize_flight_type(selected_ft)
+                if norm_selected in ("DOMESTIC", "INTERNATIONAL") and norm_selected != derived_ft:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Flight type mismatch: selected service type is {norm_selected}, "
+                            f"but verified flight route is {derived_ft}."
+                        ),
+                    )
+
             if derived_ft not in ("DOMESTIC", "INTERNATIONAL"):
                 notice = airport_min_notice_hours(
                     derived_ft
@@ -352,6 +372,24 @@ class BookingService:
         except ValueError as route_err:
             raise HTTPException(status_code=400, detail=str(route_err))
 
+        # Strict consistency safeguard: reject mismatched travel type vs verified route for any booking
+        client_ft = (meta or {}).get("travel_type") or (meta or {}).get("flight_type")
+        if (
+            journey_type != "TRANSIT"
+            and payload.origin_code
+            and payload.dest_code
+            and derived_ft in ("DOMESTIC", "INTERNATIONAL")
+            and client_ft
+        ):
+            norm_client = normalize_flight_type(client_ft)
+            if norm_client in ("DOMESTIC", "INTERNATIONAL") and norm_client != derived_ft:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Flight type mismatch: selected service type is {norm_client}, "
+                        f"but verified flight route is {derived_ft}."
+                    ),
+                )
 
         target_service = cls.normalize_package_slug(payload.service_type or "silver")
 
@@ -365,7 +403,7 @@ class BookingService:
         )
 
         # All catalog prices are GST-inclusive (do not add extra tax)
-        subtotal = round(float(authoritative_price), 2)
+        subtotal = round(authoritative_price, 2)
         taxes = 0.0
         charge_amount = subtotal
         metadata_json = dict(metadata_json or {})
@@ -452,7 +490,7 @@ class BookingService:
                         "service_name": meta.get("package") or new_booking.service_type,
                         "departure_time": new_booking.departure_time.isoformat() if new_booking.departure_time else None,
                         "terminal": meta.get("terminal"),
-                        "total_amount": float(new_booking.total_amount) if new_booking.total_amount is not None else 0.0,
+                        "total_amount": new_booking.total_amount if new_booking.total_amount is not None else 0.0,
                         "currency": new_booking.currency,
                         "status": new_booking.status.value if hasattr(new_booking.status, "value") else str(new_booking.status),
                     })
@@ -467,13 +505,18 @@ class BookingService:
                         detail="Failed to generate unique booking reference after multiple attempts. Please try again."
                     ) from exc
 
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to create booking. Please try again."
+        )
+
     @classmethod
     def get_user_bookings(cls, db: Session, email: str, profile_id: Optional[uuid.UUID] = None) -> List[Booking]:
+        conditions = [Booking.passenger_email == email]
+        if profile_id:
+            conditions.append(Booking.user_id == profile_id)
         stmt = select(Booking).where(
-            or_(
-                Booking.passenger_email == email,
-                Booking.user_id == profile_id if profile_id else False
-            )
+            or_(*conditions)
         ).where(Booking.deleted_at.is_(None)).order_by(desc(Booking.created_at))
         
         return list(db.scalars(stmt).all())
@@ -587,10 +630,10 @@ class BookingService:
             )
 
         total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
-        page = max(1, int(page or 1))
-        page_size = min(100, max(1, int(page_size or 25)))
+        page = max(1, page or 1)
+        page_size = min(100, max(1, page_size or 25))
         stmt = stmt.order_by(desc(Booking.created_at)).offset((page - 1) * page_size).limit(page_size)
-        return list(db.scalars(stmt).all()), int(total)
+        return list(db.scalars(stmt).all()), total
 
     @classmethod
     def admin_update_status(
@@ -645,7 +688,7 @@ class BookingService:
             "selectedServices": booking.selected_services or {},
             "serviceOptions": getattr(booking, "service_options", booking.selected_services or {}),
             "metadataJson": getattr(booking, "metadata_json", {}),
-            "totalAmount": float(booking.total_amount),
+            "totalAmount": booking.total_amount,
             "currency": booking.currency,
             "status": booking.status.value if isinstance(booking.status, BookingStatus) else str(booking.status),
             "version": getattr(booking, "version", 1),

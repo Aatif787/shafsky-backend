@@ -6,7 +6,7 @@ Provides /api/config/feature-flags, /api/airports/{code}, /api/coupons endpoints
 from typing import Optional, Dict, Any, List
 import uuid
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, Query, Body, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Body, Response, status
 from sqlalchemy.orm import Session
 from sqlalchemy import select, update, delete
 
@@ -23,8 +23,9 @@ router = APIRouter(tags=["System Configuration & Feature Flags"])
 
 @router.get("/api/config/airports/{code}", response_model=AdminApiResponse)
 @router.get("/api/airports/{code}/config", response_model=AdminApiResponse)
-async def get_airport_hub_configuration(code: str, db: Session = Depends(get_db)):
+async def get_airport_hub_configuration(code: str, response: Response, db: Session = Depends(get_db)):
     """Return database & catalog-driven packages, services, and rules for specified airport hub."""
+    response.headers["Cache-Control"] = "public, max-age=120, s-maxage=600, stale-while-revalidate=86400"
     config_data = ServiceConfigService.get_airport_configuration(code, db=db)
     return AdminApiResponse(success=True, data=config_data)
 
@@ -139,7 +140,7 @@ async def list_public_airports(db: Session = Depends(get_db)):
             "city": a.city,
             "country": a.country,
             "timezone": a.timezone,
-            "is_supported": bool(a.is_supported and a.is_active),
+            "is_supported": a.is_supported and a.is_active,
             "isActive": a.is_active,
         }
         for a in airports
@@ -222,9 +223,9 @@ async def list_public_coupons(
             "id": str(c.id),
             "code": c.code,
             "discountPercent": c.discount_percent,
-            "discountAmount": c.discount_amount,
+            "discountAmount": getattr(c, "discount_amount", 0.0),
             "maxUses": c.max_uses,
-            "usedCount": c.used_count,
+            "usedCount": c.times_used,
             "isActive": c.is_active,
             "expiresAt": c.expires_at.isoformat() if c.expires_at else None,
         }
@@ -268,7 +269,8 @@ async def patch_coupon_status(
 # ─── BRANDING ─────────────────────────────────────────────────────────────────
 
 @router.get("/api/branding/active", response_model=AdminApiResponse)
-async def get_active_branding(db: Session = Depends(get_db)):
+async def get_active_branding(response: Response, db: Session = Depends(get_db)):
+    response.headers["Cache-Control"] = "public, max-age=120, s-maxage=600, stale-while-revalidate=86400"
     try:
         bp = db.scalar(select(BrandingProfile).where(BrandingProfile.is_active.is_(True)))
         if bp:
@@ -329,8 +331,8 @@ async def upsert_branding(
 
     if bp:
         bp.company_name = company_name
-        bp.tagline = tagline
-        bp.logo_url = logo_url
+        bp.tagline = str(tagline) if tagline is not None else None
+        bp.logo_url = str(logo_url) if logo_url is not None else None
         bp.primary_color = primary_color
         bp.secondary_color = secondary_color
         bp.metadata_fields = metadata_fields
@@ -404,7 +406,7 @@ async def patch_admin_service_config(
             "title": updated_sc.title,
             "category": updated_sc.category,
             "description": updated_sc.description,
-            "basePrice": float(updated_sc.base_price),
+            "basePrice": updated_sc.base_price,
             "currency": updated_sc.currency,
             "isActive": updated_sc.is_active,
             "isHidden": updated_sc.is_hidden,

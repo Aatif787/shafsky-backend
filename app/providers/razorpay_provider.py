@@ -236,6 +236,60 @@ class RazorpayProvider:
                 "error": f"Network exception: {str(err)}"
             }
 
+    def fetch_order(self, order_id: str) -> Dict[str, Any]:
+        """
+        Fetches official Razorpay order status (GET /v1/orders/{order_id}).
+        """
+        self._load_config()
+        if not order_id:
+            return {"success": False, "error": "Order ID is required."}
+
+        if not self.is_configured() or order_id.startswith(("order_sim_", "order_mock_", "order_test_")):
+            return {"success": False, "error": "Simulated or unconfigured order lookup."}
+
+        url = f"https://api.razorpay.com/v1/orders/{order_id}"
+        try:
+            with httpx.Client(timeout=15.0) as client:
+                res = client.get(
+                    url,
+                    auth=(self.key_id, self.key_secret),
+                    headers={"Content-Type": "application/json"}
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    return {"success": True, "order": data}
+                return {"success": False, "error": self._friendly_api_error(res.status_code, res.text)}
+        except Exception as err:
+            logger.error(f"[Razorpay] Exception fetching order {order_id}: {err}")
+            return {"success": False, "error": f"Network exception: {str(err)}"}
+
+    def fetch_order_payments(self, order_id: str) -> Dict[str, Any]:
+        """
+        Fetches all payments associated with a Razorpay order (GET /v1/orders/{order_id}/payments).
+        """
+        self._load_config()
+        if not order_id:
+            return {"success": False, "error": "Order ID is required."}
+
+        if not self.is_configured() or order_id.startswith(("order_sim_", "order_mock_", "order_test_")):
+            return {"success": False, "error": "Simulated or unconfigured order lookup."}
+
+        url = f"https://api.razorpay.com/v1/orders/{order_id}/payments"
+        try:
+            with httpx.Client(timeout=15.0) as client:
+                res = client.get(
+                    url,
+                    auth=(self.key_id, self.key_secret),
+                    headers={"Content-Type": "application/json"}
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    return {"success": True, "items": data.get("items", [])}
+                return {"success": False, "error": self._friendly_api_error(res.status_code, res.text)}
+        except Exception as err:
+            logger.error(f"[Razorpay] Exception fetching order payments {order_id}: {err}")
+            return {"success": False, "error": f"Network exception: {str(err)}"}
+
     @staticmethod
     def _friendly_api_error(status_code: int, body: str) -> str:
         description = ""

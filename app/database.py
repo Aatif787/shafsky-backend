@@ -1,6 +1,16 @@
-from sqlalchemy import create_engine
+"""
+Database Connection & Engine Singleton Module.
+Configures persistent, high-performance PostgreSQL connection pooling (QueuePool)
+with LIFO checkout, TCP keepalive socket settings, and proactive health checks
+to eliminate connection handshake latency across requests.
+"""
+
+from typing import Dict, Any
+from sqlalchemy import create_engine, Engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
+from sqlalchemy.pool import QueuePool
 from app.config import settings
+
 
 def _database_url() -> str:
     url = (settings.DATABASE_URL or "").replace("postgres://", "postgresql://", 1)
@@ -9,26 +19,52 @@ def _database_url() -> str:
         url = f"{url}{sep}sslmode=require"
     return url
 
-db_url = _database_url()
-if db_url.startswith("sqlite"):
-    engine = create_engine(db_url, connect_args={"check_same_thread": False})
-else:
-    engine = create_engine(
+
+def _create_database_engine() -> Engine:
+    """
+    Creates a singleton SQLAlchemy Engine tuned for minimal latency and persistent pooling.
+    """
+    db_url = _database_url()
+
+    if db_url.startswith("sqlite"):
+        return create_engine(
+            db_url,
+            connect_args={"check_same_thread": False},
+        )
+
+    # Optimized PostgreSQL connect arguments (TCP keepalive to prevent silent socket drops)
+    pg_connect_args: Dict[str, Any] = {
+        "keepalives": 1,
+        "keepalives_idle": 30,
+        "keepalives_interval": 10,
+        "keepalives_count": 5,
+        "connect_timeout": 10,
+    }
+
+    return create_engine(
         db_url,
-        pool_size=10,
-        max_overflow=20,
-        pool_timeout=30,
-        pool_recycle=1800,
-        pool_pre_ping=True,
-        connect_args={},
+        poolclass=QueuePool,
+        pool_size=20,            # Maintain 20 hot, persistent connections
+        max_overflow=30,         # Handle up to 30 burst connections
+        pool_timeout=30,         # Max seconds to wait for a connection from pool
+        pool_recycle=300,        # Recycle connections every 5 minutes to prevent stale cloud drops
+        pool_pre_ping=True,      # Proactively verify connection health before query execution
+        pool_use_lifo=True,      # Re-use most recently used connection to keep database buffers hot
+        connect_args=pg_connect_args,
     )
 
+
+# Singleton Engine & Session Factory
+engine = _create_database_engine()
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
 
 class Base(DeclarativeBase):
     pass
 
+
 def get_db():
+    """FastAPI dependency for yielding transactional database sessions."""
     db = SessionLocal()
     try:
         yield db

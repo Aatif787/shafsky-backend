@@ -27,10 +27,10 @@ class AirportBooking(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    booking_reference: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
-    customer_id: Mapped[str] = mapped_column(String, index=True, nullable=False)
+    booking_reference: Mapped[str] = mapped_column(String, nullable=False)
+    customer_id: Mapped[str] = mapped_column(String, nullable=False)
     service_package: Mapped[str] = mapped_column(String, nullable=False, default="STANDARD_MEET_GREET")
-    status: Mapped[str] = mapped_column(String, nullable=False, default="DRAFT", index=True)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="DRAFT")
     total_price: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=0.00)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
     special_instructions: Mapped[str] = mapped_column(Text, nullable=True)

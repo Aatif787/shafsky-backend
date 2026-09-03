@@ -14,7 +14,7 @@ from typing import Optional, Tuple
 def normalize_iata(code: Optional[str]) -> str:
     if not code:
         return ""
-    return str(code).strip().upper()
+    return code.strip().upper()
 
 
 def normalize_journey_type(journey_type: Optional[str]) -> str:
@@ -31,7 +31,7 @@ def normalize_journey_type(journey_type: Optional[str]) -> str:
 def normalize_flight_type(flight_type: Optional[str]) -> Optional[str]:
     if not flight_type:
         return None
-    ft = str(flight_type).strip().upper()
+    ft = flight_type.strip().upper()
     if ft in ("DOMESTIC", "DOM", "D"):
         return "DOMESTIC"
     if ft in ("INTERNATIONAL", "INTL", "INT", "I"):
@@ -156,16 +156,30 @@ def resolve_airport_country(db, iata_code: Optional[str]) -> str:
     #    The DB has an 'iata_code' column not mapped in the ORM, plus 'code' which
     #    sometimes stores IATA codes. Also has 'iso_country' not in the ORM.
     from app.models.schema import AirportManagement
-    from sqlalchemy import or_, column
+    from sqlalchemy import or_, column, inspect
 
-    global_ap = db.scalar(
-        select(AirportManagement).where(
-            or_(
-                column("iata_code") == code,
-                AirportManagement.code == code,
+    has_iata_col = False
+    try:
+        bind = db.get_bind()
+        insp = inspect(bind)
+        cols = [c["name"] for c in insp.get_columns("airports")]
+        has_iata_col = "iata_code" in cols
+    except Exception:
+        has_iata_col = False
+
+    if has_iata_col:
+        global_ap = db.scalar(
+            select(AirportManagement).where(
+                or_(
+                    column("iata_code") == code,
+                    AirportManagement.code == code,
+                )
             )
         )
-    )
+    else:
+        global_ap = db.scalar(
+            select(AirportManagement).where(AirportManagement.code == code)
+        )
     if global_ap:
         # Prefer iso_country (2-letter ISO code), fall back to country
         country_val = getattr(global_ap, "iso_country", None) or global_ap.country

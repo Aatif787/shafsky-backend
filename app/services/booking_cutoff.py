@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Optional, Dict
 
 from app.services.service_airport_rules import (
     derive_flight_type_from_route,
@@ -49,6 +49,43 @@ def airport_tzinfo(tz_name: Optional[str]):
         return IST
 
 
+GLOBAL_AIRPORT_TIMEZONES: Dict[str, str] = {
+    # Middle East
+    "DXB": "Asia/Dubai", "DWC": "Asia/Dubai", "AUH": "Asia/Dubai", "SHJ": "Asia/Dubai",
+    "DOH": "Asia/Qatar", "KWI": "Asia/Kuwait", "BAH": "Asia/Bahrain", "MCT": "Asia/Muscat",
+    "JED": "Asia/Riyadh", "RUH": "Asia/Riyadh", "DMM": "Asia/Riyadh", "MED": "Asia/Riyadh",
+    "AMM": "Asia/Amman", "BEY": "Asia/Beirut", "TLV": "Asia/Jerusalem",
+    # Europe
+    "LHR": "Europe/London", "LGW": "Europe/London", "STN": "Europe/London", "MAN": "Europe/London", "EDI": "Europe/London",
+    "CDG": "Europe/Paris", "ORY": "Europe/Paris", "NCE": "Europe/Paris",
+    "FRA": "Europe/Berlin", "MUC": "Europe/Berlin", "BER": "Europe/Berlin",
+    "AMS": "Europe/Amsterdam", "BRU": "Europe/Brussels", "ZRH": "Europe/Zurich", "GVA": "Europe/Zurich",
+    "VIE": "Europe/Vienna", "FCO": "Europe/Rome", "MXP": "Europe/Rome",
+    "MAD": "Europe/Madrid", "BCN": "Europe/Madrid", "LIS": "Europe/Lisbon",
+    "CPH": "Europe/Copenhagen", "ARN": "Europe/Stockholm", "OSL": "Europe/Oslo", "HEL": "Europe/Helsinki",
+    "IST": "Europe/Istanbul", "SAW": "Europe/Istanbul", "ATH": "Europe/Athens", "DUB": "Europe/Dublin",
+    # Southeast Asia & Far East
+    "SIN": "Asia/Singapore", "BKK": "Asia/Bangkok", "DMK": "Asia/Bangkok", "HKT": "Asia/Bangkok",
+    "KUL": "Asia/Kuala_Lumpur", "PEN": "Asia/Kuala_Lumpur",
+    "HKG": "Asia/Hong_Kong", "NRT": "Asia/Tokyo", "HND": "Asia/Tokyo", "KIX": "Asia/Tokyo",
+    "ICN": "Asia/Seoul", "GMP": "Asia/Seoul", "TPE": "Asia/Taipei",
+    "CGK": "Asia/Jakarta", "DPS": "Asia/Makassar", "MNL": "Asia/Manila",
+    # South Asia
+    "CMB": "Asia/Colombo", "KTM": "Asia/Kathmandu", "DAC": "Asia/Dhaka", "MLE": "Indian/Maldives",
+    "KHI": "Asia/Karachi", "ISB": "Asia/Karachi", "LHE": "Asia/Karachi",
+    # North America
+    "JFK": "America/New_York", "EWR": "America/New_York", "LGA": "America/New_York", "BOS": "America/New_York",
+    "IAD": "America/New_York", "ORD": "America/Chicago", "DFW": "America/Chicago", "MIA": "America/New_York",
+    "ATL": "America/New_York", "LAX": "America/Los_Angeles", "SFO": "America/Los_Angeles", "SEA": "America/Los_Angeles",
+    "YYZ": "America/Toronto", "YVR": "America/Vancouver", "YUL": "America/Toronto",
+    # Australia & Oceania
+    "SYD": "Australia/Sydney", "MEL": "Australia/Melbourne", "BNE": "Australia/Brisbane", "PER": "Australia/Perth",
+    "AKL": "Pacific/Auckland",
+    # Africa
+    "CAI": "Africa/Cairo", "JNB": "Africa/Johannesburg", "CPT": "Africa/Johannesburg", "NBO": "Africa/Nairobi",
+}
+
+
 def lookup_airport_timezone(db, iata: Optional[str]) -> str:
     from sqlalchemy import select
     from app.models.journey_models import SupportedAirport
@@ -56,9 +93,19 @@ def lookup_airport_timezone(db, iata: Optional[str]) -> str:
     code = normalize_iata(iata)
     if not code:
         return "Asia/Kolkata"
-    row = db.scalar(select(SupportedAirport).where(SupportedAirport.iata_code == code))
-    if row and getattr(row, "timezone", None):
-        return str(row.timezone)
+
+    # Fast lookup from global dictionary
+    if code in GLOBAL_AIRPORT_TIMEZONES:
+        return GLOBAL_AIRPORT_TIMEZONES[code]
+
+    # Database lookup if available
+    try:
+        row = db.scalar(select(SupportedAirport).where(SupportedAirport.iata_code == code))
+        if row and getattr(row, "timezone", None):
+            return str(row.timezone)
+    except Exception:
+        pass
+
     return "Asia/Kolkata"
 
 
@@ -250,7 +297,7 @@ def evaluate_booking_cutoff(
         required_hours=required,
         flight_type=ft,
         scheduled=scheduled,
-        customer_message=customer_cutoff_message(ft, remaining, required),
+        customer_message=customer_cutoff_message(ft or "DOMESTIC", remaining, required),
         reason="cutoff_violation",
     )
 

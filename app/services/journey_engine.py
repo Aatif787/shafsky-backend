@@ -9,13 +9,17 @@ Responsibilities:
 - Return structured response with graceful degradation for unsupported airports
 """
 
-from typing import Optional, List
+import secrets
+import string
 from datetime import datetime, timezone
+from typing import List, Optional
+from sqlalchemy import exists, select
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import select, exists
 
-from app.models.journey_models import SupportedAirport, Service, AirportService
+from app.models.journey_models import AirportService, Service, SupportedAirport
+from app.services.booking_cutoff import airport_min_notice_hours
 from app.services.service_airport_rules import (
+    derive_flight_type_from_route,
     normalize_flight_type,
     normalize_iata,
     normalize_journey_type,
@@ -45,7 +49,6 @@ class JourneyDetectionEngine:
 
     @classmethod
     def _airport_notice_hours(cls, flight_type: Optional[str]) -> int:
-        from app.services.booking_cutoff import airport_min_notice_hours
         return airport_min_notice_hours(flight_type)
 
     # ─── Airport Resolution ───
@@ -146,6 +149,10 @@ class JourneyDetectionEngine:
         if flight_type:
             normalized_flight = flight_type.strip().upper()
             stmt = stmt.where(AirportService.flight_type.in_([normalized_flight, "ALL"]))
+
+        # Rule: Delhi (DEL) International flights/services operate exclusively from Terminal 3 (no international in T1/T2)
+        if airport_iata and airport_iata.strip().upper() == "DEL" and (flight_type or "").strip().upper() in ("INTERNATIONAL", "INTL"):
+            terminal = "Terminal 3"
 
         if terminal:
             normalized_term = terminal.strip()
@@ -249,6 +256,7 @@ class JourneyDetectionEngine:
 
         dep_info = cls._to_detected_info(dep_airport)
         arr_info = cls._to_detected_info(arr_airport)
+        trn_info = cls._to_detected_info(trn_airport)
 
         service_iata = resolve_service_airport_iata(
             normalized_type,
@@ -262,12 +270,12 @@ class JourneyDetectionEngine:
         is_supported = bool(primary_airport and primary_airport.is_supported and primary_airport.is_active)
 
         # If unsupported, return early with empty services
-        if not is_supported:
+        if not is_supported or not primary_airport:
             return JourneyDetectionResponse(
                 success=True,
                 departure_airport=dep_info,
                 arrival_airport=arr_info,
-                transit_airport=primary_info if normalized_type == "TRANSIT" else None,
+                transit_airport=trn_info if normalized_type == "TRANSIT" else None,
                 journey_type=normalized_type,
                 primary_airport=primary_info,
                 is_supported=False,
@@ -277,9 +285,10 @@ class JourneyDetectionEngine:
                 unavailable_message="This airport is currently not supported for online booking.",
             )
 
+        assert primary_airport is not None
+
         # Travel type: derive authoritatively from route countries.
         # Client explicit selection is NOT trusted for ARRIVAL/DEPARTURE.
-        from app.services.service_airport_rules import derive_flight_type_from_route
         try:
             derived = derive_flight_type_from_route(db, departure_code, arrival_code, normalized_type)
             if derived is not None:
@@ -316,7 +325,11 @@ class JourneyDetectionEngine:
         available_terminals.sort()
 
         selected_terminal = None
-        if terminal:
+        # Rule: For Delhi (DEL) International services, always Terminal 3 (T1/T2 has no international services)
+        if primary_airport and primary_airport.iata_code == "DEL" and (flight_type or "").strip().upper() in ("INTERNATIONAL", "INTL"):
+            selected_terminal = "Terminal 3"
+            available_terminals = ["Terminal 3"]
+        elif terminal:
             term_clean = terminal.strip()
             if term_clean in ("Terminal 3", "T3", "3"):
                 selected_terminal = "Terminal 3"
@@ -416,7 +429,7 @@ class JourneyDetectionEngine:
             success=True,
             departure_airport=dep_info,
             arrival_airport=arr_info,
-            transit_airport=primary_info if normalized_type == "TRANSIT" else None,
+            transit_airport=trn_info if normalized_type == "TRANSIT" else None,
             journey_type=normalized_type,
             primary_airport=primary_info,
             is_supported=is_supported,
@@ -531,7 +544,6 @@ class JourneyDetectionEngine:
         3. Calculates dynamic price breakdown from DB
         4. Generates temporary booking reference code
         """
-        import secrets, string
         date_stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
         rand_suffix = "".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(4))
         ref_code = f"SHK-{date_stamp}-{rand_suffix}"

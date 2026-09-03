@@ -319,6 +319,22 @@ class WhatsAppClient:
         """Convenience method for text messages."""
         return self.send_message(to_phone=to_phone, message_body=message_body)
 
+    def mark_message_as_read(self, message_id: str) -> Dict[str, Any]:
+        """
+        Marks an incoming WhatsApp message as read via Meta Cloud API.
+        Instantly displays double blue ticks on the customer's phone for zero perceived latency.
+        """
+        self._load_config()
+        if not self.is_configured() or not message_id:
+            return {"success": False, "error": "Not configured or empty message_id"}
+
+        payload = {
+            "messaging_product": "whatsapp",
+            "status": "read",
+            "message_id": str(message_id).strip(),
+        }
+        return self._dispatch_http("read_receipt", payload, "MarkAsRead")
+
     @staticmethod
     def _is_meta_fetchable_url(url: str) -> bool:
         """Meta must fetch the file over public HTTPS — never localhost."""

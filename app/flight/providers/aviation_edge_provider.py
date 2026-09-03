@@ -327,7 +327,7 @@ def split_flight_number(flight_clean: str) -> Tuple[str, str]:
 
 
 def canonical_flight_iata(value: str) -> str:
-    """Compare flight IATA values ignoring spaces, case, and leading zeros in the numeric part."""
+    """Compare flight IATA values ignoring spaces, case, and leading zeros in the numeric part, with ICAO support."""
     cleaned = re.sub(r"[\s\-_]+", "", value or "").strip().upper()
     if not cleaned:
         return ""
@@ -335,6 +335,10 @@ def canonical_flight_iata(value: str) -> str:
     if not match:
         return cleaned
     carrier, digits, suffix = match.group(1), match.group(2), match.group(3)
+    # Convert 3-letter ICAO carrier code to 2-letter IATA if known
+    icao_to_iata = {v: k for k, v in CARRIER_ICAO_MAP.items()}
+    if carrier in icao_to_iata:
+        carrier = icao_to_iata[carrier]
     return f"{carrier}{digits.lstrip('0') or '0'}{suffix}"
 
 
@@ -1049,6 +1053,18 @@ class AviationEdgeProvider(FlightProvider):
             f":{origin_iata or '-'}:{dest_iata or '-'}:{service_iata or '-'}"
         )
 
+        # ── 1. Check Unified Cross-Provider Cache First (RAM -> Redis -> PostgreSQL DB) ─
+        try:
+            from app.flight.unified_cache import get_unified_flight, to_flight_status_data
+            unified_hit = get_unified_flight(flight_clean, date_clean)
+            if unified_hit:
+                cached_status = to_flight_status_data(unified_hit, flight_clean)
+                if cached_status:
+                    logger.info(f"[UNIFIED FLIGHT CACHE HIT] Flight: {flight_clean} | Bypassed external APIs completely")
+                    return cached_status
+        except Exception as err:
+            logger.debug("Unified cache check in AviationEdgeProvider error: %s", err)
+
         cached = self._get_cached_data(cache_key)
         if cached:
             try:
@@ -1193,6 +1209,16 @@ class AviationEdgeProvider(FlightProvider):
 
         flight_status = self._normalize_flight_data(target_item, date_context=date_clean)
         self._set_cached_data(cache_key, flight_status.model_dump(mode="json"))
+        try:
+            from app.flight.unified_cache import store_unified_flight
+            store_unified_flight(
+                flight_clean,
+                flight_status.model_dump(mode="json"),
+                provider="aviation_edge",
+                flight_date=date_clean,
+            )
+        except Exception:
+            pass
 
         logger.info(
             f"\n======================================================\n"
@@ -1210,6 +1236,18 @@ class AviationEdgeProvider(FlightProvider):
         """Retrieve real-time or master flight status."""
         flight_clean = normalize_flight_number(flight_num)
         cache_key = f"flight:status:{flight_clean}"
+
+        # ── 1. Check Unified Cross-Provider Cache First ───────────────────────
+        try:
+            from app.flight.unified_cache import get_unified_flight, to_flight_status_data
+            unified_hit = get_unified_flight(flight_clean)
+            if unified_hit:
+                cached_status = to_flight_status_data(unified_hit, flight_clean)
+                if cached_status:
+                    logger.info(f"[UNIFIED CACHE HIT] Flight status: {flight_clean} (bypassed external APIs)")
+                    return cached_status
+        except Exception as err:
+            logger.debug("Unified cache check in get_flight_status error: %s", err)
 
         cached = self._get_cached_data(cache_key)
         if cached:
@@ -1240,6 +1278,11 @@ class AviationEdgeProvider(FlightProvider):
 
         flight_status = self._normalize_flight_data(valid_results[0])
         self._set_cached_data(cache_key, flight_status.model_dump(mode="json"))
+        try:
+            from app.flight.unified_cache import store_unified_flight
+            store_unified_flight(flight_clean, flight_status.model_dump(mode="json"), provider="aviation_edge")
+        except Exception:
+            pass
         return flight_status
 
     def search_flights(self, query: str) -> List[FlightStatusData]:
