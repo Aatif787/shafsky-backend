@@ -144,7 +144,7 @@ class BookingService:
                 ),
             )
 
-        return round(exact_match.price * guests, 2)
+        return round(float(exact_match.price) * guests, 2)
 
     @staticmethod
     def generate_booking_ref() -> str:
@@ -403,7 +403,7 @@ class BookingService:
         )
 
         # All catalog prices are GST-inclusive (do not add extra tax)
-        subtotal = round(authoritative_price, 2)
+        subtotal = round(float(authoritative_price), 2)
         taxes = 0.0
         charge_amount = subtotal
         metadata_json = dict(metadata_json or {})
@@ -417,13 +417,13 @@ class BookingService:
         metadata_json["pax_adults"] = pax_count
         metadata_json["guest_count"] = pax_count
         # Unit price the catalog charged (so invoices / retries never re-inflate).
-        metadata_json["unit_price"] = round(subtotal / pax_count, 2) if pax_count else subtotal
+        metadata_json["unit_price"] = round(float(subtotal) / pax_count, 2) if pax_count else float(subtotal)
 
         # Guard: never silently charge more than the client showed without an
         # explicit catalog reason. Log when the trusted DB total differs from
         # the (untrusted) client total so support can diagnose catalog drift.
         client_total = float(payload.total_amount or 0)
-        if client_total > 0 and abs(client_total - charge_amount) > 0.009:
+        if client_total > 0 and abs(client_total - float(charge_amount)) > 0.009:
             logger.warning(
                 "[Booking Price] Client total ₹%.2f vs authoritative ₹%.2f "
                 "(airport=%s package=%s journey=%s flight_type=%s pax=%s)",

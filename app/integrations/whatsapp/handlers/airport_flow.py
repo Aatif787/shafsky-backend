@@ -1,4 +1,4 @@
-﻿"""
+"""
 Airport Flow Mixin for WhatsApp Booking State Machine.
 Handles:
 - Main category selection (Airport, Travel, Charter, Hotel/Transport)
@@ -814,10 +814,12 @@ class AirportFlowMixin(BaseFlowMixin):
         available_services = []
         for aps, svc in rows:
             features = aps.features if isinstance(getattr(aps, "features", None), list) else []
+            raw_p = aps.price
+            price_flt = float(raw_p) if isinstance(raw_p, (int, float, str, Decimal)) else 0.0
             available_services.append({
                 "id": str(svc.id),
                 "title": svc.name,
-                "price": aps.price,
+                "price": price_flt,
                 "description": aps.short_description or svc.description or "Airport service",
                 "features": features,
             })
