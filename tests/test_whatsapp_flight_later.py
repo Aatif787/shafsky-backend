@@ -1,4 +1,4 @@
-"""
+﻿"""
 WhatsApp Airport Services - "Flight Not Confirmed Yet" friendly path tests.
 
 Locks in:
@@ -11,6 +11,7 @@ Locks in:
 """
 
 import uuid
+from datetime import datetime, timezone, timedelta
 
 import pytest
 from unittest.mock import MagicMock
@@ -116,5 +117,36 @@ def test_flight_not_confirmed_path_end_to_end():
             if len(c[0]) > 1
         )
         assert "TO BE CONFIRMED with customer" in all_bodies
+    finally:
+        db.close()
+
+
+def test_flight_later_same_day_domestic_blocked():
+    """Flight-later + tomorrow (domestic 12h notice) must be rejected with guidance."""
+    db = SessionLocal()
+    try:
+        phone = f"91{uuid.uuid4().int % 10**10:010d}"
+        conv, _ = WhatsAppBookingStateMachine.get_or_create_conversation(db, phone)
+        conv.current_state = "START"
+        db.commit()
+
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "Hi")
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "1")
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "2")
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "1")
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "Delhi")
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "1")
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "1")
+        res = WhatsAppBookingStateMachine.process_incoming_event(db, phone, "", input_id="btn_flight_not_confirmed")
+        assert res["status"] == "flight_later_selected"
+
+        tomorrow = (datetime.now(timezone.utc) + timedelta(hours=24)).strftime("%d/%m/%Y")
+        res = WhatsAppBookingStateMachine.process_incoming_event(db, phone, tomorrow)
+        db.refresh(conv)
+        assert res["status"] == "cutoff_violation"
+        assert conv.current_state == "DATE_SELECTION"
+        sent = WhatsAppClient.send_text_message.call_args
+        body = sent.kwargs.get("body_text") or (sent[0][1] if len(sent[0]) > 1 else "")
+        assert "hours in advance" in body
     finally:
         db.close()

@@ -226,6 +226,21 @@ class DetailsFlowMixin:
                 )
                 return False, None, error_msg, "cutoff_violation"
 
+        if metadata.get("flight_later") is True and scheduled_dt is None:
+            # Flight not confirmed yet: enforce the notice window against the
+            # earliest possible service moment on the chosen date (midnight in
+            # the service timezone) so ops always keeps the full runway.
+            floor_dt = datetime(
+                parsed_date.year, parsed_date.month, parsed_date.day,
+                0, 0, tzinfo=service_tz,
+            )
+            if (floor_dt - now_in_tz).total_seconds() < required * 3600:
+                error_msg = (
+                    f"❌ For {kind} services we accept bookings at least {required} hours in advance.\n\n"
+                    "Your flight isn't confirmed yet, so please pick a date further out - "
+                    f"or call our executive on *{EXECUTIVE_PHONE}* and we'll do our best."
+                )
+                return False, None, error_msg, "cutoff_violation"
         return True, parsed_date, None, "valid_date"
 
     @classmethod
