@@ -1,4 +1,4 @@
-"""
+﻿"""
 Airport Flow Mixin for WhatsApp Booking State Machine.
 Handles:
 - Main category selection (Airport, Travel, Charter, Hotel/Transport)
@@ -902,7 +902,7 @@ class AirportFlowMixin(BaseFlowMixin):
             rows.append({
                 "id": f"svc_id_{svc.get('id')}",
                 "title": wa_copy.list_row_title(str(svc["title"]), svc["price"]),
-                "description": f"₹{int(svc['price']):,} - {str(svc.get('description') or '')[:40]}"
+                "description": (f"₹{int(svc['price']):,} - {str(svc.get('description') or '')[:40]}" if float(svc["price"] or 0) > 0 else (str(svc.get('description') or '')[:40] or "Price on request"))
             })
 
         sections = [{"title": category_name[:24], "rows": rows}]
@@ -1065,8 +1065,11 @@ class AirportFlowMixin(BaseFlowMixin):
 
         svc_id = str(selected_svc.get("id"))
         svc_title = str(selected_svc.get("title", selected_svc.get("name", "VIP Service")))
-        raw_price = selected_svc.get("base_price") or selected_svc.get("price") or 2500.0
-        price = float(raw_price) if isinstance(raw_price, (int, float, str, Decimal)) else 2500.0
+        raw_price = selected_svc.get("base_price") or selected_svc.get("price") or 0.0
+        price = float(raw_price) if isinstance(raw_price, (int, float, str, Decimal)) else 0.0
+        if category_name != "Private Charter" and price <= 0:
+            # Priced categories keep the legacy default when the catalog omits a price.
+            price = 2500.0
 
         conv.selected_service_id = svc_id
         conv.selected_service_name = svc_title

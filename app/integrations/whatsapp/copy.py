@@ -1,4 +1,4 @@
-"""Customer-facing WhatsApp copy. Keep test-stable phrases intact."""
+﻿"""Customer-facing WhatsApp copy. Keep test-stable phrases intact."""
 
 from typing import Any, Dict, List, Optional
 
@@ -46,6 +46,15 @@ QUOTE_REQUEST_PENDING_ACK = (
     "Type *Hi* to start a new booking instead."
 )
 
+CHARTER_ENQUIRY_REGISTERED = (
+    f"*{BRAND}*\n\n"
+    "Thank you — your charter enquiry *{request_reference}* has been received.\n\n"
+    "Our charter desk will contact you within 30 minutes with aircraft "
+    "options and a tailored quote.\n\n"
+    f"Need it sooner? Call our executive on *{EXECUTIVE_PHONE}*.\n\n"
+    "Type *Hi* anytime to start a new booking."
+)
+
 CATEGORY_LINES = (
     "1️⃣ Airport Services\n"
     "2️⃣ Travel Services\n"
@@ -64,6 +73,12 @@ def format_inr(amount: Any) -> str:
 def list_row_title(name: str, price: Any) -> str:
     """Meta list row title max 24 characters. Prefer name + price when it fits."""
     name = (name or "Service").strip()
+    try:
+        has_price = price is not None and float(price) > 0
+    except (TypeError, ValueError):
+        has_price = False
+    if not has_price:
+        return name[:24]
     price_part = f" {format_inr(price)}"
     if len(name) + len(price_part) <= 24:
         return f"{name}{price_part}"
@@ -78,7 +93,14 @@ def numbered_service_lines(services: List[Dict[str, Any]]) -> str:
     for i, svc in enumerate(services, 1):
         title = svc.get("title") or svc.get("name") or "Service"
         price = svc.get("price", svc.get("base_price"))
-        lines.append(f"{i}. *{title}* — {format_inr(price)}")
+        try:
+            has_price = price is not None and float(price) > 0
+        except (TypeError, ValueError):
+            has_price = False
+        if has_price:
+            lines.append(f"{i}. *{title}* — {format_inr(price)}")
+        else:
+            lines.append(f"{i}. *{title}*")
     return "\n".join(lines)
 
 

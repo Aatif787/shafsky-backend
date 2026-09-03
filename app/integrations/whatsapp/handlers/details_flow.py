@@ -1,4 +1,4 @@
-"""
+﻿"""
 Details Flow Mixin for WhatsApp Booking State Machine.
 Handles:
 - Timezone resolution
@@ -423,11 +423,16 @@ class DetailsFlowMixin:
         else:
             summary_lines.append("\n💰 *Pricing*: Custom Quote / Team Assistance\n")
 
-        summary_lines.append("Please review your details to confirm your booking request:")
+        is_charter_enquiry = (conv.selected_category or "").strip().lower() == "private charter"
+        summary_lines.append(
+            "Please review your details and submit your charter enquiry:"
+            if is_charter_enquiry else
+            "Please review your details to confirm your booking request:"
+        )
 
         body_text = "\n".join(summary_lines)
         buttons = [
-            {"id": "btn_confirm_booking", "title": "Confirm Booking"},
+            {"id": "btn_confirm_booking", "title": "Submit Enquiry" if is_charter_enquiry else "Confirm Booking"},
             {"id": "btn_change_details", "title": "Change Details"},
             {"id": "btn_cancel", "title": "Cancel"}
         ]

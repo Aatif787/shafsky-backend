@@ -1,4 +1,4 @@
-"""
+﻿"""
 Review & Payment Flow Mixin for WhatsApp Booking State Machine.
 Handles:
 - Booking review verification and email guard
@@ -51,6 +51,9 @@ class ReviewPaymentFlowMixin(BaseFlowMixin):
                 cls._transition_state(db, conv, "CUSTOMER_EMAIL")
                 whatsapp_client.send_text_message(conv.phone_number, _REAL_EMAIL_HELP)
                 return {"status": "invalid_email", "success": False, "reason": "reserved_or_placeholder"}
+            if (conv.selected_category or "").strip().lower() == "private charter":
+                # Private Charter is enquiry-only - no booking/payment pipeline.
+                return cls._submit_charter_enquiry(db, conv)
             return cls._create_booking_request(db, conv)
 
         whatsapp_client.send_text_message(conv.phone_number, "Please select *Confirm Booking*, *Change Details*, or *Cancel*.")

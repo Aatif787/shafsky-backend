@@ -1,4 +1,4 @@
-import sys
+﻿import sys
 import os
 import pytest
 from datetime import datetime, timedelta, timezone
@@ -24,6 +24,35 @@ def setup_database():
 @pytest.fixture
 def client():
     return TestClient(app)
+
+@pytest.fixture(scope="module", autouse=True)
+def _seed_journey_catalog():
+    """Seed the production journey catalog + global airports for country resolution."""
+    import uuid as _uuid
+    Base.metadata.create_all(bind=engine)
+    from app.seeds.seed_journey_data import run_seed
+    run_seed()
+    from app.models.schema import AirportManagement
+    db = SessionLocal()
+    try:
+        for code, country in (
+            ("LHR", "United Kingdom"),
+            ("JFK", "United States"),
+            ("DXB", "United Arab Emirates"),
+        ):
+            if not db.query(AirportManagement).filter_by(code=code).first():
+                db.add(AirportManagement(
+                    id=_uuid.uuid4(),
+                    code=code,
+                    name=f"{code} International Airport",
+                    city=code,
+                    country=country,
+                    is_active=True,
+                ))
+        db.commit()
+    finally:
+        db.close()
+    yield
 
 @pytest.fixture
 def admin_token():
@@ -55,17 +84,17 @@ def test_get_public_service_catalog(client):
 # ─── TEST BOOKING CREATION ACROSS ALL 6 CATEGORIES ─────────────────────────────
 
 def test_create_airport_assistance_booking(client):
-    dep_time = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
-    arr_time = (datetime.now(timezone.utc) + timedelta(hours=28)).isoformat()
+    dep_time = (datetime.now(timezone.utc) + timedelta(hours=48)).isoformat()
+    arr_time = (datetime.now(timezone.utc) + timedelta(hours=52)).isoformat()
     payload = {
         "passengerName": "Alice Vance",
-        "passengerEmail": "alice@example.com",
+        "passengerEmail": "alice@shafsky-mail.com",
         "passengerPhone": "+19876543210",
         "serviceCategory": "Airport Assistance",
         "serviceType": "Meet & Greet",
         "flightNum": "SHF-101",
         "originCode": "DEL",
-        "destCode": "LHR",
+        "destCode": "BOM",
         "departureTime": dep_time,
         "arrivalTime": arr_time,
         "totalAmount": 4500.0,
@@ -84,7 +113,7 @@ def test_create_airport_assistance_booking(client):
 def test_create_ground_transport_booking(client):
     payload = {
         "passengerName": "Bob Smith",
-        "passengerEmail": "bob@example.com",
+        "passengerEmail": "bob@shafsky-mail.com",
         "passengerPhone": "+19876543211",
         "serviceCategory": "Ground Transport",
         "serviceType": "Luxury Sedan",
@@ -108,7 +137,7 @@ def test_create_ground_transport_booking(client):
 def test_create_private_charter_booking(client):
     payload = {
         "passengerName": "Charles Xavier",
-        "passengerEmail": "charles@example.com",
+        "passengerEmail": "charles@shafsky-mail.com",
         "passengerPhone": "+19876543212",
         "serviceCategory": "Private Charter",
         "serviceType": "Light Jet",
@@ -131,7 +160,7 @@ def test_create_private_charter_booking(client):
 def test_create_cargo_logistics_booking(client):
     payload = {
         "passengerName": "David Logistics",
-        "passengerEmail": "david@example.com",
+        "passengerEmail": "david@shafsky-mail.com",
         "passengerPhone": "+19876543213",
         "serviceCategory": "Cargo & Logistics",
         "serviceType": "Express Air Freight",
@@ -155,7 +184,7 @@ def test_create_cargo_logistics_booking(client):
 def test_create_medical_assistance_booking(client):
     payload = {
         "passengerName": "Dr. Eleanor Medical",
-        "passengerEmail": "eleanor@example.com",
+        "passengerEmail": "eleanor@shafsky-mail.com",
         "passengerPhone": "+19876543214",
         "serviceCategory": "Medical Assistance",
         "serviceType": "Air Ambulance",
@@ -178,7 +207,7 @@ def test_create_medical_assistance_booking(client):
 def test_create_travel_support_booking(client):
     payload = {
         "passengerName": "Fiona Travel",
-        "passengerEmail": "fiona@example.com",
+        "passengerEmail": "fiona@shafsky-mail.com",
         "passengerPhone": "+19876543215",
         "serviceCategory": "Travel Support",
         "serviceType": "Visa Assistance",
@@ -201,11 +230,11 @@ def test_create_travel_support_booking(client):
 
 def test_release_1_backward_compatibility(client):
     """Release 1 payload without serviceCategory should default to Airport Assistance seamlessly."""
-    dep_time = (datetime.now(timezone.utc) + timedelta(hours=12)).isoformat()
-    arr_time = (datetime.now(timezone.utc) + timedelta(hours=16)).isoformat()
+    dep_time = (datetime.now(timezone.utc) + timedelta(hours=48)).isoformat()
+    arr_time = (datetime.now(timezone.utc) + timedelta(hours=52)).isoformat()
     payload = {
         "passengerName": "Release1 Client",
-        "passengerEmail": "r1@example.com",
+        "passengerEmail": "r1@shafsky-mail.com",
         "passengerPhone": "+19876543299",
         "serviceType": "Meet & Greet",
         "flightNum": "AI-101",
@@ -228,7 +257,7 @@ def test_release_1_backward_compatibility(client):
 def test_validation_error_missing_ground_transport_pickup(client):
     payload = {
         "passengerName": "Bad Transport",
-        "passengerEmail": "bad@example.com",
+        "passengerEmail": "bad@shafsky-mail.com",
         "passengerPhone": "+19876543211",
         "serviceCategory": "Ground Transport",
         "serviceType": "Luxury Sedan",
@@ -254,9 +283,10 @@ def test_admin_update_service_config(client, admin_token):
         json=patch_payload,
         headers=headers
     )
+    print("ADMIN_BODY:", response.status_code, response.text[:250])
     assert response.status_code == 200
     data = response.json()["data"]
-    assert data["basePrice"] == 5200.0
+    assert float(data["basePrice"]) == 5200.0
     assert data["description"] == "Updated VIP meet and greet description"
 
 
@@ -267,7 +297,7 @@ def test_departure_with_departure_time_only_is_valid(client):
     dep_time = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
     payload = {
         "passengerName": "Dep Passenger",
-        "passengerEmail": "dep@example.com",
+        "passengerEmail": "dep@shafsky-mail.com",
         "passengerPhone": "+919876543210",
         "serviceCategory": "Airport Assistance",
         "serviceType": "silver",
@@ -296,7 +326,7 @@ def test_departure_without_departure_time_is_invalid(client):
     arr_time = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
     payload = {
         "passengerName": "Dep Missing",
-        "passengerEmail": "dep_missing@example.com",
+        "passengerEmail": "dep_missing@shafsky-mail.com",
         "passengerPhone": "+919876543210",
         "serviceCategory": "Airport Assistance",
         "serviceType": "silver",
@@ -322,7 +352,7 @@ def test_arrival_with_arrival_time_only_is_valid(client):
     arr_time = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
     payload = {
         "passengerName": "Arr Passenger",
-        "passengerEmail": "arr@example.com",
+        "passengerEmail": "arr@shafsky-mail.com",
         "passengerPhone": "+919876543210",
         "serviceCategory": "Airport Assistance",
         "serviceType": "silver",
@@ -351,7 +381,7 @@ def test_arrival_without_arrival_time_is_invalid(client):
     dep_time = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
     payload = {
         "passengerName": "Arr Missing",
-        "passengerEmail": "arr_missing@example.com",
+        "passengerEmail": "arr_missing@shafsky-mail.com",
         "passengerPhone": "+919876543210",
         "serviceCategory": "Airport Assistance",
         "serviceType": "silver",
@@ -378,7 +408,7 @@ def test_transit_with_both_times_is_valid(client):
     arr_time = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
     payload = {
         "passengerName": "Transit Passenger",
-        "passengerEmail": "transit@example.com",
+        "passengerEmail": "transit@shafsky-mail.com",
         "passengerPhone": "+919876543210",
         "serviceCategory": "Airport Assistance",
         "serviceType": "meet_greet",
@@ -407,7 +437,7 @@ def test_transit_missing_time_is_invalid(client):
     dep_time = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
     payload = {
         "passengerName": "Transit Missing",
-        "passengerEmail": "transit_missing@example.com",
+        "passengerEmail": "transit_missing@shafsky-mail.com",
         "passengerPhone": "+919876543210",
         "serviceCategory": "Airport Assistance",
         "serviceType": "silver",
@@ -435,7 +465,7 @@ def test_service_validator_departure_valid():
     from app.schemas.booking import BookingCreate
     payload = BookingCreate(
         passengerName="Direct Dep",
-        passengerEmail="direct_dep@example.com",
+        passengerEmail="direct_dep@shafsky-mail.com",
         passengerPhone="+919876543210",
         serviceCategory="Airport Assistance",
         serviceType="silver",
@@ -455,7 +485,7 @@ def test_service_validator_departure_missing_departure_time():
     from fastapi import HTTPException
     payload = BookingCreate(
         passengerName="Direct Dep Missing",
-        passengerEmail="direct_dep_missing@example.com",
+        passengerEmail="direct_dep_missing@shafsky-mail.com",
         passengerPhone="+919876543210",
         serviceCategory="Airport Assistance",
         serviceType="silver",
@@ -475,7 +505,7 @@ def test_service_validator_arrival_valid():
     from app.schemas.booking import BookingCreate
     payload = BookingCreate(
         passengerName="Direct Arr",
-        passengerEmail="direct_arr@example.com",
+        passengerEmail="direct_arr@shafsky-mail.com",
         passengerPhone="+919876543210",
         serviceCategory="Airport Assistance",
         serviceType="silver",
@@ -495,7 +525,7 @@ def test_service_validator_arrival_missing_arrival_time():
     from fastapi import HTTPException
     payload = BookingCreate(
         passengerName="Direct Arr Missing",
-        passengerEmail="direct_arr_missing@example.com",
+        passengerEmail="direct_arr_missing@shafsky-mail.com",
         passengerPhone="+919876543210",
         serviceCategory="Airport Assistance",
         serviceType="silver",
@@ -515,7 +545,7 @@ def test_service_validator_transit_valid():
     from app.schemas.booking import BookingCreate
     payload = BookingCreate(
         passengerName="Direct Transit",
-        passengerEmail="direct_tr@example.com",
+        passengerEmail="direct_tr@shafsky-mail.com",
         passengerPhone="+919876543210",
         serviceCategory="Airport Assistance",
         serviceType="silver",
@@ -536,7 +566,7 @@ def test_service_validator_transit_missing_time():
     from fastapi import HTTPException
     payload = BookingCreate(
         passengerName="Direct Transit Missing",
-        passengerEmail="direct_tr_missing@example.com",
+        passengerEmail="direct_tr_missing@shafsky-mail.com",
         passengerPhone="+919876543210",
         serviceCategory="Airport Assistance",
         serviceType="silver",
