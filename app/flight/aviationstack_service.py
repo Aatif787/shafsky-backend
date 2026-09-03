@@ -109,6 +109,51 @@ def _normalize_endpoint(raw: Any) -> Optional[Dict[str, Any]]:
     }
 
 
+# Canonical airline names for carriers where provider data is frequently
+# missing or inaccurate (Indian carriers especially). Identity is owned
+# internally; providers only supply schedules/status.
+AIRLINE_IATA_MASTER = {
+    "6E": "IndiGo",
+    "AI": "Air India",
+    "UK": "Vistara",
+    "SG": "SpiceJet",
+    "QP": "Akasa Air",
+    "IX": "Air India Express",
+    "I5": "Air India Express",
+    "EK": "Emirates",
+    "QR": "Qatar Airways",
+    "ET": "Ethiopian Airlines",
+    "EY": "Etihad Airways",
+    "QR": "Qatar Airways",
+    "LH": "Lufthansa",
+    "BA": "British Airways",
+}
+
+# In-process negative cache: remember provider-level not-found results for a
+# short window so repeated customer retries do not burn provider quota.
+_NEGATIVE_CACHE = {}
+_NEGATIVE_CACHE_TTL_SECONDS = 900
+
+
+def _register_negative_result(flight_iata: str) -> None:
+    """Mark a flight as not-found across providers for a short window."""
+    import time as _time
+    _NEGATIVE_CACHE[normalize_flight_number_input(flight_iata)] = (
+        _time.time() + _NEGATIVE_CACHE_TTL_SECONDS
+    )
+
+
+def _is_negative_cached(flight_iata: str) -> bool:
+    import time as _time
+    key = normalize_flight_number_input(flight_iata)
+    exp = _NEGATIVE_CACHE.get(key)
+    if exp is None:
+        return False
+    if _time.time() >= exp:
+        _NEGATIVE_CACHE.pop(key, None)
+        return False
+    return True
+
 def _normalize_flight_record(raw: Dict[str, Any], requested_flight: str) -> Optional[Dict[str, Any]]:
     flight_obj = raw.get("flight") if isinstance(raw.get("flight"), dict) else {}
     airline_obj = raw.get("airline") if isinstance(raw.get("airline"), dict) else {}
@@ -127,6 +172,22 @@ def _normalize_flight_record(raw: Dict[str, Any], requested_flight: str) -> Opti
     airline_iata = normalize_iata(str(airline_iata)) if airline_iata else None
     if airline_iata and len(airline_iata) > 3:
         airline_iata = airline_iata[:3]
+
+    if not airline_name and airline_iata:
+        airline_name = AIRLINE_IATA_MASTER.get(airline_iata)
+
+    if not airline_name or not airline_iata:
+        # The flight designator itself defines the carrier (IATA: AI2424 is
+        # always an Air India flight). Derive identity from the master when
+        # the provider record omits it entirely.
+        import re as _re
+        m_carrier = _re.match(r"^([A-Z0-9]{2})", flight_iata or "")
+        if m_carrier:
+            carrier_from_flight = m_carrier.group(1)
+            master_name = AIRLINE_IATA_MASTER.get(carrier_from_flight)
+            if master_name:
+                airline_name = airline_name or master_name
+                airline_iata = airline_iata or carrier_from_flight
 
     return {
         "flight_number": flight_iata,
@@ -223,6 +284,9 @@ def _select_best_record(
         routes = {_route_key(item) for item in pool}
         if len(routes) > 1:
             return None, REASON_AMBIGUOUS
+        # prefer complete records (with airline identity) over sparse ones -
+        # provider responses can mix codeshare rows that share the same route
+        pool.sort(key=lambda item: 0 if item.get("airline") else 1)
         return pool[0], REASON_OK
 
     # API returned a real flight, but it does not serve the selected airport.
@@ -367,6 +431,66 @@ def format_route_label(flight: Dict[str, Any]) -> str:
     return f"{dep_city} ({dep.get('iata')}) → {arr_city} ({arr.get('iata')})"
 
 
+def _edge_fallback_verification(flight_iata: str, svc: Optional[str], jt: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Strict AviationEdge fallback for WhatsApp verification.
+
+    Accepts an Edge record ONLY when the provider record itself carries the
+    requested flight number (no self-labeling), the airline is present, and the
+    route matches the selected service airport + journey. Anything less returns
+    None and the caller falls through to not-found.
+    """
+    try:
+        from app.flight.providers.aviation_edge_provider import AviationEdgeProvider
+        provider = AviationEdgeProvider()
+        probe_date = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
+        rows = provider._make_request("timetable", {"key": provider.api_key, "flight_iata": flight_iata, "limit": 5})
+    except Exception as err:
+        logger.info("Edge fallback fetch error | Flight: %s | %s", flight_iata, type(err).__name__)
+        return None
+
+    if not isinstance(rows, list):
+        return None
+
+    requested_canon = canonical_flight_iata(flight_iata)
+    for row in rows:
+        try:
+            status_data = provider._normalize_flight_data(row)
+        except Exception:
+            continue
+        fd = status_data.model_dump()
+        flight_obj = fd.get("flight") or {}
+        rec_iata = flight_obj.get("iata") or flight_obj.get("number")
+        if not rec_iata:
+            continue  # provider record without a flight number: reject, never self-label
+        if canonical_flight_iata(str(rec_iata)) != requested_canon:
+            continue  # a different flight entirely: never substitute
+        airline_obj = fd.get("airline") or {}
+        if not (airline_obj.get("iata") or airline_obj.get("name")):
+            continue
+        dep = fd.get("departure") or {}
+        arr = fd.get("arrival") or {}
+        if not (dep.get("iata") and arr.get("iata")):
+            continue
+        rec = {
+            "flight": {"iata": rec_iata, "number": flight_iata},
+            "airline": {"iata": airline_obj.get("iata"), "name": airline_obj.get("name")},
+            "departure": {"iata": dep.get("iata"), "airport": dep.get("airport"), "scheduled": dep.get("scheduled")},
+            "arrival": {"iata": arr.get("iata"), "airport": arr.get("airport"), "scheduled": arr.get("scheduled")},
+            "status": fd.get("status") or "scheduled",
+            "flight_date": (str(dep.get("scheduled")) or "")[:10] or None,
+            "provider": "aviation_edge",
+        }
+        n_item = _normalize_flight_record(rec, flight_iata)
+        if not n_item:
+            continue
+        if svc:
+            route_ok, _label = _match_route(jt or "DEPARTURE", svc, n_item)
+            if not route_ok:
+                continue
+        n_item["provider"] = "aviation_edge"
+        return n_item
+    return None
+
 def verify_flight_for_whatsapp(
     flight_number: str,
     *,
@@ -384,6 +508,10 @@ def verify_flight_for_whatsapp(
     normalized = normalize_flight_number_input(flight_number)
     if not normalized:
         return {"success": False, "reason": REASON_INVALID_FLIGHT_NUMBER, "flight": None}
+
+    if os.getenv("TESTING") != "1" and _is_negative_cached(normalized):
+        logger.info("Flight verification | Flight: %s | Negative cache hit", normalized)
+        return {"success": False, "reason": REASON_FLIGHT_NOT_FOUND, "flight": None}
 
     svc = normalize_iata(selected_airport_iata)
     jt = normalize_journey_type(journey_type) if journey_type else "DEPARTURE"
@@ -447,6 +575,12 @@ def verify_flight_for_whatsapp(
                 records, normalized, svc, jt, travel_date=travel_date
             )
             if select_reason in (REASON_FLIGHT_NOT_FOUND, REASON_MALFORMED_RESPONSE, REASON_AMBIGUOUS):
+                if os.getenv("TESTING") != "1":
+                    edge_flight = _edge_fallback_verification(normalized, svc, jt)
+                    if edge_flight is not None:
+                        logger.info("Flight verification | Flight: %s | Provider: AviationEdge (fallback)", normalized)
+                        return {"success": True, "reason": REASON_OK, "flight": edge_flight}
+                    _register_negative_result(normalized)
                 logger.info(
                     "Flight verification requested | Flight: %s | Provider: AviationStack | Result: %s",
                     normalized,
