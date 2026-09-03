@@ -1124,9 +1124,23 @@ class AirportFlowMixin(BaseFlowMixin):
             msg = (
                 f"Selected: *{svc_title}* ({wa_copy.format_inr(price)}/person)"
                 f"{detail_part}\n\n"
-                "Please enter your Flight Number (e.g., *EK501*, *AI2424*, *6E224*):"
+                "Please enter your Flight Number (e.g., *EK501*, *AI2424*, *6E224*) - "
+                "or tap the button if your flight isn't confirmed yet:"
             )
-            whatsapp_client.send_text_message(conv.phone_number, msg)
+            res = whatsapp_client.send_interactive_buttons(
+                to_phone=conv.phone_number,
+                body_text=msg,
+                buttons=[
+                    {"id": "btn_enter_flight", "title": "Enter Flight Number"},
+                    {"id": "btn_flight_not_confirmed", "title": "Flight Not Confirmed"},
+                ],
+                header_text="Flight Details",
+            )
+            if not res.get("success"):
+                whatsapp_client.send_text_message(
+                    conv.phone_number,
+                    msg + "\n\n(If your flight isn't confirmed yet, reply *Later*.)"
+                )
             return {"status": "flight_prompt_sent", "success": True}
 
         elif category_name == "Private Charter":

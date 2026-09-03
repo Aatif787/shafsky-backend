@@ -1,4 +1,4 @@
-"""
+﻿"""
 Flight Flow Mixin for WhatsApp Booking State Machine.
 Handles:
 - Pure local flight number format validation
@@ -348,6 +348,31 @@ class FlightFlowMixin(BaseFlowMixin):
             whatsapp_client.send_text_message(
                 conv.phone_number,
                 "Please enter your Flight Number (e.g., *EK501*, *AI2424*, *6E224*):",
+            )
+            return {"status": "reprompt_flight", "success": True}
+        if text_u in ("BTN_FLIGHT_NOT_CONFIRMED", "FLIGHT NOT CONFIRMED", "NOT CONFIRMED", "LATER", "FLIGHT LATER"):
+            meta = dict(conv.flight_details_json) if isinstance(conv.flight_details_json, dict) else {}
+            meta.pop("_pending_verified_flight", None)
+            meta.pop("_pending_mismatch_flight", None)
+            meta["verification_status"] = "flight_later"
+            meta["flight_later"] = True
+            meta["flight_number"] = None
+            conv.flight_num = None
+            conv.flight_details_json = meta
+            flag_modified(conv, "flight_details_json")
+            db.commit()
+            cls._transition_state(db, conv, "DATE_SELECTION")
+            whatsapp_client.send_text_message(
+                conv.phone_number,
+                "No problem! Our team will confirm your flight details with you before your service.\n\n"
+                "Please enter your Date of Travel in DD/MM/YYYY format (e.g., 25/08/2026):",
+            )
+            return {"status": "flight_later_selected", "success": True}
+
+        if text_u in ("BTN_ENTER_FLIGHT", "ENTER FLIGHT NUMBER", "ENTER FLIGHT"):
+            whatsapp_client.send_text_message(
+                conv.phone_number,
+                "Please type your Flight Number (e.g., *EK501*, *AI2424*, *6E224*):",
             )
             return {"status": "reprompt_flight", "success": True}
         if text_u in ("BTN_CONFIRM_MISMATCH", "CONFIRM & CONTINUE", "CONFIRM AND CONTINUE"):

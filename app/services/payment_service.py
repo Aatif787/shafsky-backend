@@ -1,4 +1,4 @@
-"""
+﻿"""
 Payment & Invoicing Service Layer.
 Encapsulates transaction initiation, invoice generation, webhook processing,
 refund handling, timeline tracking, and audit logging.
@@ -327,14 +327,18 @@ class PaymentService:
             return {"success": False, "error": "NO_AMOUNT", "reason": "Booking has no authoritative amount."}
 
         from app.services.booking_cutoff import evaluate_cutoff_for_booking
-        cutoff = evaluate_cutoff_for_booking(db, booking)
-        if not cutoff.allowed:
-            return {
-                "success": False,
-                "error": "BOOKING_CUTOFF",
-                "reason": cutoff.reason,
-                "customer_message": cutoff.customer_message,
-            }
+        # WhatsApp 'flight not confirmed yet' bookings carry no scheduled times:
+        # the ops team confirms the flight with the customer, so the flight-time
+        # cutoff cannot apply. Flagged via metadata (flight_later).
+        if not (booking.metadata_json or {}).get("flight_later", False):
+            cutoff = evaluate_cutoff_for_booking(db, booking)
+            if not cutoff.allowed:
+                return {
+                    "success": False,
+                    "error": "BOOKING_CUTOFF",
+                    "reason": cutoff.reason,
+                    "customer_message": cutoff.customer_message,
+                }
 
         authoritative_amount = float(booking.total_amount)
         currency = (booking.currency or "INR").upper()

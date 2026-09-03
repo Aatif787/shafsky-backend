@@ -408,6 +408,8 @@ class DetailsFlowMixin:
             summary_lines.append(f"• *Travel Type*: {tt_display}")
         if conv.flight_num:
             summary_lines.append(f"• *Flight*: {conv.flight_num}")
+        elif (conv.flight_details_json or {}).get("flight_later") is True:
+            summary_lines.append("• *Flight*: To be confirmed with our team")
 
         summary_lines.extend([
             f"• *Date*: {conv.booking_date}",

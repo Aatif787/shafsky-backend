@@ -112,7 +112,8 @@ def test_charter_enquiry_flow_end_to_end():
         assert req.preferred_contact_method == "PHONE_WHATSAPP"
 
         # NO Booking row may be created for charter enquiries
-        assert db.query(Booking).filter_by(passenger_email="aariz@shafsky-mail.com").first() is None
+        # The enquiry must NOT have spawned a Booking row (no SHF booking for an SC reference)
+        assert db.query(Booking).filter_by(booking_ref=conv.booking_ref).first() is None
 
         # Customer received the charter acknowledgement with the SC reference
         sent = WhatsAppClient.send_text_message.call_args_list

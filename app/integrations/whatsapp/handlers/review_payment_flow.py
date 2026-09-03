@@ -69,7 +69,8 @@ class ReviewPaymentFlowMixin(BaseFlowMixin):
             return cls._issue_or_resend_payment_link(db, conv)
 
         metadata = conv.flight_details_json if isinstance(conv.flight_details_json, dict) else {}
-        if conv.requires_flight:
+        flight_later = metadata.get("flight_later") is True or metadata.get("verification_status") == "flight_later"
+        if conv.requires_flight and not flight_later:
             status = metadata.get("verification_status")
             mismatch_ok = (
                 status == "mismatch_customer_confirmed"
@@ -243,6 +244,7 @@ class ReviewPaymentFlowMixin(BaseFlowMixin):
             "departure_scheduled": metadata.get("departure_scheduled"),
             "arrival_scheduled": metadata.get("arrival_scheduled"),
             "verification_status": metadata.get("verification_status"),
+            "flight_later": bool(metadata.get("flight_later")),
             "mismatch_override": bool(metadata.get("mismatch_override")),
             "pax_adults": passengers,
             "guest_count": passengers,
@@ -418,7 +420,8 @@ class ReviewPaymentFlowMixin(BaseFlowMixin):
             )
             return {"status": "already_confirmed", "booking_ref": booking_ref, "success": True}
 
-        if conv.requires_flight:
+        flight_later_flag = isinstance(conv.flight_details_json, dict) and conv.flight_details_json.get("flight_later") is True
+        if conv.requires_flight and not flight_later_flag:
             from app.services.booking_cutoff import evaluate_cutoff_for_booking
             cutoff = evaluate_cutoff_for_booking(db, booking) if booking else None
             if cutoff and not cutoff.allowed:
@@ -554,6 +557,9 @@ class ReviewPaymentFlowMixin(BaseFlowMixin):
             else "🚨 *NEW BOOKING REQUEST RECEIVED*\n\n"
         )
         amount_line = "On request" if quote_request else f"₹{int(amount):,}"
+        flight_note = ""
+        if isinstance(conv.flight_details_json, dict) and conv.flight_details_json.get("flight_later") is True:
+            flight_note = " • *Flight*: TO BE CONFIRMED with customer\n"
         team_msg = (
             headline
             + f"• *Booking Ref*: {booking_ref}\n"
@@ -562,6 +568,7 @@ class ReviewPaymentFlowMixin(BaseFlowMixin):
             + f"• *Service*: {conv.selected_service_name}\n"
             + f"• *Airport*: {conv.selected_airport_iata or 'N/A'}\n"
             + f"• *Flight*: {conv.flight_num or 'N/A'}\n"
+            + flight_note
             + f"• *Date*: {conv.booking_date}\n"
             + f"• *Passengers*: {conv.passenger_count}\n"
             + f"• *Amount*: {amount_line}\n"

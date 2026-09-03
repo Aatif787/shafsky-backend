@@ -283,7 +283,6 @@ def test_admin_update_service_config(client, admin_token):
         json=patch_payload,
         headers=headers
     )
-    print("ADMIN_BODY:", response.status_code, response.text[:250])
     assert response.status_code == 200
     data = response.json()["data"]
     assert float(data["basePrice"]) == 5200.0
