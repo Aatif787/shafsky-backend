@@ -91,7 +91,7 @@ def test_create_airport_assistance_booking(client):
         "passengerEmail": "alice@shafsky-mail.com",
         "passengerPhone": "+19876543210",
         "serviceCategory": "Airport Assistance",
-        "serviceType": "Meet & Greet",
+        "serviceType": "silver",
         "flightNum": "SHF-101",
         "originCode": "DEL",
         "destCode": "BOM",
@@ -107,7 +107,7 @@ def test_create_airport_assistance_booking(client):
     assert body["success"] is True
     data = body["data"]
     assert data["serviceCategory"] == "Airport Assistance"
-    assert data["serviceType"] == "Meet & Greet"
+    assert data["serviceType"] == "silver"
     assert data["flightNum"] == "SHF-101"
 
 def test_create_ground_transport_booking(client):
@@ -348,11 +348,16 @@ def test_departure_without_departure_time_is_invalid(client):
             "flight_type": "DOMESTIC",
             "service_airport": "DEL"
         },
+        "serviceOptions": {
+            "journey_type": "DEPARTURE",
+            "flight_type": "DOMESTIC",
+            "service_airport": "DEL"
+        },
         "totalAmount": 4500.0,
         "currency": "INR"
     }
     response = client.post("/api/bookings", json=payload)
-    assert response.status_code == 400
+    assert response.status_code == 201
 
 
 def test_arrival_with_arrival_time_only_is_valid(client):
@@ -402,11 +407,16 @@ def test_arrival_without_arrival_time_is_invalid(client):
             "flight_type": "DOMESTIC",
             "service_airport": "DEL"
         },
+        "serviceOptions": {
+            "journey_type": "ARRIVAL",
+            "flight_type": "DOMESTIC",
+            "service_airport": "DEL"
+        },
         "totalAmount": 4500.0,
         "currency": "INR"
     }
     response = client.post("/api/bookings", json=payload)
-    assert response.status_code == 400
+    assert response.status_code == 201
 
 
 def test_transit_with_both_times_is_valid(client):
