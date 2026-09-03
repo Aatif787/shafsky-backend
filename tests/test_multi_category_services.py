@@ -99,9 +99,15 @@ def test_create_airport_assistance_booking(client):
         "arrivalTime": arr_time,
         "totalAmount": 4500.0,
         "currency": "INR",
+        "metadataJson": {
+            "journey_type": "DEPARTURE",
+            "flight_type": "DOMESTIC",
+            "service_airport": "DEL"
+        },
         "serviceOptions": {"terminal": "T3", "wheelchair": False}
     }
     response = client.post("/api/bookings", json=payload)
+    print("AP_DIAG:", response.status_code, response.text[:300])
     assert response.status_code == 201
     body = response.json()
     assert body["success"] is True
