@@ -442,6 +442,9 @@ def _edge_fallback_verification(flight_iata: str, svc: Optional[str], jt: Option
     try:
         from app.flight.providers.aviation_edge_provider import AviationEdgeProvider
         provider = AviationEdgeProvider()
+        # Bound the fallback so a slow Edge API can never stall the webhook thread:
+        provider.max_retries = 1
+        provider.timeout = 8.0
         probe_date = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
         rows = provider._make_request("timetable", {"key": provider.api_key, "flight_iata": flight_iata, "limit": 5})
     except Exception as err:

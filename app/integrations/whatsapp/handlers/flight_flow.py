@@ -36,6 +36,7 @@ class FlightFlowMixin(BaseFlowMixin):
     def _send_flight_retry_options(cls, conv: WhatsAppConversation, body_text: str) -> None:
         buttons = [
             {"id": "btn_reenter_flight", "title": "Re-enter Flight"},
+            {"id": "btn_flight_anyway", "title": "Continue Anyway"},
             {"id": "btn_change_airport", "title": "Change Airport"},
         ]
         res = whatsapp_client.send_interactive_buttons(
@@ -47,7 +48,7 @@ class FlightFlowMixin(BaseFlowMixin):
         if not res.get("success"):
             whatsapp_client.send_text_message(
                 conv.phone_number,
-                f"{body_text}\n\nReply *Re-enter* to try another flight number, or *Change Airport*."
+                f"{body_text}\n\nReply *Re-enter* to try another flight number, *Continue Anyway* to proceed with this flight, or *Change Airport*."
             )
 
     @classmethod
@@ -375,6 +376,30 @@ class FlightFlowMixin(BaseFlowMixin):
                 "Please type your Flight Number (e.g., *EK501*, *AI2424*, *6E224*):",
             )
             return {"status": "reprompt_flight", "success": True}
+        if text_u in ("BTN_FLIGHT_ANYWAY", "CONTINUE ANYWAY", "MY FLIGHT IS CORRECT", "KEEP FLIGHT"):
+            meta = dict(conv.flight_details_json) if isinstance(conv.flight_details_json, dict) else {}
+            manual_flight = meta.pop("_pending_manual_flight", None)
+            if not manual_flight:
+                whatsapp_client.send_text_message(
+                    conv.phone_number,
+                    "Please enter your Flight Number (e.g., *EK501*, *AI2424*, *6E224*):",
+                )
+                return {"status": "reprompt_flight", "success": True}
+            meta["verification_status"] = "manual_review"
+            meta["flight_later"] = True
+            meta["flight_number"] = manual_flight
+            conv.flight_num = manual_flight
+            conv.flight_details_json = meta
+            flag_modified(conv, "flight_details_json")
+            db.commit()
+            cls._transition_state(db, conv, "DATE_SELECTION")
+            whatsapp_client.send_text_message(
+                conv.phone_number,
+                f"Noted - *{manual_flight}* has been added to your booking. Our team will verify "
+                "the flight details with the airline before your service.\n\n"
+                "Please enter your Date of Travel in DD/MM/YYYY format (e.g., 25/08/2026):",
+            )
+            return {"status": "flight_manual_review_selected", "success": True}
         if text_u in ("BTN_CONFIRM_MISMATCH", "CONFIRM & CONTINUE", "CONFIRM AND CONTINUE"):
             return cls._continue_mismatch_override(db, conv)
 
@@ -436,6 +461,7 @@ class FlightFlowMixin(BaseFlowMixin):
                 return {"status": "flight_airport_mismatch", "success": False, "reason": reason}
 
             pending_meta.pop("_pending_mismatch_flight", None)
+            pending_meta["_pending_manual_flight"] = norm_flight_num
             conv.flight_details_json = pending_meta
             flag_modified(conv, "flight_details_json")
 
