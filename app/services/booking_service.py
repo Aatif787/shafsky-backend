@@ -245,10 +245,20 @@ class BookingService:
             from app.services.service_airport_rules import derive_flight_type_from_route
             now_aware = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
             derived_ft = None
+            eff_origin = (
+                (early_meta or {}).get("origin_iata")
+                or payload.origin_code
+                or (early_meta or {}).get("origin_code")
+            )
+            eff_dest = (
+                (early_meta or {}).get("destination_iata")
+                or payload.dest_code
+                or (early_meta or {}).get("dest_code")
+            )
             if early_jt != "TRANSIT":
                 try:
                     derived_ft = derive_flight_type_from_route(
-                        db, payload.origin_code, payload.dest_code, early_jt
+                        db, eff_origin, eff_dest, early_jt
                     )
                 except (ValueError, Exception):
                     derived_ft = None
@@ -257,8 +267,8 @@ class BookingService:
             selected_ft = (early_meta or {}).get("travel_type") or (early_meta or {}).get("flight_type")
             if (
                 early_jt != "TRANSIT"
-                and payload.origin_code
-                and payload.dest_code
+                and eff_origin
+                and eff_dest
                 and derived_ft in ("DOMESTIC", "INTERNATIONAL")
                 and selected_ft
             ):
@@ -376,9 +386,19 @@ class BookingService:
         # Derive authoritative flight_type from actual route countries.
         # Client-supplied flight_type is NOT trusted for pricing/package selection.
         from app.services.service_airport_rules import derive_flight_type_from_route
+        eff_origin = (
+            (meta or {}).get("origin_iata")
+            or payload.origin_code
+            or (meta or {}).get("origin_code")
+        )
+        eff_dest = (
+            (meta or {}).get("destination_iata")
+            or payload.dest_code
+            or (meta or {}).get("dest_code")
+        )
         try:
             derived_ft = derive_flight_type_from_route(
-                db, payload.origin_code, payload.dest_code, journey_type
+                db, eff_origin, eff_dest, journey_type
             )
             if derived_ft is not None:
                 # ARRIVAL / DEPARTURE — use backend-derived classification
@@ -395,8 +415,8 @@ class BookingService:
         client_ft = (meta or {}).get("travel_type") or (meta or {}).get("flight_type")
         if (
             journey_type != "TRANSIT"
-            and payload.origin_code
-            and payload.dest_code
+            and eff_origin
+            and eff_dest
             and derived_ft in ("DOMESTIC", "INTERNATIONAL")
             and client_ft
         ):

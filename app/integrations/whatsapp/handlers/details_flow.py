@@ -13,6 +13,7 @@ Handles:
 """
 
 import logging
+import re
 from typing import Dict, Any, Optional, Tuple
 from datetime import datetime, timezone, timedelta, date
 from sqlalchemy.orm import Session
@@ -349,11 +350,89 @@ class DetailsFlowMixin:
                 return {"status": "invalid_phone", "success": False}
             conv.customer_phone = digits
 
+        companions = max(0, int(conv.passenger_count or 1) - 1)
+        if companions > 0:
+            cls._transition_state(db, conv, "COMPANION_NAMES")
+            plural = "s" if companions != 1 else ""
+            msg = (
+                f"Noted - {companions} more passenger{plural} travelling with you.\n\n"
+                f"Please send their full name{plural} in one message, separated by commas "
+                "(e.g., *Rahul Sharma, Priya Sharma*):",
+            )
+            whatsapp_client.send_text_message(conv.phone_number, msg)
+            return {"status": "companion_names_prompt_sent", "success": True}
+
         cls._transition_state(db, conv, "ADDITIONAL_REQUIREMENTS")
 
         msg = "Do you have any special requirements or notes? (Type *None* if no special requests):"
         whatsapp_client.send_text_message(conv.phone_number, msg)
         return {"status": "notes_prompt_sent", "success": True}
+
+    @classmethod
+    def _state_companion_names(cls, db: Session, conv: WhatsAppConversation, names_input: str) -> Dict[str, Any]:
+        """Collect the other travellers' full names when passenger_count > 1."""
+        if names_input.strip().lower() == "back":
+            cls._transition_state(db, conv, "CUSTOMER_PHONE")
+            whatsapp_client.send_text_message(
+                conv.phone_number,
+                "Please provide your contact phone number (or type 'Same' to use this WhatsApp number):",
+            )
+            return {"status": "back_to_phone", "success": True}
+
+        expected = max(0, int(conv.passenger_count or 1) - 1)
+        meta = dict(conv.flight_details_json) if isinstance(conv.flight_details_json, dict) else {}
+        merged = list(meta.get("companion_names_partial") or [])
+        attempts = int(meta.get("companion_names_attempts") or 0)
+
+        for part in re.split(r"[,\n;]+", names_input or ""):
+            name = re.sub(r"\s+", " ", part).strip()
+            if len(name) < 2:
+                continue
+            if name.lower() in {n.lower() for n in merged}:
+                continue
+            merged.append(name)
+
+        if len(merged) < expected:
+            attempts += 1
+            meta["companion_names_partial"] = merged
+            meta["companion_names_attempts"] = attempts
+            conv.flight_details_json = meta
+            flag_modified(conv, "flight_details_json")
+            db.commit()
+            if attempts >= 2:
+                # Accept what we have; ops completes the manifest before service.
+                meta["passenger_names"] = merged
+                meta["companion_names_pending"] = expected - len(merged)
+                conv.flight_details_json = meta
+                flag_modified(conv, "flight_details_json")
+                cls._transition_state(db, conv, "ADDITIONAL_REQUIREMENTS")
+                whatsapp_client.send_text_message(
+                    conv.phone_number,
+                    "Noted - our team will confirm the remaining passenger names with you before your service.\n\n"
+                    "Do you have any special requirements or notes? (Type *None* if no special requests):",
+                )
+                return {"status": "companion_names_pending_ops", "success": True}
+            remaining = expected - len(merged)
+            whatsapp_client.send_text_message(
+                conv.phone_number,
+                f"Thanks - I have {len(merged)} of {expected}. Please send the remaining {remaining} name"
+                + ("s" if remaining != 1 else "")
+                + " in one message:",
+            )
+            return {"status": "companion_names_partial", "success": False}
+
+        meta["passenger_names"] = merged[:expected]
+        meta.pop("companion_names_partial", None)
+        meta.pop("companion_names_attempts", None)
+        conv.flight_details_json = meta
+        flag_modified(conv, "flight_details_json")
+        db.commit()
+        cls._transition_state(db, conv, "ADDITIONAL_REQUIREMENTS")
+        whatsapp_client.send_text_message(
+            conv.phone_number,
+            "All passengers noted.\n\nDo you have any special requirements or notes? (Type *None* if no special requests):",
+        )
+        return {"status": "companion_names_saved", "success": True}
 
     @classmethod
     def _state_additional_requirements(cls, db: Session, conv: WhatsAppConversation, notes_input: str) -> Dict[str, Any]:
@@ -429,6 +508,13 @@ class DetailsFlowMixin:
         summary_lines.extend([
             f"• *Date*: {conv.booking_date}",
             f"• *Passengers*: {conv.passenger_count}",
+        *(
+            [
+                f"• *Also travelling*: {', '.join((conv.flight_details_json or {}).get('passenger_names') or [])}"
+            ]
+            if isinstance(conv.flight_details_json, dict) and (conv.flight_details_json or {}).get("passenger_names")
+            else []
+        ),
             f"• *Customer*: {conv.customer_name}",
             f"• *Email*: {conv.customer_email}",
             f"• *Phone*: {conv.customer_phone}",

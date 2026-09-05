@@ -10,12 +10,21 @@ Public endpoints (no authentication required for browsing):
 - POST /api/journey/check-booking-window  — Validate booking window for a service
 """
 
-from typing import Optional, Dict, Any
+import re
+from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, Depends, HTTPException, Query, Body, status
 from sqlalchemy.orm import Session
 from app.database import get_db
+from app.flight.csv_airports import search_global_csv_airports
 from app.services.journey_engine import JourneyDetectionEngine
 from app.services.service_config_service import ServiceConfigService
+from app.services.service_airport_rules import (
+    normalize_flight_type,
+    normalize_iata,
+    normalize_journey_type,
+    resolve_catalog_flight_type,
+    resolve_service_airport_iata,
+)
 from app.schemas.journey_schemas import (
     SupportedAirportResponse,
     SupportedAirportListResponse,
@@ -28,8 +37,33 @@ from app.schemas.journey_schemas import (
     BookingWindowCheckRequest,
     BookingWindowCheckResponse,
     BookingValidationRequest,
-    BookingValidationResponse,
 )
+
+
+def _clean_text(val: Optional[str]) -> Optional[str]:
+    if val is None:
+        return None
+    txt = re.sub(r'\bMeet\s*(?:&|and)\s*Assist\b', 'Meet & Greet', val, flags=re.IGNORECASE)
+    txt = re.sub(r'\bAssistance\b', 'Assist', re.sub(r'\bassistance\b', 'assist', txt))
+    txt = re.sub(r'\bPersonalized Placard\b', 'Placard', txt, flags=re.IGNORECASE)
+    txt = re.sub(r'\bPersonalized Name Badge\b', 'Name Badge', txt, flags=re.IGNORECASE)
+    txt = re.sub(r'\bPersonalized Name Placard\b', 'Name Placard', txt, flags=re.IGNORECASE)
+    txt = re.sub(r'\bPersonalized\s+', '', txt, flags=re.IGNORECASE)
+    txt = re.sub(r'\s+personalized\b', '', txt, flags=re.IGNORECASE)
+    txt = re.sub(r'\bpersonalized\b', '', txt, flags=re.IGNORECASE)
+    return txt.strip()
+
+
+def _clean_str_list(items: Optional[List[str]]) -> Optional[List[str]]:
+    if items is None:
+        return None
+    cleaned_items: List[str] = []
+    for item in items:
+        cleaned = _clean_text(item)
+        if cleaned is not None:
+            cleaned_items.append(cleaned)
+    return cleaned_items
+
 
 router = APIRouter(prefix="/api/journey", tags=["Journey Detection Engine"])
 
@@ -43,8 +77,6 @@ router = APIRouter(prefix="/api/journey", tags=["Journey Detection Engine"])
 def search_global_csv_airports_endpoint(
     q: str = Query("", description="Search by IATA, city, or airport name. Empty returns large airports from CSV."),
 ):
-    from app.flight.csv_airports import search_global_csv_airports
-
     try:
         rows = search_global_csv_airports(q)
     except FileNotFoundError as exc:
@@ -127,8 +159,6 @@ def get_services_at_airport(
     include_inactive: bool = Query(False, description="Whether to include inactive/draft services"),
     db: Session = Depends(get_db),
 ):
-    from app.services.service_airport_rules import resolve_catalog_flight_type
-
     airport = JourneyDetectionEngine.get_airport_by_iata(db, iata_code)
     if not airport:
         raise HTTPException(
@@ -147,42 +177,29 @@ def get_services_at_airport(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
-        )
+        ) from exc
 
     mappings = JourneyDetectionEngine.get_services_for_airport(
         db, iata_code, journey_type, catalog_flight_type, terminal, include_inactive=include_inactive
     )
 
-    def _to_assist(val):
-        if isinstance(val, str):
-            import re
-            txt = re.sub(r'\bAssistance\b', 'Assist', re.sub(r'\bassistance\b', 'assist', val))
-            txt = re.sub(r'\bPersonalized Placard\b', 'Placard', txt, flags=re.IGNORECASE)
-            txt = re.sub(r'\bPersonalized Name Badge\b', 'Name Badge', txt, flags=re.IGNORECASE)
-            txt = re.sub(r'\bPersonalized Name Placard\b', 'Name Placard', txt, flags=re.IGNORECASE)
-            txt = re.sub(r'\bPersonalized\s+', '', txt, flags=re.IGNORECASE)
-            txt = re.sub(r'\s+personalized\b', '', txt, flags=re.IGNORECASE)
-            txt = re.sub(r'\bpersonalized\b', '', txt, flags=re.IGNORECASE)
-            return txt.strip()
-        elif isinstance(val, list):
-            return [_to_assist(v) for v in val]
-        return val
-
     data = []
     for m in mappings:
         item = AirportServiceResponse.model_validate(m)
         if item.short_description:
-            item.short_description = _to_assist(item.short_description)
+            item.short_description = _clean_text(item.short_description)
         if item.features:
-            item.features = _to_assist(item.features)
+            item.features = _clean_str_list(item.features)
         if item.additional_benefits:
-            item.additional_benefits = _to_assist(item.additional_benefits)
+            item.additional_benefits = _clean_str_list(item.additional_benefits)
         if m.service:
             item.service = ServiceResponse.model_validate(m.service)
             if item.service.name:
-                item.service.name = _to_assist(item.service.name)
+                cleaned_name = _clean_text(item.service.name)
+                if cleaned_name:
+                    item.service.name = cleaned_name
             if item.service.description:
-                item.service.description = _to_assist(item.service.description)
+                item.service.description = _clean_text(item.service.description)
         data.append(item)
 
     return AirportServiceListResponse(
@@ -241,13 +258,6 @@ def resolve_service_airport_endpoint(
     payload: Dict[str, Any] = Body(...),
     db: Session = Depends(get_db),
 ):
-    from app.services.service_airport_rules import (
-        normalize_flight_type,
-        normalize_journey_type,
-        resolve_catalog_flight_type,
-        resolve_service_airport_iata,
-    )
-
     journey_type = normalize_journey_type(payload.get("journey_type") or payload.get("direction"))
     origin = payload.get("origin") or payload.get("origin_code") or payload.get("departure_code")
     destination = payload.get("destination") or payload.get("dest_code") or payload.get("arrival_code")
@@ -268,6 +278,42 @@ def resolve_service_airport_endpoint(
             "error": str(exc),
         }
 
+    clean_orig = normalize_iata(origin)
+    clean_dest = normalize_iata(destination)
+    clean_transit = normalize_iata(transit)
+
+    if journey_type == "TRANSIT":
+        if clean_transit and clean_orig and clean_transit == clean_orig:
+            return {
+                "success": False,
+                "valid": False,
+                "is_supported": False,
+                "journey_type": journey_type,
+                "flight_type": flight_type,
+                "service_airport": None,
+                "error": "Origin and transit hub cannot be the same airport.",
+            }
+        if clean_transit and clean_dest and clean_transit == clean_dest:
+            return {
+                "success": False,
+                "valid": False,
+                "is_supported": False,
+                "journey_type": journey_type,
+                "flight_type": flight_type,
+                "service_airport": None,
+                "error": "Transit hub and destination airport cannot be the same.",
+            }
+        if clean_orig and clean_dest and clean_orig == clean_dest:
+            return {
+                "success": False,
+                "valid": False,
+                "is_supported": False,
+                "journey_type": journey_type,
+                "flight_type": flight_type,
+                "service_airport": None,
+                "error": "Origin and destination airports cannot be the same.",
+            }
+
     service_iata = resolve_service_airport_iata(journey_type, origin, destination, transit)
     if not service_iata:
         field = {"ARRIVAL": "destination", "DEPARTURE": "origin", "TRANSIT": "transit airport"}[journey_type]
@@ -282,7 +328,7 @@ def resolve_service_airport_endpoint(
         }
 
     supported, airport = JourneyDetectionEngine.is_airport_supported(db, service_iata)
-    if not supported:
+    if not supported or not airport:
         return {
             "success": True,
             "valid": False,

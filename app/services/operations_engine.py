@@ -320,7 +320,7 @@ class OperationsEngine:
         # 1. Dispatch Email
         try:
             email_subject = f"Shafsky VIP Concierge Pass Confirmed — Ref #{item.booking_reference}"
-            services_str = ", ".join([s if isinstance(s, str) else s.get("name", "Service") for s in item.selected_services]) or "VIP Meet & Assist"
+            services_str = ", ".join([s if isinstance(s, str) else s.get("name", "Service") for s in item.selected_services]) or "VIP Meet & Greet"
             
             email_body = f"""
             <h2>Shafsky Aviation Concierge — Booking Confirmation</h2>

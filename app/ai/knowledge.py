@@ -36,7 +36,7 @@ COMPANY_KNOWLEDGE: Dict[str, Any] = {
     ],
     "services": {
         "MEET_GREET": {
-            "title": "Meet & Assist",
+            "title": "Meet & Greet",
             "description": "Dedicated agent escorts guests through security, check-in, and baggage claim.",
             "sla_hours": 2
         },
@@ -68,7 +68,7 @@ COMPANY_KNOWLEDGE: Dict[str, Any] = {
         },
         {
             "question": "Can I request buggy transport?",
-            "answer": "Yes, electric buggy transit inside airport terminals can be added to any Meet & Assist package."
+            "answer": "Yes, electric buggy transit inside airport terminals can be added to any Meet & Greet package."
         }
     ],
     "escalation_rules": {

@@ -7,8 +7,8 @@ Transit  → service airport = transit airport (must be Shafsky-supported)
 
 Origin/destination/other airports may be any real IATA code.
 """
-
-from typing import Optional, Tuple
+from functools import lru_cache
+from typing import Optional, Tuple, Dict
 
 
 def normalize_iata(code: Optional[str]) -> str:
@@ -115,7 +115,21 @@ def flight_route_matches_service_airport(
 # No other file should duplicate this classification rule.
 # ──────────────────────────────────────────────────────────
 
-_INDIA_IDENTIFIERS = frozenset({"INDIA", "IN", "IND"})
+_INDIA_IDENTIFIERS = frozenset({"INDIA", "IN", "IND", "BHARAT", "REPUBLIC OF INDIA"})
+
+
+@lru_cache(maxsize=1)
+def _csv_airport_country_map() -> Dict[str, str]:
+    try:
+        from app.flight.csv_airports import load_global_airports
+        rows, _ = load_global_airports()
+        return {
+            (r.get("code") or "").strip().upper(): (r.get("country") or "").strip().upper()
+            for r in rows
+            if r.get("code") and r.get("country")
+        }
+    except Exception:
+        return {}
 
 
 def _is_india(country_value: str) -> bool:
@@ -125,12 +139,15 @@ def _is_india(country_value: str) -> bool:
 
 def resolve_airport_country(db, iata_code: Optional[str]) -> str:
     """
-    Resolve the country for an IATA airport code using authoritative database sources.
+    Resolve the country for an IATA airport code using authoritative database sources
+    and reference airport catalogs.
 
     Lookup priority:
       1. supported_airports table (Shafsky's 20 operating hubs, has 'country' column)
       2. airports table (global 85K+ airports, has 'iso_country' and 'country' columns,
          keyed by 'iata_code')
+      3. AIRPORT_REGISTRY (authoritative in-memory registry)
+      4. airports.csv (global IATA airports reference)
 
     Returns the country string (uppercased).
     Raises ValueError if the airport is not found or country is unavailable.
@@ -186,6 +203,19 @@ def resolve_airport_country(db, iata_code: Optional[str]) -> str:
         if country_val and str(country_val).strip():
             return str(country_val).strip().upper()
 
+    # 3. Check in-memory AIRPORT_REGISTRY
+    try:
+        from app.flight.airports import AIRPORT_REGISTRY
+        if code in AIRPORT_REGISTRY and AIRPORT_REGISTRY[code].get("country"):
+            return str(AIRPORT_REGISTRY[code]["country"]).strip().upper()
+    except Exception:
+        pass
+
+    # 4. Check global airports reference CSV
+    csv_country = _csv_airport_country_map().get(code)
+    if csv_country:
+        return csv_country
+
     raise ValueError(
         f"Unable to determine the country for airport '{code}'. "
         f"Please provide a valid origin and destination airport."
@@ -238,6 +268,12 @@ def derive_flight_type_from_route(
         raise ValueError(
             "Destination airport is missing. Unable to classify this route as "
             "domestic or international."
+        )
+
+    if origin_clean == dest_clean:
+        raise ValueError(
+            f"Origin and destination airports cannot be the same ('{origin_clean}'). "
+            "Please provide distinct departure and arrival airports."
         )
 
     origin_country = resolve_airport_country(db, origin_clean)

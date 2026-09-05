@@ -248,6 +248,7 @@ class ReviewPaymentFlowMixin(BaseFlowMixin):
             "mismatch_override": bool(metadata.get("mismatch_override")),
             "pax_adults": passengers,
             "guest_count": passengers,
+            "passenger_names": list(metadata.get("passenger_names") or []),
             "airport_timezone": lookup_airport_timezone(db, conv.selected_airport_iata),
         }
 
@@ -571,6 +572,11 @@ class ReviewPaymentFlowMixin(BaseFlowMixin):
             + flight_note
             + f"• *Date*: {conv.booking_date}\n"
             + f"• *Passengers*: {conv.passenger_count}\n"
+            + (
+                f" • Also travelling: {', '.join((conv.flight_details_json or {}).get('passenger_names') or [])}\n"
+                if isinstance(conv.flight_details_json, dict) and (conv.flight_details_json or {}).get("passenger_names")
+                else ""
+            )
             + f"• *Amount*: {amount_line}\n"
             + f"• *Status*: {status_line}"
         )

@@ -181,7 +181,7 @@ class AiService:
             res = AiTools.calculate_price("MEET_GREET", pax_count=1)
             executed_tools.append("calculate_price")
             session.current_state = ConversationState.WAITING_FOR_CUSTOMER
-            reply_parts.append(f"Estimated Meet & Assist price: INR {res['total']} (Subtotal: {res['subtotal']}, 18% Tax: {res['tax_18_pct']}).")
+            reply_parts.append(f"Estimated Meet & Greet price: INR {res['total']} (Subtotal: {res['subtotal']}, 18% Tax: {res['tax_18_pct']}).")
 
         elif "my bookings" in msg_lower or "booking history" in msg_lower:
             email = request.metadata.get("email") if request.metadata else "customer@shafsky.com"
@@ -192,7 +192,7 @@ class AiService:
 
         elif "book" in msg_lower and ("meet" in msg_lower or "greet" in msg_lower or "flight" in msg_lower):
             session.current_state = ConversationState.COLLECTING_DETAILS
-            reply_parts.append("I can assist you with your Airport Meet & Assist booking. Please specify passenger name, contact email, flight number, and date.")
+            reply_parts.append("I can assist you with your Airport Meet & Greet booking. Please specify passenger name, contact email, flight number, and date.")
 
         else:
             session.failed_intent_attempts += 1

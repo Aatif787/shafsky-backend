@@ -2,7 +2,7 @@
 Configurable Workflow Definitions for Shafsky Aviation Service Domains.
 
 Includes pre-built, configuration-driven state machines for:
-1. Airport Meet & Assist (AIRPORT_MEET_AND_ASSIST)
+1. Airport Meet & Greet (AIRPORT_MEET_AND_ASSIST)
 2. Air Ticketing (AIR_TICKETING)
 3. Hotel Booking (HOTEL_BOOKING)
 4. Visa Assistance (VISA_ASSISTANCE)
@@ -18,7 +18,7 @@ logger = logging.getLogger("shafsky.workflow.definitions")
 
 DEFAULT_WORKFLOW_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "AIRPORT_MEET_AND_ASSIST": {
-        "name": "Airport Meet & Assist Workflow",
+        "name": "Airport Meet & Greet Workflow",
         "initial_state": "DRAFT",
         "states_config": {
             "DRAFT": {

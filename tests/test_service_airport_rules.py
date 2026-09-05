@@ -37,3 +37,12 @@ def test_flight_mismatch_departure():
     ok, msg = flight_route_matches_service_airport("DEPARTURE", "DEL", actual_origin="CDG", actual_destination="LHR")
     assert ok is False
     assert "CDG" in msg
+
+
+def test_derive_flight_type_rejects_identical_airports():
+    import pytest
+    from app.services.service_airport_rules import derive_flight_type_from_route
+
+    with pytest.raises(ValueError, match="cannot be the same"):
+        derive_flight_type_from_route(None, "DEL", "DEL", "DEPARTURE")
+

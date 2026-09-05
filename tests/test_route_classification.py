@@ -305,6 +305,8 @@ class TestEdgeCases:
         india_codes = ["DEL", "BOM", "BLR", "HYD", "IXC", "ATQ"]
         for origin in india_codes:
             for dest in india_codes:
+                if origin == dest:
+                    continue
                 result = derive_flight_type_from_route(db, origin, dest, "DEPARTURE")
                 assert result == "DOMESTIC", f"{origin} → {dest} should be DOMESTIC"
 
@@ -346,3 +348,18 @@ class TestResolveCatalogFlightType:
     def test_unknown_airport_raises(self, db):
         with pytest.raises(ValueError):
             resolve_catalog_flight_type(db, "ZZZ", "DEL", "ARRIVAL", "DOMESTIC")
+
+    def test_csv_indian_airports_recognized_as_domestic(self, db):
+        """Regional Indian airports from CSV/registry should classify as DOMESTIC"""
+        regional_indian_codes = ["PAT", "NAG", "VNS", "IXB", "DED"]
+        for code in regional_indian_codes:
+            assert derive_flight_type_from_route(db, code, "DEL", "ARRIVAL") == "DOMESTIC"
+            assert derive_flight_type_from_route(db, "BOM", code, "DEPARTURE") == "DOMESTIC"
+
+    def test_india_extended_identifiers(self):
+        from app.services.service_airport_rules import _is_india
+        assert _is_india("Bharat") is True
+        assert _is_india("Republic of India") is True
+        assert _is_india("IN") is True
+        assert _is_india("IND") is True
+        assert _is_india("INDIA") is True

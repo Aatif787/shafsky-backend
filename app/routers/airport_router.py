@@ -27,7 +27,7 @@ from app.services.assignment_service import AssignmentService
 from app.services.attachment_service import AttachmentService
 from app.services.timeline_service import TimelineService
 
-router = APIRouter(prefix="/api/airport", tags=["Airport Meet & Assist"])
+router = APIRouter(prefix="/api/airport", tags=["Airport Meet & Greet"])
 
 
 @router.get(
@@ -193,7 +193,7 @@ def save_booking_draft_endpoint(
     response_model=AirportBookingResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create Airport Booking",
-    description="Creates an Airport Meet & Assist booking, validates flight details, auto-initializes Workflow Instance, and records Timeline activity."
+    description="Creates an Airport Meet & Greet booking, validates flight details, auto-initializes Workflow Instance, and records Timeline activity."
 )
 @router.post(
     "/flow/init",

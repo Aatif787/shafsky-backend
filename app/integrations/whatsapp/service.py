@@ -570,6 +570,8 @@ class WhatsAppBookingStateMachine(
                 result = cls._state_customer_email(db, conv, user_input)
             elif state == "CUSTOMER_PHONE":
                 result = cls._state_customer_phone(db, conv, user_input)
+            elif state == "COMPANION_NAMES":
+                result = cls._state_companion_names(db, conv, user_input)
             elif state == "ADDITIONAL_REQUIREMENTS":
                 result = cls._state_additional_requirements(db, conv, user_input)
             elif state == "BOOKING_REVIEW":

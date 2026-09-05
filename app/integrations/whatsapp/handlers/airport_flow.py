@@ -1,4 +1,4 @@
-﻿"""
+"""
 Airport Flow Mixin for WhatsApp Booking State Machine.
 Handles:
 - Main category selection (Airport, Travel, Charter, Hotel/Transport)
@@ -74,7 +74,7 @@ class AirportFlowMixin(BaseFlowMixin):
         body_text = wa_copy.category_menu_body(prefix_notice)
 
         rows = [
-            {"id": "cat_airport", "title": "Airport Services", "description": "Meet & Assist at supported airports"},
+            {"id": "cat_airport", "title": "Airport Services", "description": "Meet & Greet at supported airports"},
             {"id": "cat_travel", "title": "Travel Services", "description": "Visa, insurance, travel support"},
             {"id": "cat_charter", "title": "Private Charter", "description": "Private jet and helicopter"},
             {"id": "cat_hotel_transport", "title": "Hotel & Transportation", "description": "Hotels and airport transfers"},
