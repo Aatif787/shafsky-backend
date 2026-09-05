@@ -83,6 +83,7 @@ def test_charter_enquiry_flow_end_to_end():
         WhatsAppBookingStateMachine.process_incoming_event(db, phone, "Aariz Khan")                # email prompt
         WhatsAppBookingStateMachine.process_incoming_event(db, phone, "aariz@shafsky-mail.com")    # phone prompt
         WhatsAppBookingStateMachine.process_incoming_event(db, phone, "Same")                      # notes prompt
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "Rahul Sharma")  # companion name
         WhatsAppBookingStateMachine.process_incoming_event(db, phone, "None")                      # booking summary
 
         # Summary shows Custom Quote pricing and the Submit Enquiry button

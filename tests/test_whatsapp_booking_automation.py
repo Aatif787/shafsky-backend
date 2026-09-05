@@ -1346,6 +1346,7 @@ def test_scenario_41_complete_separated_airport_service_booking(mock_verify, moc
 
         # 13. Phone
         WhatsAppBookingStateMachine.process_incoming_event(db, phone, "Same")
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "Rahul Sharma")
         db.refresh(conv)
         assert conv.current_state == "ADDITIONAL_REQUIREMENTS"
 

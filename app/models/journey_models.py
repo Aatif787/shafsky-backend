@@ -8,7 +8,7 @@ Tables:
 """
 
 import uuid
-from typing import Optional
+from typing import Optional, Any
 from datetime import datetime, timezone
 from sqlalchemy import (
     String, Boolean, DateTime, Integer, Numeric, Text, JSON, ForeignKey, Index, UniqueConstraint
@@ -112,9 +112,9 @@ class AirportService(Base):
     terminal: Mapped[Optional[str]] = mapped_column(
         String(50), nullable=True, default=None
     )  # e.g., "Terminal 1 & 2", "Terminal 3", or None
-    short_description: Mapped[str] = mapped_column(String(255), nullable=True)
-    features: Mapped[dict] = mapped_column(JSON, default=list, nullable=False)
-    additional_benefits: Mapped[dict] = mapped_column(JSON, default=list, nullable=True)
+    short_description: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    features: Mapped[Any] = mapped_column(JSON, default=list, nullable=False)
+    additional_benefits: Mapped[Any] = mapped_column(JSON, default=list, nullable=True)
     min_booking_notice_hours: Mapped[int] = mapped_column(Integer, default=6, nullable=False)
     is_available: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     display_priority: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

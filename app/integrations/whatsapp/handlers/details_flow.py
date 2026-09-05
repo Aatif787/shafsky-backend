@@ -372,6 +372,26 @@ class DetailsFlowMixin:
     def _state_companion_names(cls, db: Session, conv: WhatsAppConversation, names_input: str) -> Dict[str, Any]:
         """Collect the other travellers' full names when passenger_count > 1."""
         if names_input.strip().lower() == "back":
+            return {"status": "back_to_phone", "success": True}
+
+        if names_input.strip().lower() in ("none", "n/a", "no", "-"):
+            # Customer says there are no more names to give: proceed with
+            # whatever we have and let ops complete the manifest.
+            meta = dict(conv.flight_details_json) if isinstance(conv.flight_details_json, dict) else {}
+            meta["passenger_names"] = list(meta.get("companion_names_partial") or [])
+            meta.pop("companion_names_partial", None)
+            meta.pop("companion_names_attempts", None)
+            conv.flight_details_json = meta
+            flag_modified(conv, "flight_details_json")
+            db.commit()
+            cls._transition_state(db, conv, "ADDITIONAL_REQUIREMENTS")
+            whatsapp_client.send_text_message(
+                conv.phone_number,
+                "Noted - our team will confirm the remaining passenger names with you before your service.\n\n"
+                "Do you have any special requirements or notes? (Type *None* if no special requests):",
+            )
+            return {"status": "companion_names_saved", "success": True}
+
             cls._transition_state(db, conv, "CUSTOMER_PHONE")
             whatsapp_client.send_text_message(
                 conv.phone_number,

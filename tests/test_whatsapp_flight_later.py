@@ -90,6 +90,8 @@ def test_flight_not_confirmed_path_end_to_end():
         WhatsAppBookingStateMachine.process_incoming_event(db, phone, "Aariz Khan")
         WhatsAppBookingStateMachine.process_incoming_event(db, phone, "flightlater@shafsky-mail.com")
         WhatsAppBookingStateMachine.process_incoming_event(db, phone, "Same")
+        print("COMPANION_STEP")  # companion name requested (pax=2)
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "Rahul Sharma")  # companion name
         WhatsAppBookingStateMachine.process_incoming_event(db, phone, "None")
 
         # Summary shows the flight as pending confirmation
