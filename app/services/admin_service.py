@@ -102,22 +102,12 @@ class AdminService:
         }
 
     @classmethod
-    def ensure_user_exists(cls, db: Session, user_id: uuid.UUID, email: str = "admin@shafskyaviation.com", role: Role = Role.SUPER_ADMIN) -> UserAuth:
+    def ensure_user_exists(cls, db: Session, user_id: uuid.UUID) -> UserAuth:
         user = db.scalar(select(UserAuth).where(UserAuth.id == user_id))
         if not user:
-            # Seed user_auth record for system admin
-            user = UserAuth(
-                id=user_id,
-                email=email,
-                password_hash=AuthService.hash_password(secrets.token_urlsafe(48)),  # unusable credential: hash of a discarded random secret
-                role=role,
-                is_verified=True,
-                created_at=datetime.now(timezone.utc),
-                updated_at=datetime.now(timezone.utc)
-            )
-            db.add(user)
-            db.commit()
-            db.refresh(user)
+            raise HTTPException(status_code=404, detail="Staff user does not exist.")
+        if not getattr(user, "is_active", True):
+            raise HTTPException(status_code=400, detail="Staff user account is deactivated.")
         return user
 
     @classmethod

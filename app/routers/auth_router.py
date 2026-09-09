@@ -90,6 +90,8 @@ async def login(
     user = db.scalar(select(UserAuth).where(UserAuth.email == email))
     user_data = None
     if user and AuthService.verify_password(password, user.password_hash):
+        if not getattr(user, "is_active", True):
+            raise HTTPException(status_code=403, detail="Account has been suspended or deactivated.")
         user_data = {
             "sub": user.email,
             "user_id": str(user.id),
@@ -159,6 +161,8 @@ async def refresh_token(
             raise HTTPException(status_code=401, detail="Security violation: Token replay attack detected. All sessions revoked.")
         elif err_code == "REFRESH_TOKEN_EXPIRED":
             raise HTTPException(status_code=401, detail="Refresh token has expired. Please log in again.")
+        elif err_code == "ACCOUNT_INACTIVE":
+            raise HTTPException(status_code=403, detail="Account has been suspended or deactivated.")
         else:
             raise HTTPException(status_code=401, detail="Invalid or revoked refresh token.")
     except Exception:
@@ -448,8 +452,22 @@ async def change_password(
     if not user:
         raise HTTPException(status_code=404, detail="User account not found.")
 
+    if not getattr(user, "is_active", True):
+        raise HTTPException(status_code=403, detail="Account has been suspended or deactivated.")
+
+    # Strictly verify current password
+    if not payload.current_password or not AuthService.verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(status_code=400, detail="Current password is incorrect.")
+
+    # Prevent password reuse
+    if AuthService.verify_password(payload.new_password, user.password_hash):
+        raise HTTPException(status_code=400, detail="New password cannot be the same as the current password.")
+
     user.password_hash = AuthService.hash_password(payload.new_password)
     user.updated_at = datetime.now(timezone.utc)
     db.commit()
 
-    return ApiResponse(success=True, data={"message": "Password updated successfully."})
+    # Revoke all device and refresh token sessions upon password change
+    DeviceTracking.revoke_all_user_sessions(db, str(user.id))
+
+    return ApiResponse(success=True, data={"message": "Password updated successfully. All other active sessions have been revoked."})

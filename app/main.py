@@ -64,6 +64,7 @@ async def startup_checks():
             try:
                 conn.execute(text("ALTER TABLE payment_transactions ADD COLUMN IF NOT EXISTS is_duplicate BOOLEAN DEFAULT FALSE"))
                 conn.execute(text("ALTER TABLE payment_transactions ADD COLUMN IF NOT EXISTS notes TEXT"))
+                conn.execute(text("ALTER TABLE user_auth ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE"))
                 conn.execute(text("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deleted_by_user_id UUID"))
                 conn.execute(text("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deleted_by_email VARCHAR"))
                 conn.execute(text("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deleted_by_role VARCHAR"))

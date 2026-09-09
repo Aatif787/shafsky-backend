@@ -1,11 +1,12 @@
 """
 FastAPI Router for Air Ticketing Domain Foundation.
 Exposes REST APIs for Ticket Bookings, Passenger Roster, State Transitions, and Search.
+Secured with role-based access control, ownership verification, and PII masking.
 """
 
 import uuid
 from typing import Optional, Dict, Any, List
-from fastapi import APIRouter, Depends, Query, status, Header
+from fastapi import APIRouter, Depends, Query, status, Header, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -19,12 +20,47 @@ from app.schemas.ticketing import (
 )
 from app.services.ticketing_service import TicketingService
 from app.services.auth_service import AuthService
-from app.security.dependencies import get_required_admin, get_required_user
+from app.security.dependencies import (
+    get_optional_user,
+    get_required_user,
+    get_required_staff_or_admin,
+    STAFF_OR_ADMIN_ROLES,
+)
 
 router = APIRouter(prefix="/api/ticketing", tags=["Air Ticketing Engine"])
 
 
-def _to_booking_response(b) -> dict:
+def _mask_pii(val: Optional[str]) -> Optional[str]:
+    if not val:
+        return None
+    val_str = str(val).strip()
+    if len(val_str) <= 4:
+        return "****"
+    return val_str[:2] + ("*" * (len(val_str) - 4)) + val_str[-2:]
+
+
+def _is_staff_or_admin(user: Dict[str, Any]) -> bool:
+    return user.get("role") in STAFF_OR_ADMIN_ROLES
+
+
+def _check_booking_access(booking: Any, current_user: Dict[str, Any]) -> None:
+    if _is_staff_or_admin(current_user):
+        return
+    user_id = current_user.get("user_id")
+    user_email = (current_user.get("sub") or current_user.get("email") or "").lower()
+    b_cust_id = str(booking.customer_id) if booking.customer_id else None
+    b_email = (booking.contact_email or "").lower()
+
+    if (user_id and b_cust_id == user_id) or (user_email and b_email == user_email):
+        return
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Access denied. You do not have permission to access this booking."
+    )
+
+
+def _to_booking_response(b, mask_pii: bool = False) -> dict:
     return {
         "id": str(b.id),
         "booking_ref": b.booking_ref,
@@ -60,7 +96,7 @@ def _to_booking_response(b) -> dict:
                 "dob": p.dob,
                 "gender": p.gender,
                 "nationality": p.nationality,
-                "passport_number": p.passport_number,
+                "passport_number": _mask_pii(p.passport_number) if mask_pii else p.passport_number,
                 "e_ticket_number": p.e_ticket_number,
                 "seat_number": p.seat_number,
                 "created_at": p.created_at.isoformat() if p.created_at else None,
@@ -73,18 +109,14 @@ def _to_booking_response(b) -> dict:
 @router.post("/bookings", response_model=AirTicketApiResponse, status_code=status.HTTP_201_CREATED)
 async def create_ticket_booking(
     payload: AirTicketBookingCreateRequest,
-    authorization: Optional[str] = Header(None),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
     db: Session = Depends(get_db)
 ):
     cust_id = None
-    if authorization and authorization.startswith("Bearer "):
-        token = authorization.split(" ")[1]
+    if current_user and current_user.get("user_id"):
         try:
-            decoded = AuthService.decode_access_token(token)
-            uid = decoded.get("user_id")
-            if uid:
-                cust_id = uuid.UUID(uid)
-        except Exception:
+            cust_id = uuid.UUID(current_user["user_id"])
+        except ValueError:
             pass
 
     booking = TicketingService.create_booking(db, payload, customer_id=cust_id)
@@ -96,37 +128,77 @@ async def list_ticket_bookings(
     search: Optional[str] = Query(None, description="Search by ref, pnr, passenger, email"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    current_user: Dict[str, Any] = Depends(get_required_staff_or_admin),
     db: Session = Depends(get_db)
 ):
+    """Staff/Admin only: List all air ticket bookings."""
     bookings = TicketingService.list_bookings(db, search=search, limit=limit, offset=offset)
-    data = [_to_booking_response(b) for b in bookings]
+    data = [_to_booking_response(b, mask_pii=False) for b in bookings]
+    return AirTicketApiResponse(success=True, data=data)
+
+
+@router.get("/my-bookings", response_model=AirTicketApiResponse)
+async def list_my_ticket_bookings(
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    current_user: Dict[str, Any] = Depends(get_required_user),
+    db: Session = Depends(get_db)
+):
+    """Customer: List bookings owned by the authenticated user."""
+    user_id_str = current_user.get("user_id")
+    user_email = (current_user.get("sub") or current_user.get("email") or "").strip()
+    u_uuid = None
+    if user_id_str:
+        try:
+            u_uuid = uuid.UUID(user_id_str)
+        except ValueError:
+            pass
+
+    bookings = TicketingService.list_bookings(
+        db,
+        customer_id=u_uuid,
+        customer_email=user_email,
+        limit=limit,
+        offset=offset
+    )
+    data = [_to_booking_response(b, mask_pii=False) for b in bookings]
     return AirTicketApiResponse(success=True, data=data)
 
 
 @router.get("/bookings/{booking_id}", response_model=AirTicketApiResponse)
 async def get_ticket_booking_details(
     booking_id: str,
+    current_user: Dict[str, Any] = Depends(get_required_user),
     db: Session = Depends(get_db)
 ):
+    """Retrieve ticket booking details. Requires ownership or staff/admin role."""
     try:
         b_uuid = uuid.UUID(booking_id)
     except ValueError:
         return AirTicketApiResponse(success=False, error="Invalid booking ID UUID format.")
 
     booking = TicketingService.get_booking(db, b_uuid)
-    return AirTicketApiResponse(success=True, data=_to_booking_response(booking))
+    _check_booking_access(booking, current_user)
+
+    is_staff = _is_staff_or_admin(current_user)
+    return AirTicketApiResponse(success=True, data=_to_booking_response(booking, mask_pii=not is_staff))
 
 
 @router.post("/bookings/{booking_id}/passengers", response_model=AirTicketApiResponse)
 async def add_passenger_to_booking(
     booking_id: str,
     payload: AirTicketPassengerCreate,
+    current_user: Dict[str, Any] = Depends(get_required_user),
     db: Session = Depends(get_db)
 ):
+    """Add a passenger to a ticket booking. Requires ownership or staff/admin role."""
     try:
         b_uuid = uuid.UUID(booking_id)
     except ValueError:
         return AirTicketApiResponse(success=False, error="Invalid booking ID UUID format.")
+
+    booking = TicketingService.get_booking(db, b_uuid)
+    _check_booking_access(booking, current_user)
 
     passenger = TicketingService.add_passenger(db, b_uuid, payload)
     return AirTicketApiResponse(
@@ -145,12 +217,14 @@ async def add_passenger_to_booking(
 async def transition_ticket_booking_state(
     booking_id: str,
     payload: AirTicketTransitionRequest,
+    current_user: Dict[str, Any] = Depends(get_required_staff_or_admin),
     db: Session = Depends(get_db)
 ):
+    """Transition ticket booking lifecycle state. Staff or Admin privileges required."""
     try:
         b_uuid = uuid.UUID(booking_id)
     except ValueError:
         return AirTicketApiResponse(success=False, error="Invalid booking ID UUID format.")
 
     booking = TicketingService.transition_booking(db, b_uuid, payload)
-    return AirTicketApiResponse(success=True, data=_to_booking_response(booking))
+    return AirTicketApiResponse(success=True, data=_to_booking_response(booking, mask_pii=False))

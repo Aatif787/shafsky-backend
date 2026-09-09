@@ -24,7 +24,14 @@ from app.integrations.whatsapp import copy as wa_copy
 from app.integrations.whatsapp.service import WhatsAppBookingStateMachine
 from app.services.service_config_service import ServiceConfigService
 
-Base.metadata.create_all(bind=engine)
+@pytest.fixture(autouse=True)
+def mock_external(monkeypatch):
+    try:
+        Base.metadata.create_all(bind=engine)
+    except Exception:
+        pass
+    monkeypatch.setattr(WhatsAppClient, "send_message", MagicMock(return_value={"success": True, "message_id": "mid.mock"}))
+
 
 CHARTER_CATALOG = [
     {

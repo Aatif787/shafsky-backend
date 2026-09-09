@@ -1,4 +1,4 @@
-﻿"""
+"""
 Payment & Invoicing Service Layer.
 Encapsulates transaction initiation, invoice generation, webhook processing,
 refund handling, timeline tracking, and audit logging.
@@ -825,17 +825,36 @@ class PaymentService:
 
         # 2. Resolve Booking
         booking = None
+        airport_booking = None
         if booking_ref:
             booking = db.scalar(select(Booking).where(Booking.booking_ref == booking_ref))
+            if not booking:
+                try:
+                    from app.models.airport import AirportBooking
+                    airport_booking = db.scalar(select(AirportBooking).where(AirportBooking.booking_reference == booking_ref))
+                except Exception:
+                    pass
         
-        if not booking and transaction and transaction.entity_id:
+        if not booking and not airport_booking and transaction and transaction.entity_id:
             try:
                 b_uuid = uuid.UUID(str(transaction.entity_id))
                 booking = db.scalar(select(Booking).where(or_(Booking.id == b_uuid, Booking.booking_ref == str(transaction.entity_id))))
+                if not booking:
+                    try:
+                        from app.models.airport import AirportBooking
+                        airport_booking = db.scalar(select(AirportBooking).where(or_(AirportBooking.id == b_uuid, AirportBooking.booking_reference == str(transaction.entity_id))))
+                    except Exception:
+                        pass
             except ValueError:
                 booking = db.scalar(select(Booking).where(Booking.booking_ref == str(transaction.entity_id)))
+                if not booking:
+                    try:
+                        from app.models.airport import AirportBooking
+                        airport_booking = db.scalar(select(AirportBooking).where(AirportBooking.booking_reference == str(transaction.entity_id)))
+                    except Exception:
+                        pass
 
-        if not transaction and not booking:
+        if not transaction and not booking and not airport_booking:
             logger.warning(f"[PaymentService] Neither transaction nor booking found for order '{order_id}', ref '{booking_ref}'")
             return {
                 "success": False,
@@ -844,7 +863,11 @@ class PaymentService:
             }
 
         # Cross-safety check: Ensure payment for Booking A cannot confirm Booking B
-        resolved_booking_ref = booking.booking_ref if booking else (transaction.entity_id if transaction else booking_ref)
+        resolved_booking_ref = (
+            booking.booking_ref if booking
+            else (airport_booking.booking_reference if airport_booking
+                  else (transaction.entity_id if transaction else booking_ref))
+        )
         if booking_ref and resolved_booking_ref and booking_ref != resolved_booking_ref:
             logger.error(f"[PaymentService] Safety mismatch: provided ref '{booking_ref}' != resolved ref '{resolved_booking_ref}'")
             return {
@@ -858,9 +881,9 @@ class PaymentService:
             "payment.captured", "order.paid", "payment_link.paid",
             "VERIFY_ENDPOINT", "PAYMENT_SUCCESS", "payment.succeeded"
         ]:
-            # For gateway webhooks (payment.captured, order.paid, payment_link.paid),
+            # For gateway webhooks and client verification endpoint,
             # strictly reconcile received amount and currency with the booking / transaction records.
-            if event_name in ["payment.captured", "order.paid", "payment_link.paid"]:
+            if event_name in ["payment.captured", "order.paid", "payment_link.paid", "VERIFY_ENDPOINT"]:
                 received_amount_raw = amount
                 received_currency_raw = currency
 
@@ -889,8 +912,33 @@ class PaymentService:
                             plink_ent.get("currency")
                         )
 
-                expected_amt_val = float(booking.total_amount) if booking else (float(transaction.amount) if transaction else None)
-                expected_curr_val = (booking.currency if booking else (transaction.currency if transaction else "INR")) or "INR"
+                # For VERIFY_ENDPOINT, if amount or currency is not in payload, fetch from Razorpay API or transaction
+                if event_name == "VERIFY_ENDPOINT" and (received_amount_raw is None or not received_currency_raw):
+                    from app.providers.razorpay_provider import razorpay_provider
+                    if order_id and razorpay_provider.is_configured():
+                        ord_res = razorpay_provider.fetch_order(order_id)
+                        if ord_res.get("success") and ord_res.get("order"):
+                            ord_data = ord_res["order"]
+                            if received_amount_raw is None:
+                                received_amount_raw = ord_data.get("amount_paid") or ord_data.get("amount")
+                            if not received_currency_raw:
+                                received_currency_raw = ord_data.get("currency")
+
+                    if received_amount_raw is None and transaction and transaction.amount is not None:
+                        received_amount_raw = int(round(float(transaction.amount) * 100))
+                    if not received_currency_raw and transaction and transaction.currency:
+                        received_currency_raw = transaction.currency
+
+                expected_amt_val = (
+                    float(booking.total_amount) if booking
+                    else (float(airport_booking.total_price) if airport_booking
+                          else (float(transaction.amount) if transaction else None))
+                )
+                expected_curr_val = (
+                    booking.currency if booking
+                    else (airport_booking.currency if airport_booking
+                          else (transaction.currency if transaction else "INR"))
+                ) or "INR"
 
                 # Check for missing amount or currency
                 if received_amount_raw is None or received_currency_raw is None or str(received_currency_raw).strip() == "":
@@ -903,7 +951,7 @@ class PaymentService:
                     return {
                         "success": False,
                         "status": "PAYMENT_DATA_INCOMPLETE",
-                        "reason": "Webhook payload missing required amount or currency data.",
+                        "reason": "Payment data missing required amount or currency data.",
                         "booking_ref": resolved_booking_ref
                     }
 
@@ -1141,14 +1189,26 @@ class PaymentService:
                         )
                     transaction.entity_id = str(booking.booking_ref)
                     transaction.entity_type = transaction.entity_type or "AIRPORT_BOOKING"
+            elif airport_booking:
+                airport_booking.status = "CONFIRMED"
+                airport_booking.updated_at = datetime.now(timezone.utc)
+                if transaction and airport_booking.booking_reference:
+                    transaction.entity_id = str(airport_booking.booking_reference)
+                    transaction.entity_type = transaction.entity_type or "AIRPORT_BOOKING"
 
             # Auto-generate Tax Invoice DB row (Idempotent check inside generate_invoice).
             # PDF/storage/email happen after commit so the webhook is not blocked.
             invoice_id_to_fulfill = None
             if transaction:
                 try:
-                    customer_name = booking.passenger_name if booking else "Valued Guest"
-                    customer_email = booking.passenger_email if booking else "customer@shafsky.com"
+                    customer_name = (
+                        booking.passenger_name if booking
+                        else "Valued Guest"
+                    )
+                    customer_email = (
+                        booking.passenger_email if booking
+                        else (airport_booking.customer_id if (airport_booking and "@" in str(airport_booking.customer_id)) else "customer@shafsky.com")
+                    )
                     invoice_row = cls.generate_invoice(
                         db,
                         transaction=transaction,

@@ -1,4 +1,4 @@
-﻿"""
+"""
 WhatsApp Airport Services - "Flight Not Confirmed Yet" friendly path tests.
 
 Locks in:
@@ -24,11 +24,12 @@ from app.integrations.whatsapp.client import WhatsAppClient
 from app.integrations.whatsapp.service import WhatsAppBookingStateMachine
 from app.providers.razorpay_provider import razorpay_provider as _rzp
 
-Base.metadata.create_all(bind=engine)
-
-
 @pytest.fixture(autouse=True)
 def mock_network(monkeypatch):
+    try:
+        Base.metadata.create_all(bind=engine)
+    except Exception:
+        pass
     monkeypatch.setattr(WhatsAppClient, "_post_payload", MagicMock(return_value={"success": True, "message_id": "wamid.mock"}))
     monkeypatch.setattr(WhatsAppClient, "send_message", MagicMock(return_value={"success": True, "message_id": "wamid.m"}))
     monkeypatch.setattr(WhatsAppClient, "send_text_message", MagicMock(return_value={"success": True, "message_id": "wamid.t"}))

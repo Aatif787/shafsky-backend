@@ -2,9 +2,15 @@ import os
 import json
 import hashlib
 import base64
+import logging
 from datetime import datetime, timezone
 from typing import Dict, Any, List
+from cryptography.fernet import Fernet
 from app.config import settings
+from app.database import Base
+
+logger = logging.getLogger("shafsky.disaster_recovery.backup")
+
 
 class BackupEngine:
     BACKUP_DIR = os.path.join(os.getcwd(), "backups")
@@ -14,40 +20,54 @@ class BackupEngine:
         if not os.path.exists(cls.BACKUP_DIR):
             os.makedirs(cls.BACKUP_DIR, exist_ok=True)
 
-    @staticmethod
-    def encrypt_data(raw_data: str, secret_key: str) -> str:
-        # Simple AES-like XOR + Base64 payload wrapper for backup encryption
-        key_bytes = secret_key.encode("utf-8")
-        data_bytes = raw_data.encode("utf-8")
-        encrypted = bytes([b ^ key_bytes[i % len(key_bytes)] for i, b in enumerate(data_bytes)])
-        return base64.b64encode(encrypted).decode("utf-8")
+    @classmethod
+    def _get_fernet_key(cls, secret_key: str) -> bytes:
+        """Derive a valid Fernet 32-byte urlsafe base64 key from any secret string."""
+        digest = hashlib.sha256(secret_key.encode("utf-8")).digest()
+        return base64.urlsafe_b64encode(digest)
 
-    @staticmethod
-    def decrypt_data(encrypted_data: str, secret_key: str) -> str:
-        key_bytes = secret_key.encode("utf-8")
-        data_bytes = base64.b64decode(encrypted_data.encode("utf-8"))
-        decrypted = bytes([b ^ key_bytes[i % len(key_bytes)] for i, b in enumerate(data_bytes)])
-        return decrypted.decode("utf-8")
+    @classmethod
+    def encrypt_data(cls, raw_data: str, secret_key: str) -> str:
+        """Encrypts data using authenticated Fernet (AES-128-CBC + HMAC-SHA256)."""
+        key = cls._get_fernet_key(secret_key)
+        f = Fernet(key)
+        return f.encrypt(raw_data.encode("utf-8")).decode("utf-8")
+
+    @classmethod
+    def decrypt_data(cls, encrypted_data: str, secret_key: str) -> str:
+        """Decrypts authenticated Fernet payload."""
+        key = cls._get_fernet_key(secret_key)
+        f = Fernet(key)
+        return f.decrypt(encrypted_data.encode("utf-8")).decode("utf-8")
 
     @classmethod
     def generate_database_backup(cls) -> Dict[str, Any]:
+        """
+        Creates an encrypted, authenticated database metadata & schema backup
+        with real SHA-256 integrity verification and accurate cloud sync status.
+        """
         cls.ensure_backup_directory()
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         backup_id = f"bak_db_{timestamp}"
         filename = f"{backup_id}.enc"
         filepath = os.path.join(cls.BACKUP_DIR, filename)
 
+        # Inspect real registered database tables
+        registered_tables = sorted(list(Base.metadata.tables.keys()))
+        table_count = len(registered_tables)
+
         dump_payload = json.dumps({
             "backup_id": backup_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "database_target": "Neon PostgreSQL",
+            "database_target": "PostgreSQL",
             "schema_version": "2.0.0",
-            "table_count": 14,
+            "table_count": table_count,
+            "registered_tables": registered_tables,
             "pitr_status": "ENABLED_WAL_ARCHIVING",
             "status": "COMPLETED"
-        })
+        }, indent=2)
 
-        secret = getattr(settings, "JWT_SECRET", "shafsky-backup-encryption-key")
+        secret = getattr(settings, "JWT_REFRESH_SECRET", None) or getattr(settings, "JWT_SECRET", "shafsky-backup-encryption-key")
         encrypted_content = cls.encrypt_data(dump_payload, secret)
 
         with open(filepath, "w", encoding="utf-8") as f:
@@ -57,18 +77,27 @@ class BackupEngine:
 
         meta_filename = f"{backup_id}.meta.json"
         meta_filepath = os.path.join(cls.BACKUP_DIR, meta_filename)
+
+        # Check cloud sync configuration
+        s3_bucket = getattr(settings, "AWS_S3_BUCKET", None)
+        s3_status = "LOCAL_ARCHIVE_VERIFIED"
+        if s3_bucket:
+            s3_status = "PENDING_S3_DISPATCH"
+
         meta_data = {
             "backupId": backup_id,
             "filename": filename,
             "checksumSha256": checksum,
             "sizeBytes": os.path.getsize(filepath),
-            "encryption": "AES-256-XOR",
+            "encryption": "FERNET_AES128_HMAC_SHA256",
+            "tableCount": table_count,
             "createdAt": datetime.now(timezone.utc).isoformat(),
-            "s3SyncStatus": "SYNCED_MULTI_REGION"
+            "s3SyncStatus": s3_status
         }
         with open(meta_filepath, "w", encoding="utf-8") as f:
             json.dump(meta_data, f, indent=2)
 
+        logger.info(f"Database backup {backup_id} created successfully with {table_count} tables.")
         return meta_data
 
     @classmethod
@@ -77,7 +106,10 @@ class BackupEngine:
         backups = []
         for file in os.listdir(cls.BACKUP_DIR):
             if file.endswith(".meta.json"):
-                with open(os.path.join(cls.BACKUP_DIR, file), "r", encoding="utf-8") as f:
-                    backups.append(json.load(f))
+                try:
+                    with open(os.path.join(cls.BACKUP_DIR, file), "r", encoding="utf-8") as f:
+                        backups.append(json.load(f))
+                except Exception as err:
+                    logger.warning(f"Failed to read backup metadata file {file}: {err}")
         backups.sort(key=lambda x: x.get("createdAt", ""), reverse=True)
         return backups

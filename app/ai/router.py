@@ -13,8 +13,9 @@ from app.ai.schemas import (
     TakeoverRequest,
     ResumeRequest
 )
+from app.ai.memory import ConversationMemory
 from app.ai.service import AiService
-from app.security.dependencies import get_required_staff_or_admin
+from app.security.dependencies import get_required_staff_or_admin, get_optional_user
 
 router = APIRouter(prefix="/api/ai", tags=["AI Conversation Engine"])
 
@@ -28,13 +29,14 @@ router = APIRouter(prefix="/api/ai", tags=["AI Conversation Engine"])
 def interactive_chat_endpoint(
     payload: ChatRequest,
     db: Session = Depends(get_db),
+    current_user: Optional[dict] = Depends(get_optional_user),
 ):
     """
-    Public website chat (rate-limited by SecurityMiddleware).
-    Does not expose staff takeover/history. Abuse controls: IP rate limit on /api/ai/chat.
+    Public / Authenticated interactive chat endpoint.
+    Passes current_user context to AiService to enforce strict tool authorization.
     """
     try:
-        response = AiService.process_chat(db, payload)
+        response = AiService.process_chat(db, payload, current_user=current_user)
         return AiApiResponse(success=True, data=response)
     except Exception as err:
         raise HTTPException(status_code=500, detail="AI chat temporarily unavailable.") from err

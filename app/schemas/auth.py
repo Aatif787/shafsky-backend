@@ -40,8 +40,8 @@ class ProfileResponse(BaseModel):
     passport_number: Optional[str] = None
 
 class ChangePasswordRequest(BaseModel):
-    current_password: Optional[str] = None
-    new_password: str = Field(..., min_length=8)
+    current_password: str = Field(..., min_length=1, description="Current password of the authenticated user")
+    new_password: str = Field(..., min_length=8, description="New password meeting complexity requirements")
 
 
 class ApiResponse(BaseModel):

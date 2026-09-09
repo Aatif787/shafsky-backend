@@ -1,4 +1,4 @@
-﻿import os
+import os
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     WHATSAPP_WEBHOOK_VERIFY_TOKEN: str = os.getenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "")
     WHATSAPP_API_VERSION: str = os.getenv("WHATSAPP_API_VERSION", "v21.0")
     WHATSAPP_APP_SECRET: str = os.getenv("WHATSAPP_APP_SECRET", os.getenv("META_APP_SECRET", os.getenv("APP_SECRET", "")))
+
+    # Razorpay Payment Gateway
+    RAZORPAY_KEY_ID: str = os.getenv("RAZORPAY_KEY_ID", "")
+    RAZORPAY_KEY_SECRET: str = os.getenv("RAZORPAY_KEY_SECRET", "")
 
     RESEND_API_KEY: str = os.getenv("RESEND_API_KEY", "")
     EMAIL_FROM: str = os.getenv("EMAIL_FROM", os.getenv("RESEND_FROM_EMAIL", ""))

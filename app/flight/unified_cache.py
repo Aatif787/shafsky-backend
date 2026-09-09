@@ -202,8 +202,12 @@ def store_unified_flight(
             logger.debug("DB flight cache store error: %s", err)
 
 
-def to_flight_status_data(cached: Dict[str, Any], requested_flight: str) -> Optional[FlightStatusData]:
-    """Convert any unified cached flight dictionary into a FlightStatusData schema."""
+def to_flight_status_data(
+    cached: Dict[str, Any],
+    requested_flight: str,
+    target_date: Optional[str] = None
+) -> Optional[FlightStatusData]:
+    """Convert any unified cached flight dictionary into a FlightStatusData schema, retargeting date if specified."""
     if not isinstance(cached, dict):
         return None
 
@@ -212,7 +216,23 @@ def to_flight_status_data(cached: Dict[str, Any], requested_flight: str) -> Opti
     # Check if already in FlightStatusData format
     if "airline" in cached and "flight" in cached and "departure" in cached and "arrival" in cached:
         try:
-            return FlightStatusData.model_validate(cached)
+            status_obj = FlightStatusData.model_validate(cached)
+            if target_date:
+                from app.flight.providers.aviation_edge_provider import _retarget_schedule_dates
+                dep_sched, arr_sched = _retarget_schedule_dates(
+                    status_obj.departure.scheduled,
+                    status_obj.arrival.scheduled,
+                    target_date
+                )
+                if dep_sched != status_obj.departure.scheduled:
+                    status_obj.departure = status_obj.departure.model_copy(
+                        update={"scheduled": dep_sched, "estimated": None, "actual": None, "delay": None}
+                    )
+                if arr_sched != status_obj.arrival.scheduled:
+                    status_obj.arrival = status_obj.arrival.model_copy(
+                        update={"scheduled": arr_sched, "estimated": None, "actual": None, "delay": None}
+                    )
+            return status_obj
         except Exception:
             pass
 
@@ -224,6 +244,30 @@ def to_flight_status_data(cached: Dict[str, Any], requested_flight: str) -> Opti
     dep_raw = cached.get("departure") or {}
     arr_raw = cached.get("arrival") or {}
 
+    dep_sched = dep_raw.get("scheduled")
+    arr_sched = arr_raw.get("scheduled")
+
+    dep_est = dep_raw.get("estimated")
+    dep_act = dep_raw.get("actual")
+    arr_est = arr_raw.get("estimated")
+    arr_act = arr_raw.get("actual")
+
+    if target_date:
+        from app.flight.providers.aviation_edge_provider import _retarget_schedule_dates
+        retargeted_dep, retargeted_arr = _retarget_schedule_dates(
+            dep_sched,
+            arr_sched,
+            target_date
+        )
+        if retargeted_dep != dep_sched:
+            dep_sched = retargeted_dep
+            dep_est = None
+            dep_act = None
+        if retargeted_arr != arr_sched:
+            arr_sched = retargeted_arr
+            arr_est = None
+            arr_act = None
+
     dep_details = LocationEndpointDetails(
         airport=(dep_raw.get("iata") or dep_raw.get("airport") or "").upper(),
         airport_name=dep_raw.get("airport_name") or dep_raw.get("airport"),
@@ -231,9 +275,9 @@ def to_flight_status_data(cached: Dict[str, Any], requested_flight: str) -> Opti
         country=dep_raw.get("country"),
         terminal=dep_raw.get("terminal"),
         gate=dep_raw.get("gate"),
-        scheduled=dep_raw.get("scheduled"),
-        estimated=dep_raw.get("estimated"),
-        actual=dep_raw.get("actual"),
+        scheduled=dep_sched,
+        estimated=dep_est,
+        actual=dep_act,
     )
 
     arr_details = LocationEndpointDetails(
@@ -243,9 +287,9 @@ def to_flight_status_data(cached: Dict[str, Any], requested_flight: str) -> Opti
         country=arr_raw.get("country"),
         terminal=arr_raw.get("terminal"),
         gate=arr_raw.get("gate"),
-        scheduled=arr_raw.get("scheduled"),
-        estimated=arr_raw.get("estimated"),
-        actual=arr_raw.get("actual"),
+        scheduled=arr_sched,
+        estimated=arr_est,
+        actual=arr_act,
     )
 
     fl_num_part = clean_fl[len(carrier_iata):] if clean_fl.startswith(carrier_iata) else clean_fl

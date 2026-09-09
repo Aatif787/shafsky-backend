@@ -391,9 +391,29 @@ class RazorpayProvider:
         """
         self._load_config()
         amount_paise = int(round(amount * 100))
+        from app.config import settings as _settings
 
-        if not self.is_configured() or payment_id.startswith(("pay_sim_", "pay_test_", "pay_phase4_", "pay_first", "pay_second", "pay_ref", "pay_retry", "pay_mock_")):
+        if not self.is_configured():
+            if _settings.is_production:
+                logger.error("[Razorpay] Refund failed: Razorpay credentials not configured in production.")
+                return {
+                    "success": False,
+                    "error": "Payment gateway credentials are not configured for refunds in production."
+                }
             logger.warning(f"[Razorpay] Using simulated refund fallback for payment: {payment_id}")
+            fake_refund_id = f"rfnd_sim_{payment_id.replace('-', '')[:12]}"
+            return {
+                "success": True,
+                "refund_id": fake_refund_id,
+                "payment_id": payment_id,
+                "amount": amount,
+                "status": "processed",
+                "simulated": True
+            }
+
+        # In non-production testing only, allow explicit simulated test prefixes
+        if not _settings.is_production and payment_id.startswith(("pay_sim_", "pay_test_", "pay_mock_")):
+            logger.warning(f"[Razorpay] Using simulated refund fallback for non-production test payment: {payment_id}")
             fake_refund_id = f"rfnd_sim_{payment_id.replace('-', '')[:12]}"
             return {
                 "success": True,

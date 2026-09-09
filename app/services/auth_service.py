@@ -146,6 +146,8 @@ class AuthService:
         user = db.scalar(select(UserAuth).where(UserAuth.id == record.user_id))
         if not user:
             raise ValueError("USER_NOT_FOUND")
+        if not getattr(user, "is_active", True):
+            raise ValueError("ACCOUNT_INACTIVE")
 
         # 2. Replay Attack Detection & Token Family Revocation
         if record.revoked:

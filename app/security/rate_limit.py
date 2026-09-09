@@ -67,6 +67,17 @@ class RateLimiter:
 
         # In-process fallback (not distributed)
         with cls._lock:
+            # Periodic / capacity-based cleanup of expired entries
+            if len(cls._storage) > 10000:
+                expired_keys = [k for k, (_, exp) in cls._storage.items() if now > exp]
+                for k in expired_keys:
+                    del cls._storage[k]
+                # If still at capacity, discard oldest entries to prevent memory exhaustion DoS
+                if len(cls._storage) > 10000:
+                    sorted_by_expiry = sorted(cls._storage.items(), key=lambda item: item[1][1])
+                    for k, _ in sorted_by_expiry[:2000]:
+                        cls._storage.pop(k, None)
+
             count, reset_at = cls._storage.get(key, (0, now + window_seconds))
             if now > reset_at:
                 count = 0
@@ -76,7 +87,7 @@ class RateLimiter:
             cls._storage[key] = (count, reset_at)
 
             if count > max_requests:
-                retry_after = int(reset_at - now)
+                retry_after = max(1, int(reset_at - now))
                 raise HTTPException(
                     status_code=429,
                     detail=f"Rate limit exceeded. Try again in {retry_after} seconds.",

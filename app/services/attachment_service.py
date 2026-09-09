@@ -59,8 +59,9 @@ class AttachmentService:
         entity_type: str,
         entity_id: str,
         category_filter: Optional[str] = None,
+        user_role: Optional[str] = None,
     ) -> List[Attachment]:
-        """Returns attachments for an entity with optional category filter."""
+        """Returns attachments for an entity with optional category and access level filters."""
         et = entity_type.strip().upper()
         query = db.query(Attachment).filter(
             Attachment.entity_type == et,
@@ -70,6 +71,18 @@ class AttachmentService:
 
         if category_filter:
             query = query.filter(Attachment.category == category_filter.strip().upper())
+
+        if user_role:
+            role_clean = user_role.strip().upper()
+            if role_clean in ("SUPER_ADMIN", "ADMIN"):
+                pass  # Full access to all access levels
+            elif role_clean in (
+                "OPERATIONS_MANAGER", "DUTY_OFFICER", "MEET_AND_ASSIST_STAFF",
+                "CONCIERGE_TEAM", "CUSTOMER_SUPPORT", "DISPATCHER", "DRIVER", "FINANCE", "STAFF"
+            ):
+                query = query.filter(Attachment.access_level.in_(["STAFF", "CUSTOMER", "PUBLIC"]))
+            else:
+                query = query.filter(Attachment.access_level.in_(["CUSTOMER", "PUBLIC"]))
 
         return query.order_by(Attachment.created_at.desc()).all()
 

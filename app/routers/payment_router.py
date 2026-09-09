@@ -52,21 +52,69 @@ async def create_order_endpoint(
 ):
     """
     Creates an official Razorpay Order for Standard Checkout.
-    Validates amount >= 100 paise, calls Razorpay API, and returns order details.
+    Resolves authoritative amount from the persisted Booking and validates amounts.
     """
     from app.providers.razorpay_provider import razorpay_provider
+    from app.models.schema import Booking
+    from app.models.airport import AirportBooking
+    from app.models.payment import PaymentTransaction, PaymentStatus, PaymentMethod
 
-    if payload.amount < 100:
+    booking_ref = (payload.receipt or (payload.notes.get("booking_ref") if payload.notes else None) or "").strip()
+    if not booking_ref:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A valid booking reference is required to create a payment order."
+        )
+
+    # 1. Resolve authoritative booking & amount
+    booking = db.scalar(select(Booking).where(Booking.booking_ref == booking_ref))
+    authoritative_amount_rupees = None
+    authoritative_currency = "INR"
+    customer_id = None
+
+    if booking:
+        if booking.total_amount is None or float(booking.total_amount) <= 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Booking has no payable total amount.")
+        authoritative_amount_rupees = float(booking.total_amount)
+        authoritative_currency = booking.currency or "INR"
+        customer_id = str(booking.user_id) if booking.user_id else None
+    else:
+        apt_booking = db.scalar(select(AirportBooking).where(AirportBooking.booking_reference == booking_ref))
+        if apt_booking:
+            if apt_booking.total_price is None or float(apt_booking.total_price) <= 0:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Airport booking has no payable total amount.")
+            authoritative_amount_rupees = float(apt_booking.total_price)
+            authoritative_currency = apt_booking.currency or "INR"
+            customer_id = str(apt_booking.customer_id) if apt_booking.customer_id else None
+        else:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Booking '{booking_ref}' not found.")
+
+    authoritative_paise = int(round(authoritative_amount_rupees * 100))
+    if authoritative_paise < 100:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Amount must be at least 100 paise (INR 1.00)."
         )
 
+    # Ensure client payload amount matches authoritative amount
+    if payload.amount and abs(payload.amount - authoritative_paise) > 1:
+        logger.warning(
+            f"[create_order] Security rejection: Client amount {payload.amount} != authoritative amount {authoritative_paise} for {booking_ref}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Amount mismatch. Authoritative booking amount is {authoritative_amount_rupees} {authoritative_currency}."
+        )
+
+    order_notes = dict(payload.notes or {})
+    order_notes["booking_ref"] = booking_ref
+    order_notes["channel"] = order_notes.get("channel", "web")
+
     res = razorpay_provider.create_order(
-        amount=payload.amount,
-        currency=payload.currency or "INR",
-        receipt=payload.receipt,
-        notes=payload.notes,
+        amount=authoritative_paise,
+        currency=authoritative_currency,
+        receipt=booking_ref,
+        notes=order_notes,
         amount_is_paise=True
     )
 
@@ -76,12 +124,43 @@ async def create_order_endpoint(
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=err_msg)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=err_msg)
 
+    order_id = res["order_id"]
+
+    # Check if a pending transaction already exists for this order/booking
+    tx = db.scalar(
+        select(PaymentTransaction).where(
+            PaymentTransaction.entity_id == booking_ref,
+            PaymentTransaction.status == PaymentStatus.PENDING,
+        ).order_by(PaymentTransaction.created_at.desc())
+    )
+    if not tx:
+        ref = f"PAY-{uuid.uuid4().hex[:8].upper()}"
+        tx = PaymentTransaction(
+            transaction_ref=ref,
+            entity_type="AIRPORT_BOOKING",
+            entity_id=booking_ref,
+            customer_id=customer_id,
+            amount=authoritative_amount_rupees,
+            currency=authoritative_currency,
+            payment_method=PaymentMethod.CREDIT_CARD,
+            status=PaymentStatus.PENDING,
+            gateway_provider="RAZORPAY",
+            gateway_payment_id=order_id,
+            gateway_response=res
+        )
+        db.add(tx)
+    else:
+        tx.gateway_payment_id = order_id
+        tx.gateway_response = res
+
+    db.commit()
+
     return RazorpayCreateOrderResponse(
-        order_id=res["order_id"],
+        order_id=order_id,
         amount=res["amount"],
         currency=res["currency"],
         key_id=res.get("key_id", razorpay_provider.key_id),
-        receipt=payload.receipt
+        receipt=booking_ref
     )
 
 
@@ -162,38 +241,30 @@ async def verify_payment_endpoint(
             signature=payload.razorpay_signature,
             channel="web"
         )
-    except Exception:
+    except Exception as exc:
         logger.exception("[verify] Booking confirmation failed after a valid Razorpay signature")
-        return PaymentApiResponse(
-            success=True,
-            data={
-                "status": "SIGNATURE_VALID",
-                "order_id": payload.razorpay_order_id,
-                "payment_id": payload.razorpay_payment_id,
-                "booking_ref": payload.booking_ref,
-            }
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Payment processing failed: {str(exc)}"
         )
 
-    if result and not result.get("success"):
-        hard_fail = result.get("status") in (
-            "REF_MISMATCH",
-            "AMOUNT_MISMATCH",
-            "CURRENCY_MISMATCH",
-            "COMMIT_FAILED",
+    if not result or not result.get("success"):
+        error_status = (result or {}).get("status", "VERIFICATION_FAILED")
+        error_reason = (result or {}).get("reason", "Payment verification processing failed.")
+        logger.error(f"[verify] Payment verification rejected: {error_status} - {error_reason}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Payment verification failed: {error_reason}"
         )
-        if hard_fail:
-            raise HTTPException(status_code=400, detail=result.get("reason", "Payment verification processing failed."))
-        if payload.booking_ref and result.get("status") == "NOT_FOUND":
-            raise HTTPException(status_code=400, detail=result.get("reason", "Payment verification processing failed."))
 
-    confirmed = bool(result and result.get("success"))
     return PaymentApiResponse(
         success=True,
         data={
-            "status": (result.get("status") if confirmed else None) or ("CONFIRMED" if (confirmed or not payload.booking_ref) else result.get("status", "CONFIRMED")),
+            "status": result.get("status", "CONFIRMED"),
             "order_id": payload.razorpay_order_id,
             "payment_id": payload.razorpay_payment_id,
-            "booking_ref": payload.booking_ref or (result.get("booking_ref") if result else None)
+            "booking_ref": result.get("booking_ref") or payload.booking_ref,
+            "already_confirmed": result.get("already_confirmed", False)
         }
     )
 

@@ -11,6 +11,7 @@ from app.security.dependencies import (
     get_required_user,
     get_required_staff_or_admin,
     get_required_admin,
+    STAFF_OR_ADMIN_ROLES,
 )
 from app.schemas.airport import (
     AirportBookingCreate,
@@ -435,6 +436,22 @@ def get_my_airport_bookings_endpoint(
     )
 
 
+def _check_airport_booking_access(booking: Any, current_user: Dict[str, Any]) -> None:
+    if current_user.get("role") in STAFF_OR_ADMIN_ROLES:
+        return
+    user_id = str(current_user.get("user_id") or getattr(current_user, "id", "") or "")
+    user_email = str(current_user.get("sub") or current_user.get("email") or "").lower()
+    b_cust_id = str(getattr(booking, "customer_id", "") or "").lower()
+
+    if (user_id and b_cust_id == user_id.lower()) or (user_email and b_cust_id == user_email):
+        return
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Access denied. You do not have permission to access or modify this airport booking."
+    )
+
+
 @router.get(
     "/bookings/{booking_id}",
     response_model=AirportBookingResponse,
@@ -450,6 +467,7 @@ def get_airport_booking_endpoint(
     try:
         details = AirportService.get_booking_details(db, booking_id)
         booking = details["booking"]
+        _check_airport_booking_access(booking, current_user)
         # Attach aggregated fields
         booking.workflow_state = details["workflow_state"]
         booking.assignments = details["assignments"]
@@ -472,6 +490,12 @@ def update_airport_booking_endpoint(
     db: Session = Depends(get_db),
     current_user = Depends(get_required_user)
 ):
+    try:
+        details = AirportService.get_booking_details(db, booking_id)
+        _check_airport_booking_access(details["booking"], current_user)
+    except ValueError as err:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(err)) from err
+
     actor_id = current_user.get("sub") or current_user.get("email") or "USER"
     try:
         return AirportService.update_booking(
@@ -498,6 +522,12 @@ def execute_transition_endpoint(
     db: Session = Depends(get_db),
     current_user = Depends(get_required_user)
 ):
+    try:
+        details = AirportService.get_booking_details(db, booking_id)
+        _check_airport_booking_access(details["booking"], current_user)
+    except ValueError as err:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(err)) from err
+
     actor_id = current_user.get("sub") or current_user.get("email") or "USER"
     actor_role = current_user.get("role", "CUSTOMER")
     try:
@@ -526,6 +556,12 @@ def cancel_airport_booking_endpoint(
     db: Session = Depends(get_db),
     current_user = Depends(get_required_user)
 ):
+    try:
+        details = AirportService.get_booking_details(db, booking_id)
+        _check_airport_booking_access(details["booking"], current_user)
+    except ValueError as err:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(err)) from err
+
     actor_id = current_user.get("sub") or current_user.get("email") or "USER"
     try:
         return AirportService.cancel_booking(db, booking_id=booking_id, actor_id=actor_id, reason=reason)

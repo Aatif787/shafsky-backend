@@ -181,7 +181,15 @@ def _booking_meta(booking) -> Dict[str, str]:
         getattr(booking, "arrival_time", None) or meta.get("arrival_scheduled"),
         tz,
     )
-    pax = meta.get("pax_adults") or meta.get("guest_count") or 1
+    adults = int(meta.get("pax_adults") or meta.get("billable_pax") or 1)
+    children = int(meta.get("pax_children") or 0)
+    infants = int(meta.get("pax_infants") or 0)
+    total_g = int(meta.get("guest_count") or (adults + children + infants))
+    if children or infants:
+        pax_display = f"{total_g} Pax ({adults}A, {children}C, {infants}I)"
+    else:
+        pax_display = f"{total_g} Pax"
+
     return {
         "airport": airport,
         "journey": journey,
@@ -191,7 +199,7 @@ def _booking_meta(booking) -> Dict[str, str]:
         "destination": dest,
         "travel_date": format_date_local(scheduled, tz) if scheduled else "",
         "scheduled_time": format_time_local(scheduled, tz) if scheduled else "",
-        "pax": str(pax),
+        "pax": pax_display,
         "terminal": _safe_text(meta.get("terminal")),
     }
 

@@ -17,32 +17,22 @@ class CharterService:
     @classmethod
     def generate_charter_reference(cls, db: Session) -> str:
         """
-        Generate a collision-safe, human-readable unique reference format 'SC-XXXXXX'.
-        Uses cryptographic random digits to avoid sequential guessing and verifies DB uniqueness.
+        Generate a collision-safe, high-entropy unique reference format 'SC-YYYYMMDD-XXXXXXXX'.
+        Uses cryptographic random hex to eliminate predictable sequential guessing.
         """
-        for _ in range(20):
-            # Generate 5-digit number (e.g., SC-10482 to SC-99999)
-            code = secrets.randbelow(90000) + 10000
-            ref = f"SC-{code}"
+        date_str = datetime.now(timezone.utc).strftime("%Y%m%d")
+        for _ in range(50):
+            token = secrets.token_hex(4).upper()
+            ref = f"SC-{date_str}-{token}"
             existing = db.execute(
                 select(PrivateCharterRequest.id).where(PrivateCharterRequest.request_reference == ref)
             ).scalar_one_or_none()
             if not existing:
                 return ref
 
-        # Fallback to 6 alphanumeric characters if high density
-        for _ in range(20):
-            token = secrets.token_hex(3).upper()
-            ref = f"SC-{token}"
-            existing = db.execute(
-                select(PrivateCharterRequest.id).where(PrivateCharterRequest.request_reference == ref)
-            ).scalar_one_or_none()
-            if not existing:
-                return ref
-
-        # Final timestamp-based guarantee
-        ts_suffix = str(int(datetime.now(timezone.utc).timestamp()))[-6:]
-        return f"SC-{ts_suffix}"
+        # Fallback with milliseconds timestamp
+        ts = int(datetime.now(timezone.utc).timestamp() * 1000)
+        return f"SC-{date_str}-{secrets.token_hex(2).upper()}-{str(ts)[-4:]}"
 
     @classmethod
     def create_charter_request(

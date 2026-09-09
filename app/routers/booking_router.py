@@ -11,6 +11,11 @@ from app.schemas.booking import (
     BookingApiResponse,
     BookingStatusUpdate
 )
+from app.schemas.enquiry import (
+    ServiceEnquiryCreate,
+    ServiceEnquiryApiResponse,
+    ServiceEnquiryResponseData,
+)
 from app.services.booking_service import BookingService
 from app.security.dependencies import (
     get_optional_user,
@@ -22,6 +27,53 @@ from app.security.dependencies import (
 from app.services.booking_recycle_service import BookingRecycleService
 
 router = APIRouter(prefix="/api/bookings", tags=["Booking Engine"])
+
+
+@router.post("/enquiries", response_model=ServiceEnquiryApiResponse, status_code=201)
+@router.post("/enquiries/", response_model=ServiceEnquiryApiResponse, status_code=201, include_in_schema=False)
+async def create_service_enquiry(
+    payload: ServiceEnquiryCreate,
+    db: Session = Depends(get_db),
+):
+    """
+    Quote-only enquiries for hotel, transport, medical, travel, and cargo.
+    Persists a PENDING booking (₹0) for the admin Bookings desk — no payment.
+    Private charter must use /api/v1/charter/requests (Charter Desk).
+    """
+    if payload.service_category == "Private Charter":
+        raise HTTPException(
+            status_code=400,
+            detail="Private Charter enquiries must be submitted via /api/v1/charter/requests.",
+        )
+
+    booking = BookingService.create_service_enquiry(
+        db,
+        passenger_name=payload.passenger_name,
+        passenger_email=str(payload.passenger_email),
+        passenger_phone=payload.passenger_phone,
+        service_category=payload.service_category,
+        service_type=payload.service_type,
+        origin=payload.origin,
+        destination=payload.destination,
+        service_date=payload.service_date,
+        notes=payload.notes,
+        details=payload.details or {},
+    )
+
+    return ServiceEnquiryApiResponse(
+        success=True,
+        message="Enquiry received. Our desk will contact you shortly with a quotation.",
+        data=ServiceEnquiryResponseData(
+            id=str(booking.id),
+            booking_ref=booking.booking_ref,
+            passenger_name=booking.passenger_name,
+            service_category=booking.service_category,
+            service_type=booking.service_type,
+            status=booking.status.value if hasattr(booking.status, "value") else str(booking.status),
+            created_at=booking.created_at.isoformat() if booking.created_at else None,
+        ),
+    )
+
 
 @router.post("", response_model=BookingApiResponse, status_code=201)
 @router.post("/", response_model=BookingApiResponse, status_code=201)

@@ -69,6 +69,7 @@ class UserAuth(Base):
     password_hash: Mapped[str] = mapped_column(String, nullable=False)
     role: Mapped[Role] = mapped_column(Enum(Role), default=Role.CUSTOMER, nullable=False)
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 

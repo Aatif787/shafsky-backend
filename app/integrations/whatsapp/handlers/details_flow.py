@@ -354,10 +354,13 @@ class DetailsFlowMixin:
         if companions > 0:
             cls._transition_state(db, conv, "COMPANION_NAMES")
             plural = "s" if companions != 1 else ""
+            # NOTE: do not put a trailing comma after the last f-string — that
+            # would make `msg` a 1-tuple, Meta would reject the body as an array,
+            # and the customer would see silence after typing "Same".
             msg = (
                 f"Noted - {companions} more passenger{plural} travelling with you.\n\n"
                 f"Please send their full name{plural} in one message, separated by commas "
-                "(e.g., *Rahul Sharma, Priya Sharma*):",
+                f"(e.g., *Rahul Sharma, Priya Sharma*):"
             )
             whatsapp_client.send_text_message(conv.phone_number, msg)
             return {"status": "companion_names_prompt_sent", "success": True}
@@ -372,6 +375,11 @@ class DetailsFlowMixin:
     def _state_companion_names(cls, db: Session, conv: WhatsAppConversation, names_input: str) -> Dict[str, Any]:
         """Collect the other travellers' full names when passenger_count > 1."""
         if names_input.strip().lower() == "back":
+            cls._transition_state(db, conv, "CUSTOMER_PHONE")
+            whatsapp_client.send_text_message(
+                conv.phone_number,
+                "Please provide your contact phone number (or type 'Same' to use this WhatsApp number):",
+            )
             return {"status": "back_to_phone", "success": True}
 
         if names_input.strip().lower() in ("none", "n/a", "no", "-"):
@@ -391,13 +399,6 @@ class DetailsFlowMixin:
                 "Do you have any special requirements or notes? (Type *None* if no special requests):",
             )
             return {"status": "companion_names_saved", "success": True}
-
-            cls._transition_state(db, conv, "CUSTOMER_PHONE")
-            whatsapp_client.send_text_message(
-                conv.phone_number,
-                "Please provide your contact phone number (or type 'Same' to use this WhatsApp number):",
-            )
-            return {"status": "back_to_phone", "success": True}
 
         expected = max(0, int(conv.passenger_count or 1) - 1)
         meta = dict(conv.flight_details_json) if isinstance(conv.flight_details_json, dict) else {}

@@ -129,10 +129,20 @@ class TicketingService:
         cls,
         db: Session,
         search: Optional[str] = None,
+        customer_id: Optional[uuid.UUID] = None,
+        customer_email: Optional[str] = None,
         limit: int = 50,
         offset: int = 0
     ) -> List[AirTicketBooking]:
         stmt = select(AirTicketBooking).order_by(desc(AirTicketBooking.created_at))
+
+        if customer_id or customer_email:
+            filters = []
+            if customer_id:
+                filters.append(AirTicketBooking.customer_id == customer_id)
+            if customer_email:
+                filters.append(AirTicketBooking.contact_email.ilike(customer_email.strip()))
+            stmt = stmt.where(or_(*filters))
 
         if search:
             q = f"%{search.strip()}%"

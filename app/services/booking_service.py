@@ -324,14 +324,43 @@ class BookingService:
                 valid_profile_id = profile.id
 
         # 5. Calculate server-side authoritative price from Database (Ignore untrusted client price)
-        pax_count = 1
-        for pax_key in ("pax_adults", "guest_count", "guestCount", "passenger_count", "passengers"):
+        # Policy: Children & Infants are complimentary / free. Only Adults are billable.
+        adults_count = 1
+        for pax_key in ("pax_adults", "adults"):
             if metadata_json and pax_key in metadata_json:
                 try:
-                    pax_count = max(1, int(metadata_json.get(pax_key, 1)))
+                    adults_count = max(1, int(metadata_json.get(pax_key, 1)))
                     break
                 except (ValueError, TypeError):
-                    pax_count = 1
+                    adults_count = 1
+
+        children_count = 0
+        for ch_key in ("pax_children", "children", "child_count"):
+            if metadata_json and ch_key in metadata_json:
+                try:
+                    children_count = max(0, int(metadata_json.get(ch_key, 0)))
+                    break
+                except (ValueError, TypeError):
+                    children_count = 0
+
+        infants_count = 0
+        for inf_key in ("pax_infants", "infants", "infant_count"):
+            if metadata_json and inf_key in metadata_json:
+                try:
+                    infants_count = max(0, int(metadata_json.get(inf_key, 0)))
+                    break
+                except (ValueError, TypeError):
+                    infants_count = 0
+
+        total_guests = adults_count + children_count + infants_count
+        raw_guest_count = (metadata_json or {}).get("guest_count") or (metadata_json or {}).get("passenger_count")
+        if raw_guest_count:
+            try:
+                total_guests = max(total_guests, int(raw_guest_count))
+            except (ValueError, TypeError):
+                pass
+
+        billable_pax = adults_count
 
         from app.models.journey_models import SupportedAirport
         from app.services.service_airport_rules import normalize_iata
@@ -438,7 +467,7 @@ class BookingService:
             service_tier_or_slug=target_service,
             journey_type=journey_type,
             flight_type=flight_type,
-            pax_count=pax_count
+            pax_count=billable_pax
         )
 
         # All catalog prices are GST-inclusive (do not add extra tax)
@@ -453,10 +482,13 @@ class BookingService:
         metadata_json["flight_type"] = flight_type
         metadata_json["service_airport"] = target_airport
         metadata_json["package"] = target_service
-        metadata_json["pax_adults"] = pax_count
-        metadata_json["guest_count"] = pax_count
+        metadata_json["pax_adults"] = adults_count
+        metadata_json["pax_children"] = children_count
+        metadata_json["pax_infants"] = infants_count
+        metadata_json["guest_count"] = total_guests
+        metadata_json["billable_pax"] = billable_pax
         # Unit price the catalog charged (so invoices / retries never re-inflate).
-        metadata_json["unit_price"] = round(float(subtotal) / pax_count, 2) if pax_count else float(subtotal)
+        metadata_json["unit_price"] = round(float(subtotal) / billable_pax, 2) if billable_pax else float(subtotal)
 
         # Guard: never silently charge more than the client showed without an
         # explicit catalog reason. Log when the trusted DB total differs from
@@ -465,14 +497,15 @@ class BookingService:
         if client_total > 0 and abs(client_total - float(charge_amount)) > 0.009:
             logger.warning(
                 "[Booking Price] Client total ₹%.2f vs authoritative ₹%.2f "
-                "(airport=%s package=%s journey=%s flight_type=%s pax=%s)",
+                "(airport=%s package=%s journey=%s flight_type=%s billable_pax=%s total_guests=%s)",
                 client_total,
                 charge_amount,
                 target_airport,
                 target_service,
                 journey_type,
                 flight_type,
-                pax_count,
+                billable_pax,
+                total_guests,
             )
         # 6. Generate unique booking reference with retry on concurrency collision
         max_attempts = 5
@@ -519,7 +552,7 @@ class BookingService:
                         "passenger_name": new_booking.passenger_name,
                         "passenger_email": new_booking.passenger_email,
                         "passenger_phone": new_booking.passenger_phone,
-                        "passenger_count": pax_count,
+                        "passenger_count": total_guests,
                         "flight_num": new_booking.flight_num,
                         "origin_code": new_booking.origin_code,
                         "dest_code": new_booking.dest_code,
@@ -548,6 +581,159 @@ class BookingService:
             status_code=500,
             detail="Failed to create booking. Please try again."
         )
+
+    @classmethod
+    def create_service_enquiry(
+        cls,
+        db: Session,
+        *,
+        passenger_name: str,
+        passenger_email: str,
+        passenger_phone: str,
+        service_category: str,
+        service_type: str,
+        origin: Optional[str] = None,
+        destination: Optional[str] = None,
+        service_date: Optional[str] = None,
+        notes: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> Booking:
+        """
+        Persist a quote-style enquiry (hotel, transport, medical, travel, cargo)
+        as a PENDING booking with zero charge — visible in the admin Bookings desk.
+        Does not initiate payment or run airport catalog pricing.
+        """
+        now = datetime.now(timezone.utc)
+
+        email_ok, email_reason = is_acceptable_customer_email(passenger_email or "")
+        if not email_ok:
+            detail = REAL_EMAIL_HELP if email_reason == "reserved_or_placeholder" else "Invalid passenger email address."
+            raise HTTPException(status_code=422, detail=detail)
+
+        # Lightweight payload for category-specific validators (free-text routes, not IATA).
+        options: Dict[str, Any] = dict(details or {})
+        if origin:
+            options.setdefault("origin", origin)
+            options.setdefault("pickup_location", origin)
+            options.setdefault("pickup", origin)
+        if destination:
+            options.setdefault("destination", destination)
+            options.setdefault("dropoff_location", destination)
+            options.setdefault("dropoff", destination)
+        if notes:
+            options.setdefault("medical_notes", notes)
+            options.setdefault("patient_condition", notes)
+
+        class _EnquiryPayload:
+            pass
+
+        payload = _EnquiryPayload()
+        payload.passenger_name = passenger_name.strip()
+        payload.passenger_email = passenger_email.strip().lower()
+        payload.passenger_phone = passenger_phone.strip()
+        payload.service_category = service_category
+        payload.service_type = service_type
+        payload.origin_code = None
+        payload.dest_code = None
+        payload.flight_num = None
+        payload.departure_time = None
+        payload.arrival_time = None
+        payload.notes = notes
+        payload.service_options = options
+        payload.options = options
+        payload.selected_services = {"enquiry": True, "service_type": service_type}
+        payload.metadata_json = {}
+        payload.metadata = {}
+
+        resolved_category = ServiceValidator.validate_booking(payload)
+        if resolved_category == "Airport Assistance":
+            raise HTTPException(
+                status_code=400,
+                detail="Airport Assistance must be booked through the airport booking flow, not as an enquiry.",
+            )
+
+        metadata_json: Dict[str, Any] = {
+            "enquiry": True,
+            "quote_only": True,
+            "source": "web_solutions",
+            "origin_label": (origin or "").strip() or None,
+            "destination_label": (destination or "").strip() or None,
+            "service_date": (service_date or "").strip() or None,
+            "details": details or {},
+        }
+
+        max_attempts = 5
+        for attempt in range(max_attempts):
+            booking_ref = cls.generate_booking_ref()
+            while db.scalar(select(Booking).where(Booking.booking_ref == booking_ref)):
+                booking_ref = cls.generate_booking_ref()
+
+            new_booking = Booking(
+                id=uuid.uuid4(),
+                booking_ref=booking_ref,
+                user_id=None,
+                passenger_name=payload.passenger_name,
+                passenger_email=payload.passenger_email,
+                passenger_phone=payload.passenger_phone,
+                service_category=resolved_category,
+                flight_num=None,
+                origin_code=None,
+                dest_code=None,
+                departure_time=None,
+                arrival_time=None,
+                service_type=service_type.strip(),
+                selected_services=payload.selected_services,
+                service_options=options,
+                metadata_json=metadata_json,
+                total_amount=0.0,
+                currency="INR",
+                status=BookingStatus.PENDING,
+                version=1,
+                notes=notes,
+                created_at=now,
+                updated_at=now,
+            )
+
+            try:
+                db.add(new_booking)
+                db.commit()
+                db.refresh(new_booking)
+                try:
+                    from app.services.notification_service import NotificationService
+                    NotificationService.notify_booking_created(db, {
+                        "booking_ref": new_booking.booking_ref,
+                        "passenger_name": new_booking.passenger_name,
+                        "passenger_email": new_booking.passenger_email,
+                        "passenger_phone": new_booking.passenger_phone,
+                        "passenger_count": 1,
+                        "flight_num": None,
+                        "origin_code": origin,
+                        "dest_code": destination,
+                        "airport_code": None,
+                        "journey_type": "ENQUIRY",
+                        "service_type": new_booking.service_type,
+                        "service_name": new_booking.service_type,
+                        "departure_time": service_date,
+                        "terminal": None,
+                        "total_amount": 0.0,
+                        "currency": "INR",
+                        "status": "PENDING",
+                    })
+                except Exception:
+                    logger.exception(
+                        "Enquiry persisted but notification dispatch failed for %s",
+                        new_booking.booking_ref,
+                    )
+                return new_booking
+            except IntegrityError as exc:
+                db.rollback()
+                if attempt == max_attempts - 1:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Failed to generate unique enquiry reference. Please try again.",
+                    ) from exc
+
+        raise HTTPException(status_code=500, detail="Failed to create enquiry. Please try again.")
 
     @classmethod
     def get_user_bookings(cls, db: Session, email: str, profile_id: Optional[uuid.UUID] = None) -> List[Booking]:

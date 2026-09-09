@@ -10,7 +10,7 @@ from app.schemas.charter import (
     PrivateCharterAdminListItem,
 )
 from app.services.charter_service import CharterService
-from app.security.dependencies import get_required_admin, get_optional_user
+from app.security.dependencies import get_required_admin, get_optional_user, STAFF_OR_ADMIN_ROLES
 
 router = APIRouter(tags=["Private Charter Engine"])
 
@@ -66,33 +66,44 @@ async def create_charter_request_endpoint(
     "/api/v1/charter/requests/{reference}",
     response_model=Dict[str, Any],
     summary="Lookup Private Charter Request Status",
-    description="Public reference lookup for submitted charter requests.",
+    description="Reference lookup for submitted charter requests with customer PII protection.",
 )
 @router.get("/api/charter/requests/{reference}", response_model=Dict[str, Any], include_in_schema=False)
 async def get_charter_request_by_ref_endpoint(
     reference: str,
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
     charter_req = CharterService.get_by_reference(db, reference)
     if not charter_req:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Charter request not found.")
 
+    is_staff = bool(current_user and current_user.get("role") in STAFF_OR_ADMIN_ROLES)
+    user_email = ((current_user.get("sub") or current_user.get("email") or "") if current_user else "").lower()
+    is_owner = bool(user_email and charter_req.email and charter_req.email.lower() == user_email)
+    show_full_pii = bool(is_staff or is_owner)
+
+    masked_name = None
+    if charter_req.customer_name:
+        parts = charter_req.customer_name.strip().split()
+        masked_name = " ".join([p[0] + "***" for p in parts]) if parts else "***"
+
     return {
         "success": True,
         "data": {
             "request_reference": charter_req.request_reference,
             "status": charter_req.status.value,
-            "customer_name": charter_req.customer_name,
+            "customer_name": charter_req.customer_name if show_full_pii else masked_name,
             "trip_type": charter_req.trip_type,
             "origin": charter_req.origin,
             "destination": charter_req.destination,
             "departure_date": charter_req.departure_date,
             "departure_time": charter_req.departure_time,
             "return_date": charter_req.return_date,
-            "itinerary": charter_req.itinerary,
+            "itinerary": charter_req.itinerary if show_full_pii else None,
             "passengers": charter_req.passengers,
             "aircraft_preference": charter_req.aircraft_preference,
-            "travel_requirements": charter_req.travel_requirements,
+            "travel_requirements": charter_req.travel_requirements if show_full_pii else None,
             "created_at": charter_req.created_at.isoformat(),
         },
     }

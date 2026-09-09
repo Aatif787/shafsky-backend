@@ -929,14 +929,45 @@ class WhatsAppBookingStateMachine(
                 "Please provide your email address for booking confirmation:",
                 client=whatsapp_client,
             )
-        elif curr == "ADDITIONAL_REQUIREMENTS":
-            conv.additional_requirements = None
+        elif curr == "COMPANION_NAMES":
+            # Clear any partial companion names and return to phone step
+            if isinstance(conv.flight_details_json, dict):
+                meta = dict(conv.flight_details_json)
+                meta.pop("companion_names_partial", None)
+                meta.pop("companion_names_attempts", None)
+                meta.pop("passenger_names", None)
+                meta.pop("companion_names_pending", None)
+                conv.flight_details_json = meta
+                flag_modified(conv, "flight_details_json")
             cls._transition_state(db, conv, "CUSTOMER_PHONE")
             wa_delivery.send_text(
                 conv.phone_number,
-                "Please provide your contact phone number (or type 'Same'):",
+                "Please provide your contact phone number (or type 'Same' to use this WhatsApp number):",
                 client=whatsapp_client,
             )
+        elif curr == "ADDITIONAL_REQUIREMENTS":
+            conv.additional_requirements = None
+            # If multi-pax, go back to companion names; otherwise phone
+            companions = max(0, int(conv.passenger_count or 1) - 1)
+            if companions > 0:
+                cls._transition_state(db, conv, "COMPANION_NAMES")
+                plural = "s" if companions != 1 else ""
+                wa_delivery.send_text(
+                    conv.phone_number,
+                    (
+                        f"Noted - {companions} more passenger{plural} travelling with you.\n\n"
+                        f"Please send their full name{plural} in one message, separated by commas "
+                        f"(e.g., *Rahul Sharma, Priya Sharma*):"
+                    ),
+                    client=whatsapp_client,
+                )
+            else:
+                cls._transition_state(db, conv, "CUSTOMER_PHONE")
+                wa_delivery.send_text(
+                    conv.phone_number,
+                    "Please provide your contact phone number (or type 'Same'):",
+                    client=whatsapp_client,
+                )
         elif curr == "BOOKING_REVIEW":
             cls._transition_state(db, conv, "ADDITIONAL_REQUIREMENTS")
             wa_delivery.send_text(

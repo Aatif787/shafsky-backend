@@ -1,9 +1,15 @@
 import os
+import sys
+from pathlib import Path
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool
 from alembic import context
 from dotenv import load_dotenv
+
+# Ensure the project root is on sys.path so `app.*` imports resolve
+# regardless of which directory Alembic is invoked from (e.g. Docker, CI).
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # Load environment variables from .env file
 load_dotenv()

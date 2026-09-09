@@ -31,9 +31,18 @@ def validate_secrets_on_startup():
     if getattr(settings, "ALLOW_HS256_LEGACY_FALLBACK", False) or getattr(settings, "JWT_ALGORITHM", "RS256").upper() == "HS256":
         critical_secrets.append(("JWT_SECRET", str(settings.JWT_SECRET)))
 
+    if env not in ["development", "dev", "test", "testing"]:
+        critical_secrets.extend([
+            ("RAZORPAY_KEY_ID", str(getattr(settings, "RAZORPAY_KEY_ID", ""))),
+            ("RAZORPAY_KEY_SECRET", str(getattr(settings, "RAZORPAY_KEY_SECRET", ""))),
+            ("WHATSAPP_ACCESS_TOKEN", str(getattr(settings, "WHATSAPP_ACCESS_TOKEN", ""))),
+            ("WHATSAPP_APP_SECRET", str(getattr(settings, "WHATSAPP_APP_SECRET", ""))),
+            ("RESEND_API_KEY", str(getattr(settings, "RESEND_API_KEY", ""))),
+        ])
+
     missing = []
     for name, value in critical_secrets:
-        if not value or value.strip() == "" or "change-this" in value.lower() or "secret" == value.lower():
+        if not value or value.strip() == "" or "change-this" in value.lower() or "your_" in value.lower() or "secret" == value.lower():
             missing.append(name)
 
     # Validate RSA Key loading and key ID calculation

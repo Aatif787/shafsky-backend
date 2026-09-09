@@ -14,7 +14,9 @@ from app.security.dependencies import (
     get_required_user,
     get_required_staff_or_admin,
     get_required_admin,
+    STAFF_OR_ADMIN_ROLES,
 )
+from app.models.shared_domain import Note
 from app.services.assignment_service import AssignmentService
 from app.services.timeline_service import TimelineService
 from app.services.notes_service import NotesService
@@ -256,12 +258,16 @@ def create_note(
 ):
     """Create a new note for an entity."""
     author_id = current_user.get("sub") or current_user.get("email") or "SYSTEM"
+    role = current_user.get("role", "CUSTOMER")
+    visibility = data.visibility
+    if role not in STAFF_OR_ADMIN_ROLES:
+        visibility = "CUSTOMER"
     return NotesService.create(
         db,
         entity_type=data.entity_type,
         entity_id=data.entity_id,
         content=data.content,
-        visibility=data.visibility,
+        visibility=visibility,
         author_id=author_id,
         mentions=data.mentions,
     )
@@ -280,6 +286,12 @@ def update_note(
 ):
     """Update note content. Creates an immutable revision snapshot."""
     editor_id = current_user.get("sub") or current_user.get("email") or "SYSTEM"
+    role = current_user.get("role", "CUSTOMER")
+    note = db.query(Note).filter(Note.id == note_id, Note.is_deleted == False).first()
+    if not note:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Note '{note_id}' not found.")
+    if role not in STAFF_OR_ADMIN_ROLES and note.author_id not in (current_user.get("sub"), current_user.get("email")):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to edit this note.")
     try:
         return NotesService.update(db, note_id=note_id, content=data.content, editor_id=editor_id, mentions=data.mentions)
     except ValueError as err:
@@ -319,6 +331,9 @@ def get_entity_notes(
     current_user=Depends(get_required_user),
 ):
     """Retrieve paginated notes for an entity with optional visibility filter."""
+    role = current_user.get("role", "CUSTOMER")
+    if role not in STAFF_OR_ADMIN_ROLES:
+        visibility = "CUSTOMER"
     result = NotesService.get_notes(db, entity_type, entity_id, visibility, limit, offset)
     return result["data"]
 
@@ -381,7 +396,8 @@ def get_entity_attachments(
     current_user=Depends(get_required_user),
 ):
     """Retrieve attachments for an entity."""
-    return AttachmentService.get_attachments(db, entity_type, entity_id, category)
+    user_role = current_user.get("role", "CUSTOMER")
+    return AttachmentService.get_attachments(db, entity_type, entity_id, category, user_role=user_role)
 
 
 @router.delete(
