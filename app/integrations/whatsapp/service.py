@@ -620,6 +620,11 @@ class WhatsAppBookingStateMachine(
                 "reprompt_flight",
                 "reprompt_airport",
                 "edit_prompt",
+                "companion_names_partial",
+                "invalid_companion_names",
+                "companion_names_pending_ops",
+                "companion_names_saved",
+                "back_to_phone",
             ]:
                 logger.warning(
                     "[WhatsApp Session] State handler returned unsuccessful result for %s in state %s",

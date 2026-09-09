@@ -413,6 +413,33 @@ class DetailsFlowMixin:
                 continue
             merged.append(name)
 
+        if not merged:
+            # Nothing usable parsed from the input -> reprompt cleanly.
+            attempts += 1
+            meta["companion_names_attempts"] = attempts
+            conv.flight_details_json = meta
+            flag_modified(conv, "flight_details_json")
+            db.commit()
+            if attempts >= 2:
+                # Ops completes the manifest before service.
+                meta["passenger_names"] = []
+                meta["companion_names_pending"] = expected
+                conv.flight_details_json = meta
+                flag_modified(conv, "flight_details_json")
+                cls._transition_state(db, conv, "ADDITIONAL_REQUIREMENTS")
+                whatsapp_client.send_text_message(
+                    conv.phone_number,
+                    "Noted - our team will confirm the passenger names with you before your service.\n\n"
+                    "Do you have any special requirements or notes? (Type *None* if no special requests):",
+                )
+                return {"status": "companion_names_pending_ops", "success": True}
+            whatsapp_client.send_text_message(
+                conv.phone_number,
+                "I couldn't read any valid names. Please send the passenger name(s) separated by commas "
+                "(e.g., Rahul Sharma, Priya Sharma):",
+            )
+            return {"status": "invalid_companion_names", "success": True}
+
         if len(merged) < expected:
             attempts += 1
             meta["companion_names_partial"] = merged
@@ -440,7 +467,7 @@ class DetailsFlowMixin:
                 + ("s" if remaining != 1 else "")
                 + " in one message:",
             )
-            return {"status": "companion_names_partial", "success": False}
+            return {"status": "companion_names_partial", "success": True}
 
         meta["passenger_names"] = merged[:expected]
         meta.pop("companion_names_partial", None)
