@@ -31,11 +31,6 @@ from app.workflow.definitions import seed_default_workflows
 
 
 def get_test_db():
-    Base.metadata.create_all(bind=engine)
-    from sqlalchemy import text
-    with engine.connect() as conn:
-        conn.execute(text("ALTER TABLE workflow_instances ADD COLUMN IF NOT EXISTS is_frozen BOOLEAN DEFAULT FALSE;"))
-        conn.commit()
     db = SessionLocal()
     try:
         yield db

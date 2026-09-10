@@ -84,12 +84,6 @@ def seed_del_production_packages(db: Session, del_airport: SupportedAirport, ser
     """
     print("\n-- Configuring Production Packages for Delhi (DEL) (T1 & T2, T3 Dom Dep/Arr, T3 Intl Dep/Arr, Transit) --")
 
-    try:
-        db.execute(text("ALTER TABLE airport_services ALTER COLUMN flight_type TYPE VARCHAR(50);"))
-        db.commit()
-    except Exception:
-        db.rollback()
-
     # Remove old services mapped to DEL Domestic Departure, Domestic Arrival, Intl Departure T3, Intl Arrival T3, and Transit
     db.query(AirportService).filter_by(
         airport_id=del_airport.id,

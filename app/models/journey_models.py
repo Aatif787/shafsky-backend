@@ -16,6 +16,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 from app.database import Base
+from app.models.schema import UserAuth  # noqa: F401 - ensures user_auth table is registered in metadata
 
 
 class SupportedAirport(Base):
@@ -90,6 +91,7 @@ class AirportService(Base):
         Index("ix_airport_services_flight_type", "flight_type"),
         Index("ix_airport_services_terminal", "terminal"),
         Index("ix_airport_services_available", "is_available"),
+        Index("ix_airport_services_deleted_at", "deleted_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -120,6 +122,22 @@ class AirportService(Base):
     display_priority: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     price: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=2499.00)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="INR")
+
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+    deleted_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("user_auth.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+    )
+    deleted_by_email: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True, default=None
+    )
+    deleted_by_role: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True, default=None
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)

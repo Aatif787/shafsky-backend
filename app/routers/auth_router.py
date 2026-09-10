@@ -5,11 +5,19 @@ Authentication Router with Refresh Token Rotation, HttpOnly Cookie Security, and
 import os
 import uuid
 from datetime import datetime, timezone
+<<<<<<< HEAD
 from typing import Dict, Any
 
 from fastapi import APIRouter, HTTPException, Depends, Request, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import select
+=======
+from typing import Optional, Literal
+
+from fastapi import APIRouter, HTTPException, Depends, Header, Request, Response
+from sqlalchemy.orm import Session
+from sqlalchemy import select, func, or_
+>>>>>>> 3aad1c9 (feat(backend): add super admin airport services recycle bin, atq pricing, and schema hardening)
 
 from app.database import get_db
 from app.models.schema import UserAuth, Profile, RefreshToken, Role
@@ -101,7 +109,8 @@ async def login(
     response: Response,
     db: Session = Depends(get_db)
 ):
-    email = payload.email.lower().strip()
+    raw_email = payload.email.strip()
+    email_clean = raw_email.lower()
     password = payload.password
 
     device_info = DeviceTracking.get_client_device(request)
@@ -117,14 +126,22 @@ async def login(
     if allow_bootstrap:
         admin_email = (os.getenv("ADMIN_EMAIL") or "").lower().strip()
         admin_pass = os.getenv("ADMIN_PASSWORD") or ""
-        if admin_email and admin_pass and email == admin_email and password == admin_pass:
+        if admin_email and admin_pass and (email_clean == admin_email or raw_email == admin_email) and password == admin_pass:
             existing_super = db.scalar(
                 select(UserAuth).where(UserAuth.role == Role.SUPER_ADMIN).limit(1)
             )
-            user = db.scalar(select(UserAuth).where(UserAuth.email == email))
+            user = db.scalar(
+                select(UserAuth).where(
+                    or_(
+                        func.lower(UserAuth.email) == email_clean,
+                        UserAuth.email == raw_email,
+                        UserAuth.email == email_clean
+                    )
+                )
+            )
             if not existing_super and not user:
                 user = UserAuth(
-                    email=email,
+                    email=raw_email,
                     password_hash=AuthService.hash_password(password),
                     role=Role.SUPER_ADMIN,
                     is_verified=True,
@@ -133,7 +150,15 @@ async def login(
                 db.commit()
                 db.refresh(user)
 
-    user = db.scalar(select(UserAuth).where(UserAuth.email == email))
+    user = db.scalar(
+        select(UserAuth).where(
+            or_(
+                func.lower(UserAuth.email) == email_clean,
+                UserAuth.email == raw_email,
+                UserAuth.email == email_clean
+            )
+        )
+    )
     user_data = None
     if user and AuthService.verify_password(password, user.password_hash):
         if not getattr(user, "is_active", True):
@@ -144,7 +169,7 @@ async def login(
             "role": user.role.value if hasattr(user.role, "value") else str(user.role),
         }
 
-    if not user_data:
+    if not user or not user_data:
         raise HTTPException(status_code=401, detail="Invalid email or password credentials.")
 
     access_token = AuthService.create_access_token(user_data)
@@ -161,6 +186,10 @@ async def login(
     # C2: Refresh token only in HttpOnly cookie — never in JSON body.
     _set_refresh_cookie(response, raw_refresh)
 
+    # Look up profile full_name if exists
+    profile = db.scalar(select(Profile).where(Profile.auth_id == user.id))
+    full_name = profile.full_name if (profile and profile.full_name) else user_data["sub"].split("@")[0].title()
+
     return ApiResponse(
         success=True,
         data=AuthDataResponse(
@@ -170,7 +199,7 @@ async def login(
                 id=user_data["user_id"],
                 email=user_data["sub"],
                 role=user_data["role"],
-                fullName=user_data["sub"].split("@")[0].title()
+                fullName=full_name
             )
         )
     )
@@ -180,6 +209,10 @@ async def login(
 async def refresh_token(
     request: Request,
     response: Response,
+<<<<<<< HEAD
+=======
+    _payload: Optional[RefreshTokenRequest] = None,
+>>>>>>> 3aad1c9 (feat(backend): add super admin airport services recycle bin, atq pricing, and schema hardening)
     db: Session = Depends(get_db)
 ):
     device_info = DeviceTracking.get_client_device(request)
@@ -193,32 +226,60 @@ async def refresh_token(
     try:
         token_data = AuthService.rotate_refresh_token(db, raw_refresh_token, device_info)
         _set_refresh_cookie(response, token_data["refreshToken"])
+
+        decoded = AuthService.decode_access_token(token_data["accessToken"])
+        u_id = str(decoded.get("user_id") or decoded.get("userId") or "")
+        u_email = str(decoded.get("sub") or decoded.get("email") or "")
+        u_role = str(decoded.get("role") or "")
+
+        full_name = None
+        if u_id:
+            try:
+                prof = db.scalar(select(Profile).where(Profile.auth_id == uuid.UUID(u_id)))
+                if prof and prof.full_name:
+                    full_name = prof.full_name
+            except Exception:
+                pass
+        if not full_name and u_email:
+            full_name = u_email.split("@")[0].title()
+
         return ApiResponse(
             success=True,
             data=AuthDataResponse(
                 accessToken=token_data["accessToken"],
+                refreshToken=None,
+                user=UserResponse(
+                    id=u_id,
+                    email=u_email,
+                    role=u_role,
+                    fullName=full_name,
+                ),
             )
         )
     except ValueError as ve:
         err_code = str(ve)
         _clear_refresh_cookie(response)
         if err_code == "REPLAY_ATTACK_DETECTED":
-            raise HTTPException(status_code=401, detail="Security violation: Token replay attack detected. All sessions revoked.")
+            raise HTTPException(status_code=401, detail="Security violation: Token replay attack detected. All sessions revoked.") from ve
         elif err_code == "REFRESH_TOKEN_EXPIRED":
-            raise HTTPException(status_code=401, detail="Refresh token has expired. Please log in again.")
+            raise HTTPException(status_code=401, detail="Refresh token has expired. Please log in again.") from ve
         elif err_code == "ACCOUNT_INACTIVE":
-            raise HTTPException(status_code=403, detail="Account has been suspended or deactivated.")
+            raise HTTPException(status_code=403, detail="Account has been suspended or deactivated.") from ve
         else:
-            raise HTTPException(status_code=401, detail="Invalid or revoked refresh token.")
-    except Exception:
+            raise HTTPException(status_code=401, detail="Invalid or revoked refresh token.") from ve
+    except Exception as exc:
         _clear_refresh_cookie(response)
-        raise HTTPException(status_code=401, detail="Invalid refresh token signature.")
+        raise HTTPException(status_code=401, detail="Invalid refresh token signature.") from exc
 
 
 @router.post("/logout", response_model=ApiResponse)
 async def logout(
     request: Request,
     response: Response,
+<<<<<<< HEAD
+=======
+    _payload: Optional[RefreshTokenRequest] = None,
+>>>>>>> 3aad1c9 (feat(backend): add super admin airport services recycle bin, atq pricing, and schema hardening)
     db: Session = Depends(get_db)
 ):
     raw_refresh = request.cookies.get("refreshToken") or request.cookies.get("refresh_token")
@@ -231,14 +292,55 @@ async def logout(
 
 
 @router.get("/me", response_model=ApiResponse)
+<<<<<<< HEAD
 async def get_me(decoded: Dict[str, Any] = Depends(get_required_user)):
+=======
+async def get_me(
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid authorization header.")
+
+    token = authorization.split(" ", 1)[1].strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing or invalid authorization header.")
+
+    try:
+        decoded = AuthService.decode_access_token(token)
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Token expired or invalid.") from exc
+
+    u_id = str(decoded.get("user_id") or decoded.get("userId") or "")
+    u_email = str(decoded.get("sub") or decoded.get("email") or "")
+    u_role = str(decoded.get("role") or "")
+
+    full_name = None
+    if u_id:
+        try:
+            prof = db.scalar(select(Profile).where(Profile.auth_id == uuid.UUID(u_id)))
+            if prof and prof.full_name:
+                full_name = prof.full_name
+        except Exception:
+            pass
+    if not full_name and u_email:
+        full_name = u_email.split("@")[0].title()
+
+>>>>>>> 3aad1c9 (feat(backend): add super admin airport services recycle bin, atq pricing, and schema hardening)
     return ApiResponse(
         success=True,
         data=AuthDataResponse(
             user=UserResponse(
+<<<<<<< HEAD
                 id=decoded.get("user_id", decoded.get("userId", "")),
                 email=decoded.get("sub", decoded.get("email", "")),
                 role=decoded.get("role", "")
+=======
+                id=u_id,
+                email=u_email,
+                role=u_role,
+                fullName=full_name,
+>>>>>>> 3aad1c9 (feat(backend): add super admin airport services recycle bin, atq pricing, and schema hardening)
             )
         )
     )
@@ -249,8 +351,27 @@ async def get_active_device_sessions(
     decoded: Dict[str, Any] = Depends(get_required_user),
     db: Session = Depends(get_db)
 ):
+<<<<<<< HEAD
     user_id_str = _require_user_id(decoded)
     u_uuid = _parse_user_uuid(user_id_str)
+=======
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing authorization header.")
+    token = authorization.split(" ", 1)[1].strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing authorization header.")
+    try:
+        decoded = AuthService.decode_access_token(token)
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Token expired or invalid.") from exc
+    user_id_str = decoded.get("user_id")
+
+    try:
+        u_uuid = uuid.UUID(user_id_str) if user_id_str else None
+    except Exception:
+        u_uuid = None
+
+>>>>>>> 3aad1c9 (feat(backend): add super admin airport services recycle bin, atq pricing, and schema hardening)
     if not u_uuid:
         raise HTTPException(status_code=401, detail="Token missing user identity.")
 
@@ -259,21 +380,30 @@ async def get_active_device_sessions(
         select(RefreshToken).where(
             RefreshToken.user_id == u_uuid,
             RefreshToken.revoked.is_(False),
+<<<<<<< HEAD
             RefreshToken.expires_at > now,
         )
+=======
+            RefreshToken.expires_at > now
+        ).order_by(RefreshToken.last_activity.desc())
+>>>>>>> 3aad1c9 (feat(backend): add super admin airport services recycle bin, atq pricing, and schema hardening)
     ).all())
 
-    sessions = [
-        {
+    seen_devices = set()
+    sessions = []
+    for r in records:
+        dev_id = r.device_id or str(r.id)
+        if dev_id in seen_devices:
+            continue
+        seen_devices.add(dev_id)
+        sessions.append({
             "deviceId": r.device_id,
             "browser": r.browser,
             "platform": r.platform,
             "ipAddress": r.ip_address,
             "lastActivity": r.last_activity.isoformat() if r.last_activity else r.created_at.isoformat(),
             "createdAt": r.created_at.isoformat()
-        }
-        for r in records
-    ]
+        })
 
     return ApiResponse(success=True, data=sessions)
 
@@ -284,8 +414,30 @@ async def logout_device(
     decoded: Dict[str, Any] = Depends(get_required_user),
     db: Session = Depends(get_db)
 ):
+<<<<<<< HEAD
     user_id_str = _require_user_id(decoded)
     DeviceTracking.revoke_device_session(db, user_id_str, device_id)
+=======
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing authorization header.")
+    token = authorization.split(" ", 1)[1].strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing authorization header.")
+    try:
+        decoded = AuthService.decode_access_token(token)
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Token expired or invalid.") from exc
+    user_id_str = decoded.get("user_id")
+
+    try:
+        u_uuid = uuid.UUID(user_id_str) if user_id_str else None
+    except Exception:
+        u_uuid = None
+
+    if u_uuid:
+        DeviceTracking.revoke_device_session(db, u_uuid, device_id)
+
+>>>>>>> 3aad1c9 (feat(backend): add super admin airport services recycle bin, atq pricing, and schema hardening)
     return ApiResponse(success=True, data={"message": f"Device session '{device_id}' revoked."})
 
 
@@ -294,8 +446,30 @@ async def logout_all_devices(
     decoded: Dict[str, Any] = Depends(get_required_user),
     db: Session = Depends(get_db)
 ):
+<<<<<<< HEAD
     user_id_str = _require_user_id(decoded)
     DeviceTracking.revoke_all_user_sessions(db, user_id_str)
+=======
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing authorization header.")
+    token = authorization.split(" ", 1)[1].strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing authorization header.")
+    try:
+        decoded = AuthService.decode_access_token(token)
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Token expired or invalid.") from exc
+    user_id_str = decoded.get("user_id")
+
+    try:
+        u_uuid = uuid.UUID(user_id_str) if user_id_str else None
+    except Exception:
+        u_uuid = None
+
+    if u_uuid:
+        DeviceTracking.revoke_all_user_sessions(db, u_uuid)
+
+>>>>>>> 3aad1c9 (feat(backend): add super admin airport services recycle bin, atq pricing, and schema hardening)
     return ApiResponse(success=True, data={"message": "All device sessions successfully revoked."})
 
 
@@ -304,7 +478,21 @@ async def get_user_profile(
     decoded: Dict[str, Any] = Depends(get_required_user),
     db: Session = Depends(get_db)
 ):
+<<<<<<< HEAD
     user_id_str = decoded.get("user_id") or decoded.get("userId") or ""
+=======
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing authorization header.")
+
+    token = authorization.split(" ", 1)[1].strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing authorization header.")
+    try:
+        decoded = AuthService.decode_access_token(token)
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Token expired or invalid.") from exc
+    user_id_str = decoded.get("user_id")
+>>>>>>> 3aad1c9 (feat(backend): add super admin airport services recycle bin, atq pricing, and schema hardening)
     email = decoded.get("sub", "")
     u_uuid = _parse_user_uuid(user_id_str)
 
@@ -324,6 +512,7 @@ async def get_user_profile(
                 "email": email,
                 "full_name": email.split("@")[0].title() if email else "User",
                 "role": decoded.get("role", "CUSTOMER"),
+                "phone": None,
                 "phone_number": None,
                 "avatar_url": None,
                 "company": None,
@@ -333,7 +522,27 @@ async def get_user_profile(
             }
         )
 
+<<<<<<< HEAD
     return ApiResponse(success=True, data=_profile_payload(profile))
+=======
+    return ApiResponse(
+        success=True,
+        data={
+            "id": str(profile.id),
+            "auth_id": str(profile.auth_id),
+            "email": profile.email,
+            "full_name": profile.full_name or profile.email.split("@")[0].title(),
+            "phone": profile.phone_number,
+            "phone_number": profile.phone_number,
+            "avatar_url": profile.avatar_url,
+            "role": profile.role.value if hasattr(profile.role, "value") else str(profile.role),
+            "company": profile.company,
+            "vip_status": profile.vip_status,
+            "vip_tier": profile.vip_tier.value if hasattr(profile.vip_tier, "value") else str(profile.vip_tier),
+            "passport_number": profile.passport_number,
+        }
+    )
+>>>>>>> 3aad1c9 (feat(backend): add super admin airport services recycle bin, atq pricing, and schema hardening)
 
 
 @router.patch("/profile", response_model=ApiResponse)
@@ -342,9 +551,29 @@ async def update_user_profile(
     decoded: Dict[str, Any] = Depends(get_required_user),
     db: Session = Depends(get_db)
 ):
+<<<<<<< HEAD
     user_id_str = decoded.get("user_id") or decoded.get("userId")
     email = (decoded.get("sub") or "").lower()
     u_uuid = _parse_user_uuid(user_id_str)
+=======
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing authorization header.")
+
+    token = authorization.split(" ", 1)[1].strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing authorization header.")
+    try:
+        decoded = AuthService.decode_access_token(token)
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Token expired or invalid.") from exc
+    user_id_str = decoded.get("user_id")
+    email = decoded.get("sub", "").lower()
+
+    try:
+        u_uuid = uuid.UUID(user_id_str) if user_id_str else None
+    except Exception:
+        u_uuid = None
+>>>>>>> 3aad1c9 (feat(backend): add super admin airport services recycle bin, atq pricing, and schema hardening)
 
     user = None
     if u_uuid:
@@ -362,6 +591,10 @@ async def update_user_profile(
         profile = db.scalar(select(Profile).where(Profile.email == email))
 
     if not profile:
+<<<<<<< HEAD
+=======
+        # Create profile record if missing
+>>>>>>> 3aad1c9 (feat(backend): add super admin airport services recycle bin, atq pricing, and schema hardening)
         profile = Profile(
             auth_id=user.id,
             email=user.email,
@@ -388,7 +621,27 @@ async def update_user_profile(
     db.commit()
     db.refresh(profile)
 
+<<<<<<< HEAD
     return ApiResponse(success=True, data=_profile_payload(profile))
+=======
+    return ApiResponse(
+        success=True,
+        data={
+            "id": str(profile.id),
+            "auth_id": str(profile.auth_id),
+            "email": profile.email,
+            "full_name": profile.full_name,
+            "phone": profile.phone_number,
+            "phone_number": profile.phone_number,
+            "avatar_url": profile.avatar_url,
+            "role": profile.role.value if hasattr(profile.role, "value") else str(profile.role),
+            "company": profile.company,
+            "vip_status": profile.vip_status,
+            "vip_tier": profile.vip_tier.value if hasattr(profile.vip_tier, "value") else str(profile.vip_tier),
+            "passport_number": profile.passport_number,
+        }
+    )
+>>>>>>> 3aad1c9 (feat(backend): add super admin airport services recycle bin, atq pricing, and schema hardening)
 
 
 @router.post("/change-password", response_model=ApiResponse)
@@ -397,9 +650,29 @@ async def change_password(
     decoded: Dict[str, Any] = Depends(get_required_user),
     db: Session = Depends(get_db)
 ):
+<<<<<<< HEAD
     user_id_str = decoded.get("user_id") or decoded.get("userId")
     email = (decoded.get("sub") or "").lower()
     u_uuid = _parse_user_uuid(user_id_str)
+=======
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing authorization header.")
+
+    token = authorization.split(" ", 1)[1].strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing authorization header.")
+    try:
+        decoded = AuthService.decode_access_token(token)
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Token expired or invalid.") from exc
+    user_id_str = decoded.get("user_id")
+    email = decoded.get("sub", "").lower()
+
+    try:
+        u_uuid = uuid.UUID(user_id_str) if user_id_str else None
+    except Exception:
+        u_uuid = None
+>>>>>>> 3aad1c9 (feat(backend): add super admin airport services recycle bin, atq pricing, and schema hardening)
 
     user = None
     if u_uuid:
@@ -426,6 +699,6 @@ async def change_password(
     db.commit()
 
     # Revoke all device and refresh token sessions upon password change
-    DeviceTracking.revoke_all_user_sessions(db, str(user.id))
+    DeviceTracking.revoke_all_user_sessions(db, user.id)
 
     return ApiResponse(success=True, data={"message": "Password updated successfully. All other active sessions have been revoked."})

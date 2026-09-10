@@ -11,21 +11,30 @@ Usage:
 
 import argparse
 import sys
-from sqlalchemy import select
+from sqlalchemy import select, func, or_
 from app.database import SessionLocal
 from app.models.schema import UserAuth
 from app.services.auth_service import AuthService
 
 
 def reset_password(email: str, new_password: str) -> bool:
-    email_clean = email.strip().lower()
+    raw_email = email.strip()
+    email_clean = raw_email.lower()
     if not new_password or len(new_password) < 8:
         print("[-] Error: Password must be at least 8 characters long.", file=sys.stderr)
         return False
 
     db = SessionLocal()
     try:
-        user = db.scalar(select(UserAuth).where(UserAuth.email == email_clean))
+        user = db.scalar(
+            select(UserAuth).where(
+                or_(
+                    func.lower(UserAuth.email) == email_clean,
+                    UserAuth.email == raw_email,
+                    UserAuth.email == email_clean
+                )
+            )
+        )
         if not user:
             print(f"[-] Error: User with email '{email_clean}' not found in database.", file=sys.stderr)
             return False

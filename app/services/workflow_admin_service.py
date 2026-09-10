@@ -277,6 +277,7 @@ class WorkflowAdminService:
         timeline_items.sort(key=lambda item: item["timestamp"] or datetime.min.replace(tzinfo=timezone.utc))
 
         return {
+            "success": True,
             "instance_id": instance_id,
             "total": len(timeline_items),
             "timeline": timeline_items
@@ -353,7 +354,7 @@ class WorkflowAdminService:
         if getattr(instance, "is_frozen", False):
             instance.is_frozen = False  # Auto-unfreeze on admin retry
 
-        cls.write_audit_log(
+        WorkflowEngine.write_audit_log(
             db,
             instance_id=instance.id,
             event_type="WORKFLOW_RETRY_EXECUTED",

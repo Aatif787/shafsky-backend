@@ -2,7 +2,7 @@ from typing import Optional, Any
 from pydantic import BaseModel, EmailStr, Field
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    email: str = Field(..., description="Email address or admin ID")
     password: str
 
 class RefreshTokenRequest(BaseModel):

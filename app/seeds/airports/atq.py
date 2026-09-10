@@ -9,7 +9,7 @@ def seed_atq_production_packages(db: Session, atq_airport: SupportedAirport, ser
     Seeds production packages:
     - Domestic Departure: ₹2,500
     - Domestic Arrival: ₹2,500
-    - International Departure: ₹2,000
+    - International Departure: ₹2,500
     - International Arrival: ₹2,500
     """
     print("\n-- Configuring Production Packages for Amritsar Airport (ATQ) --")

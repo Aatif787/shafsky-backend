@@ -147,7 +147,7 @@ class AdminService:
             actor_email=admin_email,
             action="STAFF_ASSIGNMENT",
             resource_type="BOOKING",
-            resource_id=str(booking.booking_ref),
+            resource_id=booking.booking_ref,
             details={"staffUser": staff_user.email, "roleType": payload.role_type}
         )
 
@@ -352,12 +352,12 @@ class AdminService:
         return {
             "reportType": "DAILY",
             "date": today_start.strftime("%Y-%m-%d"),
-            "totalBookings": int(total_bookings),
-            "confirmedBookings": int(confirmed),
-            "completedBookings": int(completed),
-            "pendingBookings": int(pending_bookings),
-            "pendingPayments": int(pending_payments),
-            "dailyRevenueINR": float(paid_revenue),
+            "totalBookings": total_bookings,
+            "confirmedBookings": confirmed,
+            "completedBookings": completed,
+            "pendingBookings": pending_bookings,
+            "pendingPayments": pending_payments,
+            "dailyRevenueINR": paid_revenue,
         }
 
     @classmethod
@@ -379,7 +379,7 @@ class AdminService:
             "reportType": "WEEKLY",
             "period": f"{week_start.strftime('%Y-%m-%d')} to {now.strftime('%Y-%m-%d')}",
             "totalBookings": total_bookings,
-            "weeklyRevenueINR": float(revenue)
+            "weeklyRevenueINR": revenue
         }
 
     @classmethod
@@ -401,7 +401,7 @@ class AdminService:
             "reportType": "MONTHLY",
             "month": month_start.strftime("%B %Y"),
             "totalBookings": total_bookings,
-            "monthlyRevenueINR": float(revenue)
+            "monthlyRevenueINR": revenue
         }
 
     @classmethod
@@ -413,10 +413,10 @@ class AdminService:
                 PaymentTransaction.entity_id.in_(live_refs),
             )
         ) or 0.0
-        currency_breakdown = {"INR": float(total_revenue)}
+        currency_breakdown = {"INR": total_revenue}
         return {
             "reportType": "REVENUE_SUMMARY",
-            "grossRevenueINR": float(total_revenue),
+            "grossRevenueINR": total_revenue,
             "currencyBreakdown": currency_breakdown
         }
 
@@ -486,6 +486,7 @@ class AdminService:
             select(AirportService, SupportedAirport, Service)
             .join(SupportedAirport, AirportService.airport_id == SupportedAirport.id)
             .join(Service, AirportService.service_id == Service.id)
+            .where(AirportService.deleted_at.is_(None))
         )
 
         if airport_code:
@@ -555,7 +556,7 @@ class AdminService:
             raise HTTPException(status_code=404, detail="Airport service mapping not found.")
 
         old_details = {
-            "price": float(mapping.price),
+            "price": mapping.price,
             "currency": mapping.currency,
             "is_available": mapping.is_available,
             "terminal": mapping.terminal,
@@ -621,7 +622,7 @@ class AdminService:
                 details={
                     "old": old_details,
                     "new": {
-                        "price": float(mapping.price),
+                        "price": mapping.price,
                         "currency": mapping.currency,
                         "is_available": mapping.is_available,
                         "terminal": mapping.terminal,
@@ -640,7 +641,7 @@ class AdminService:
             "airport_name": apt.airport_name if apt else "",
             "service_name": svc.name if svc else "",
             "service_slug": svc.slug if svc else "",
-            "price": float(mapping.price),
+            "price": mapping.price,
             "currency": mapping.currency,
             "journey_type": mapping.journey_type,
             "flight_type": mapping.flight_type,
@@ -752,7 +753,7 @@ class AdminService:
             "airport_name": apt.airport_name,
             "service_name": svc.name,
             "service_slug": svc.slug,
-            "price": float(new_mapping.price),
+            "price": new_mapping.price,
             "currency": new_mapping.currency,
             "journey_type": new_mapping.journey_type,
             "flight_type": new_mapping.flight_type,
@@ -765,7 +766,12 @@ class AdminService:
         }
 
     @classmethod
-    def delete_airport_service(cls, db: Session, mapping_id: str, admin_email: str) -> Dict[str, Any]:
+    def recycle_airport_service(
+        cls,
+        db: Session,
+        mapping_id: str,
+        admin_context: Dict[str, Any]
+    ) -> Dict[str, Any]:
         from app.models.journey_models import AirportService
         try:
             m_uuid = uuid.UUID(mapping_id)
@@ -776,25 +782,230 @@ class AdminService:
         if not mapping:
             raise HTTPException(status_code=404, detail="Airport service mapping not found.")
 
+        if mapping.deleted_at is not None:
+            raise HTTPException(status_code=400, detail="Airport service is already in the recycle bin.")
+
+        admin_email = admin_context.get("email") or admin_context.get("sub") or "admin@shafskyaviation.com"
+        admin_role = str(admin_context.get("role") or "SUPER_ADMIN")
+        raw_uid = admin_context.get("user_id") or admin_context.get("userId")
+        user_uuid: Optional[uuid.UUID] = None
+        if raw_uid:
+            try:
+                user_uuid = uuid.UUID(str(raw_uid))
+            except ValueError:
+                pass
+
+        now = datetime.now(timezone.utc)
         try:
+            mapping.deleted_at = now
             mapping.is_available = False
-            mapping.updated_at = datetime.now(timezone.utc)
+            mapping.deleted_by_user_id = user_uuid
+            mapping.deleted_by_email = admin_email
+            mapping.deleted_by_role = admin_role
+            mapping.updated_at = now
             db.commit()
+            db.refresh(mapping)
         except Exception as err:
             db.rollback()
-            logger.error("[AdminService] Failed to deactivate airport service %s: %s", mapping_id, err)
-            raise HTTPException(status_code=500, detail="Database transaction failed during deactivation.")
+            logger.error("[AdminService] Failed to recycle airport service %s: %s", mapping_id, err)
+            raise HTTPException(status_code=500, detail="Database transaction failed during recycling.")
 
         try:
             cls.log_audit_action(
                 db=db,
                 actor_email=admin_email,
-                action="DEACTIVATE_AIRPORT_SERVICE",
+                action="RECYCLE_AIRPORT_SERVICE",
                 resource_type="AirportService",
-                resource_id=str(mapping.id)
+                resource_id=str(mapping.id),
+                details={"deleted_at": now.isoformat(), "deleted_by": admin_email}
             )
         except Exception as audit_err:
             logger.warning("[AdminService] Audit log write failed: %s", audit_err)
 
-        return {"success": True, "id": str(mapping.id), "is_available": False}
+        return {
+            "success": True,
+            "id": str(mapping.id),
+            "status": "recycled",
+            "message": "Service successfully moved to recycle bin."
+        }
+
+    @classmethod
+    def restore_airport_service(
+        cls,
+        db: Session,
+        mapping_id: str,
+        admin_context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        from app.models.journey_models import AirportService
+        try:
+            m_uuid = uuid.UUID(mapping_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid mapping UUID format.")
+
+        mapping = db.scalar(select(AirportService).where(AirportService.id == m_uuid))
+        if not mapping:
+            raise HTTPException(status_code=404, detail="Airport service mapping not found.")
+
+        if mapping.deleted_at is None:
+            raise HTTPException(status_code=400, detail="Airport service is not in the recycle bin.")
+
+        admin_email = admin_context.get("email") or admin_context.get("sub") or "admin@shafskyaviation.com"
+        now = datetime.now(timezone.utc)
+        try:
+            mapping.deleted_at = None
+            mapping.deleted_by_user_id = None
+            mapping.deleted_by_email = None
+            mapping.deleted_by_role = None
+            mapping.is_available = True
+            mapping.updated_at = now
+            db.commit()
+            db.refresh(mapping)
+        except Exception as err:
+            db.rollback()
+            logger.error("[AdminService] Failed to restore airport service %s: %s", mapping_id, err)
+            raise HTTPException(status_code=500, detail="Database transaction failed during restoration.")
+
+        try:
+            cls.log_audit_action(
+                db=db,
+                actor_email=admin_email,
+                action="RESTORE_AIRPORT_SERVICE",
+                resource_type="AirportService",
+                resource_id=str(mapping.id),
+                details={"restored_by": admin_email}
+            )
+        except Exception as audit_err:
+            logger.warning("[AdminService] Audit log write failed: %s", audit_err)
+
+        return {
+            "success": True,
+            "id": str(mapping.id),
+            "status": "restored",
+            "message": "Service successfully restored to active catalog."
+        }
+
+    @classmethod
+    def list_recycled_airport_services(
+        cls,
+        db: Session,
+        airport_code: Optional[str] = None,
+        limit: int = 300,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        from app.models.journey_models import SupportedAirport, Service, AirportService
+        from app.services.service_airport_rules import normalize_iata
+
+        stmt = (
+            select(AirportService, SupportedAirport, Service)
+            .join(SupportedAirport, AirportService.airport_id == SupportedAirport.id)
+            .join(Service, AirportService.service_id == Service.id)
+            .where(AirportService.deleted_at.is_not(None))
+        )
+
+        if airport_code:
+            clean_code = normalize_iata(airport_code)
+            stmt = stmt.where(SupportedAirport.iata_code == clean_code)
+
+        stmt = stmt.order_by(
+            AirportService.deleted_at.desc(),
+            SupportedAirport.iata_code,
+            AirportService.journey_type,
+        ).limit(limit).offset(offset)
+
+        rows = db.execute(stmt).all()
+        results = []
+        for aps, apt, svc in rows:
+            results.append({
+                "id": str(aps.id),
+                "airport_id": str(apt.id),
+                "airport_code": apt.iata_code,
+                "airport_name": apt.airport_name,
+                "city": apt.city,
+                "service_id": str(svc.id),
+                "service_name": svc.name,
+                "service_slug": svc.slug,
+                "price": float(aps.price),
+                "currency": aps.currency or "INR",
+                "journey_type": aps.journey_type,
+                "flight_type": aps.flight_type,
+                "terminal": aps.terminal or "All",
+                "is_available": aps.is_available,
+                "deleted_at": aps.deleted_at.isoformat() if aps.deleted_at else None,
+                "deleted_by_email": aps.deleted_by_email,
+                "deleted_by_role": aps.deleted_by_role,
+                "features": aps.features if isinstance(aps.features, list) else [],
+                "short_description": aps.short_description or "",
+                "min_booking_notice_hours": aps.min_booking_notice_hours or 0,
+                "updated_at": aps.updated_at.isoformat() if aps.updated_at else None,
+            })
+        return results
+
+    @classmethod
+    def purge_airport_service(
+        cls,
+        db: Session,
+        mapping_id: str,
+        admin_context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        from app.models.journey_models import AirportService
+        try:
+            m_uuid = uuid.UUID(mapping_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid mapping UUID format.")
+
+        mapping = db.scalar(select(AirportService).where(AirportService.id == m_uuid))
+        if not mapping:
+            raise HTTPException(status_code=404, detail="Airport service mapping not found.")
+
+        if mapping.deleted_at is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Airport service must be moved to the recycle bin before permanent deletion."
+            )
+
+        admin_email = admin_context.get("email") or admin_context.get("sub") or "admin@shafskyaviation.com"
+
+        try:
+            db.delete(mapping)
+            db.commit()
+        except Exception as err:
+            db.rollback()
+            logger.error("[AdminService] Failed to permanently purge airport service %s: %s", mapping_id, err)
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot permanently delete service due to database integrity constraints."
+            )
+
+        try:
+            cls.log_audit_action(
+                db=db,
+                actor_email=admin_email,
+                action="PURGE_AIRPORT_SERVICE",
+                resource_type="AirportService",
+                resource_id=mapping_id
+            )
+        except Exception as audit_err:
+            logger.warning("[AdminService] Audit log write failed: %s", audit_err)
+
+        return {
+            "success": True,
+            "id": mapping_id,
+            "status": "purged",
+            "message": "Airport service permanently deleted from database."
+        }
+
+    @classmethod
+    def delete_airport_service(
+        cls,
+        db: Session,
+        mapping_id: str,
+        admin_email: str
+    ) -> Dict[str, Any]:
+        """Backward-compatible alias for recycling an airport service."""
+        return cls.recycle_airport_service(
+            db=db,
+            mapping_id=mapping_id,
+            admin_context={"email": admin_email, "role": "SUPER_ADMIN"}
+        )
+
 

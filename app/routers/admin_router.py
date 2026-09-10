@@ -346,9 +346,9 @@ async def list_coupons(
             "id": str(c.id),
             "code": c.code,
             "discountPercent": c.discount_percent,
-            "discountAmount": c.discount_amount,
+            "discountAmount": getattr(c, "discount_amount", 0.0),
             "maxUses": c.max_uses,
-            "usedCount": c.used_count,
+            "usedCount": c.times_used,
             "isActive": c.is_active,
             "expiresAt": c.expires_at.isoformat() if c.expires_at else None,
             "createdAt": c.created_at.isoformat() if c.created_at else None,
@@ -452,17 +452,76 @@ async def create_admin_airport_service(
     return AdminApiResponse(success=True, data=created)
 
 
+@router.get("/airport-services/recycle-bin", response_model=AdminApiResponse)
+async def list_admin_recycled_airport_services(
+    airport: Optional[str] = Query(None, description="IATA code filter, e.g. LKO, DEL"),
+    limit: int = Query(300, le=1000),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    _super_admin: Dict[str, Any] = Depends(get_required_super_admin),
+):
+    services = AdminService.list_recycled_airport_services(
+        db,
+        airport_code=airport,
+        limit=limit,
+        offset=offset,
+    )
+    return AdminApiResponse(success=True, data=services)
+
+
+@router.post("/airport-services/{mapping_id}/recycle", response_model=AdminApiResponse)
+async def recycle_admin_airport_service(
+    mapping_id: str,
+    db: Session = Depends(get_db),
+    super_admin_context: Dict[str, Any] = Depends(get_required_super_admin),
+):
+    result = AdminService.recycle_airport_service(
+        db=db,
+        mapping_id=mapping_id,
+        admin_context=super_admin_context,
+    )
+    return AdminApiResponse(success=True, data=result)
+
+
+@router.post("/airport-services/{mapping_id}/restore", response_model=AdminApiResponse)
+async def restore_admin_airport_service(
+    mapping_id: str,
+    db: Session = Depends(get_db),
+    super_admin_context: Dict[str, Any] = Depends(get_required_super_admin),
+):
+    result = AdminService.restore_airport_service(
+        db=db,
+        mapping_id=mapping_id,
+        admin_context=super_admin_context,
+    )
+    return AdminApiResponse(success=True, data=result)
+
+
+@router.delete("/airport-services/{mapping_id}/purge", response_model=AdminApiResponse)
+async def purge_admin_airport_service(
+    mapping_id: str,
+    db: Session = Depends(get_db),
+    super_admin_context: Dict[str, Any] = Depends(get_required_super_admin),
+):
+    result = AdminService.purge_airport_service(
+        db=db,
+        mapping_id=mapping_id,
+        admin_context=super_admin_context,
+    )
+    return AdminApiResponse(success=True, data=result)
+
+
 @router.delete("/airport-services/{mapping_id}", response_model=AdminApiResponse)
 async def delete_admin_airport_service(
     mapping_id: str,
     db: Session = Depends(get_db),
-    admin_context: Dict[str, Any] = Depends(get_required_admin),
+    super_admin_context: Dict[str, Any] = Depends(get_required_super_admin),
 ):
-    admin_email = admin_context.get("email", "admin@shafskyaviation.com")
-    result = AdminService.delete_airport_service(
+    result = AdminService.recycle_airport_service(
         db=db,
         mapping_id=mapping_id,
-        admin_email=admin_email,
+        admin_context=super_admin_context,
     )
     return AdminApiResponse(success=True, data=result)
+
 
