@@ -81,8 +81,13 @@ class Settings(BaseSettings):
         "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,http://localhost:3000,http://127.0.0.1:3000",
     )
     CORS_ALLOW_CREDENTIALS: bool = os.getenv("CORS_ALLOW_CREDENTIALS", "true").lower() in ("1", "true", "yes")
-    # Behind ALB/CloudFront set TRUST_PROXY=true so rate limits use X-Forwarded-For.
+    # Behind ALB/CloudFront/Cloudflare set TRUST_PROXY=true so rate limits use X-Forwarded-For.
     TRUST_PROXY: bool = os.getenv("TRUST_PROXY", "false").lower() in ("1", "true", "yes")
+    # Cookie SameSite: use "none" for cross-site Vercel frontend + Azure/API on another domain.
+    # Allowed: lax | strict | none  (none requires Secure in production browsers)
+    COOKIE_SAMESITE: str = (os.getenv("COOKIE_SAMESITE") or "").strip().lower() or (
+        "none" if os.getenv("ENVIRONMENT", "development").lower() not in ("development", "dev", "test", "testing") else "lax"
+    )
 
     IDEMPOTENCY_LOCK_TTL: int = int(os.getenv("IDEMPOTENCY_LOCK_TTL", "120"))
     IDEMPOTENCY_CACHE_TTL: int = int(os.getenv("IDEMPOTENCY_CACHE_TTL", "86400"))

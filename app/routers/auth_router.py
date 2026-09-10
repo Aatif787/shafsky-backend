@@ -31,10 +31,15 @@ router = APIRouter(prefix="/api/auth", tags=["Authentication & Session Security"
 
 def _refresh_cookie_kwargs(max_age_seconds: int | None = None) -> dict:
     """Shared cookie attributes so set/clear stay in sync for browsers."""
+    samesite = getattr(settings, "COOKIE_SAMESITE", None) or ("strict" if settings.is_production else "lax")
+    if samesite not in ("lax", "strict", "none"):
+        samesite = "lax"
+    # SameSite=None requires Secure; force Secure whenever none is used.
+    secure = bool(settings.is_production or samesite == "none")
     kwargs = dict(
         httponly=True,
-        secure=settings.is_production,
-        samesite="strict" if settings.is_production else "lax",
+        secure=secure,
+        samesite=samesite,
         path="/api/auth",
     )
     if max_age_seconds is not None:
