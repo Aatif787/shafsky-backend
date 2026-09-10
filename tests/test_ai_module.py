@@ -53,40 +53,52 @@ def test_ai_interactive_chat_api():
 
 
 def test_ai_whatsapp_webhook_api():
+    """The legacy /api/ai/whatsapp endpoint is intentionally disabled (403).
+    All WhatsApp traffic now goes through /api/whatsapp/webhook."""
     payload = {
         "from_number": "+919876543210",
         "message_body": "What is the status of my booking?"
     }
 
     res = client.post("/api/ai/whatsapp", json=payload)
-    assert res.status_code == 200, res.text
-    data = res.json()
-    assert data["success"] is True
-    assert "reply" in data["data"]
+    assert res.status_code == 403, res.text
+    assert "disabled" in res.json()["detail"].lower()
 
 
 def test_ai_human_handoff_and_takeover():
-    conv_id = f"conv_{uuid.uuid4().hex[:6]}"
+    """Staff-protected endpoints require auth. Override the dependency for testing."""
+    from app.security.dependencies import get_required_staff_or_admin
 
-    # 1. Trigger human handoff request via message
-    res = client.post("/api/ai/chat", json={"session_id": conv_id, "message": "I want to speak with a human agent please"})
-    assert res.status_code == 200
-    data = res.json()["data"]
-    assert data["handoff_triggered"] is True
-    assert data["current_state"] == "HANDOFF_TO_HUMAN"
+    # Mock staff auth for test
+    _mock_staff = {"user_id": "test_officer", "role": "staff", "email": "test@shafsky.com"}
+    app.dependency_overrides[get_required_staff_or_admin] = lambda: _mock_staff
 
-    # 2. Inspect conversation state endpoint
-    res = client.get(f"/api/ai/conversations/{conv_id}")
-    assert res.status_code == 200
-    sess_data = res.json()["data"]
-    assert sess_data["current_state"] == "HANDOFF_TO_HUMAN"
+    try:
+        conv_id = f"conv_{uuid.uuid4().hex[:6]}"
 
-    # 3. Staff officer takes over conversation
-    res = client.post("/api/ai/takeover", json={"conversation_id": conv_id, "staff_user_id": "officer_alex"})
-    assert res.status_code == 200
-    assert res.json()["data"]["assigned_staff"] == "officer_alex"
+        # 1. Trigger human handoff request via message
+        res = client.post("/api/ai/chat", json={"session_id": conv_id, "message": "I want to speak with a human agent please"})
+        assert res.status_code == 200
+        data = res.json()["data"]
+        assert data["handoff_triggered"] is True
+        assert data["current_state"] == "HANDOFF_TO_HUMAN"
 
-    # 4. Resume AI conversation control
-    res = client.post("/api/ai/resume", json={"conversation_id": conv_id, "reason": "Issue resolved by officer"})
-    assert res.status_code == 200
-    assert res.json()["data"]["ai_active"] is True
+        # 2. Inspect conversation state endpoint
+        res = client.get(f"/api/ai/conversations/{conv_id}")
+        assert res.status_code == 200
+        sess_data = res.json()["data"]
+        assert sess_data["current_state"] == "HANDOFF_TO_HUMAN"
+
+        # 3. Staff officer takes over conversation
+        res = client.post("/api/ai/takeover", json={"conversation_id": conv_id, "staff_user_id": "officer_alex"})
+        assert res.status_code == 200
+        assert res.json()["data"]["assigned_staff"] == "officer_alex"
+
+        # 4. Resume AI conversation control
+        res = client.post("/api/ai/resume", json={"conversation_id": conv_id, "reason": "Issue resolved by officer"})
+        assert res.status_code == 200
+        assert res.json()["data"]["ai_active"] is True
+    finally:
+        # Clean up override
+        app.dependency_overrides.pop(get_required_staff_or_admin, None)
+

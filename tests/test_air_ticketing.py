@@ -13,14 +13,30 @@ from app.main import app
 from app.database import Base, engine, get_db
 from app.models.ticketing import AirTicketBooking, AirTicketPassenger, AirTicketStatus
 from app.services.auth_service import AuthService
+from app.security.dependencies import (
+    get_optional_user,
+    get_required_user,
+    get_required_staff_or_admin,
+)
+
+_mock_staff = {"user_id": "test_staff_id", "role": "ADMIN", "email": "admin@shafsky.com", "sub": "admin@shafsky.com"}
 
 client = TestClient(app)
 
 
 @pytest.fixture(autouse=True)
-def setup_db():
+def setup_db_and_auth():
+    """Set up DB tables and auth overrides before each test, clean up after."""
     Base.metadata.create_all(bind=engine)
+    # Override auth dependencies so test requests pass without real JWT tokens
+    app.dependency_overrides[get_required_user] = lambda: _mock_staff
+    app.dependency_overrides[get_required_staff_or_admin] = lambda: _mock_staff
+    app.dependency_overrides[get_optional_user] = lambda: _mock_staff
     yield
+    # Restore: remove overrides after each test
+    app.dependency_overrides.pop(get_required_user, None)
+    app.dependency_overrides.pop(get_required_staff_or_admin, None)
+    app.dependency_overrides.pop(get_optional_user, None)
 
 
 def test_create_and_get_air_ticket_booking():
