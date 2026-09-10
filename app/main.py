@@ -115,7 +115,15 @@ _cors_kwargs = {
     "allow_origins": getattr(settings, "ALLOWED_ORIGINS", []),
     "allow_credentials": getattr(settings, "CORS_ALLOW_CREDENTIALS", False),
     "allow_methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    "allow_headers": ["*"],
+    "allow_headers": [
+        "Authorization",
+        "Content-Type",
+        "Accept",
+        "Origin",
+        "X-Device-ID",
+        "Idempotency-Key",
+        "X-Correlation-ID",
+    ],
 }
 if not _prod:
     _cors_kwargs["allow_origin_regex"] = _CORS_DEV_ORIGIN_REGEX
@@ -130,13 +138,15 @@ async def sqlalchemy_exception_handler(_request, _exc: SQLAlchemyError):
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(_request, exc: RequestValidationError):
+    content = {
+        "success": False,
+        "error": "Validation error in request payload.",
+    }
+    if not settings.is_production:
+        content["details"] = jsonable_encoder(exc.errors())
     return JSONResponse(
         status_code=422,
-        content={
-            "success": False,
-            "error": "Validation error in request payload.",
-            "details": jsonable_encoder(exc.errors()),
-        },
+        content=content,
     )
 
 from app.routers import workflow_router
@@ -214,7 +224,7 @@ async def backend_connectivity_health_check():
     }
 
 @app.get("/health", tags=["Observability & Health"])
-async def deep_health_check():
+async def deep_health_check(_admin=Depends(get_required_admin)):
     """Deep health for ops. Returns 503 when the database is unhealthy (ALB/ECS safe)."""
     payload = HealthCheckSuite.run_deep_health()
     db_status = (payload.get("subsystems") or {}).get("database", {}).get("status")

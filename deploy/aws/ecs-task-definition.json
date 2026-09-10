@@ -1,5 +1,3 @@
-# ECS Fargate task definition template for Shafsky FastAPI backend.
-# Replace ACCOUNT_ID, REGION, secrets ARNs, and image URI before register-task-definition.
 {
   "family": "shafsky-backend",
   "networkMode": "awsvpc",
@@ -23,7 +21,10 @@
         { "name": "ENVIRONMENT", "value": "production" },
         { "name": "PORT", "value": "4000" },
         { "name": "WEB_CONCURRENCY", "value": "2" },
-        { "name": "RUN_MIGRATIONS", "value": "true" },
+        { "name": "DB_POOL_SIZE", "value": "5" },
+        { "name": "DB_MAX_OVERFLOW", "value": "5" },
+        { "name": "DB_POOL_TIMEOUT", "value": "30" },
+        { "name": "RUN_MIGRATIONS", "value": "false" },
         { "name": "TRUST_PROXY", "value": "true" },
         { "name": "REQUIRE_REDIS", "value": "true" },
         { "name": "JWT_ALGORITHM", "value": "RS256" },
@@ -54,6 +55,38 @@
         {
           "name": "ALLOWED_ORIGINS",
           "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:shafsky/ALLOWED_ORIGINS"
+        },
+        {
+          "name": "RAZORPAY_KEY_ID",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:shafsky/RAZORPAY_KEY_ID"
+        },
+        {
+          "name": "RAZORPAY_KEY_SECRET",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:shafsky/RAZORPAY_KEY_SECRET"
+        },
+        {
+          "name": "RAZORPAY_WEBHOOK_SECRET",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:shafsky/RAZORPAY_WEBHOOK_SECRET"
+        },
+        {
+          "name": "WHATSAPP_ACCESS_TOKEN",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:shafsky/WHATSAPP_ACCESS_TOKEN"
+        },
+        {
+          "name": "WHATSAPP_APP_SECRET",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:shafsky/WHATSAPP_APP_SECRET"
+        },
+        {
+          "name": "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:shafsky/WHATSAPP_WEBHOOK_VERIFY_TOKEN"
+        },
+        {
+          "name": "RESEND_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:shafsky/RESEND_API_KEY"
+        },
+        {
+          "name": "EMAIL_FROM",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:shafsky/EMAIL_FROM"
         }
       ],
       "healthCheck": {

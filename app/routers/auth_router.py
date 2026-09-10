@@ -9,7 +9,7 @@ from typing import Dict, Any
 
 from fastapi import APIRouter, HTTPException, Depends, Request, Response
 from sqlalchemy.orm import Session
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.database import get_db
 from app.models.schema import UserAuth, Profile, RefreshToken, Role
@@ -62,11 +62,23 @@ def _clear_refresh_cookie(response: Response) -> None:
     response.delete_cookie(key="refresh_token", **cookie_kwargs)
 
 
+def _validate_cookie_request_origin(request: Request) -> None:
+    """Reject cross-site browser requests to cookie-authenticated endpoints."""
+    origin = (request.headers.get("origin") or "").rstrip("/")
+    if not origin:
+        # Non-browser clients generally do not send Origin.
+        return
+    allowed = {str(item).rstrip("/") for item in settings.ALLOWED_ORIGINS}
+    request_origin = str(request.base_url).rstrip("/")
+    if origin != request_origin and origin not in allowed:
+        raise HTTPException(status_code=403, detail="Untrusted request origin.")
+
+
 def _parse_user_uuid(user_id_str: str | None) -> uuid.UUID | None:
     if not user_id_str:
         return None
     try:
-        return uuid.UUID(user_id_str)
+        return uuid.UUID(str(user_id_str))
     except Exception:
         return None
 
@@ -76,6 +88,31 @@ def _require_user_id(decoded: Dict[str, Any]) -> str:
     if not user_id_str:
         raise HTTPException(status_code=401, detail="Token missing user identity.")
     return str(user_id_str)
+
+
+def _require_user_uuid(decoded: Dict[str, Any]) -> uuid.UUID:
+    u_uuid = _parse_user_uuid(_require_user_id(decoded))
+    if not u_uuid:
+        raise HTTPException(status_code=401, detail="Token missing user identity.")
+    return u_uuid
+
+
+def _resolve_user(db: Session, decoded: Dict[str, Any], *, require_active: bool = True) -> UserAuth:
+    """Load UserAuth from JWT claims; 404 if missing, 403 if deactivated."""
+    u_uuid = _parse_user_uuid(decoded.get("user_id") or decoded.get("userId"))
+    email = (decoded.get("sub") or decoded.get("email") or "").lower().strip()
+
+    user = None
+    if u_uuid:
+        user = db.scalar(select(UserAuth).where(UserAuth.id == u_uuid))
+    if not user and email:
+        user = db.scalar(select(UserAuth).where(UserAuth.email == email))
+
+    if not user:
+        raise HTTPException(status_code=404, detail="User account not found.")
+    if require_active and not getattr(user, "is_active", True):
+        raise HTTPException(status_code=403, detail="Account has been suspended or deactivated.")
+    return user
 
 
 def _profile_payload(profile: Profile) -> dict:
@@ -92,6 +129,31 @@ def _profile_payload(profile: Profile) -> dict:
         "vip_tier": profile.vip_tier.value if hasattr(profile.vip_tier, "value") else str(profile.vip_tier),
         "passport_number": profile.passport_number,
     }
+
+
+def _user_response(user: UserAuth, full_name: str | None = None) -> UserResponse:
+    email = user.email or ""
+    return UserResponse(
+        id=str(user.id),
+        email=email,
+        role=user.role.value if hasattr(user.role, "value") else str(user.role),
+        fullName=full_name or (email.split("@")[0].title() if email else "User"),
+    )
+
+
+def _revoke_device_tokens(db: Session, user_id: uuid.UUID, device_id: str | None) -> None:
+    """Revoke active refresh tokens for one device so re-login does not pile up sessions."""
+    if not device_id:
+        return
+    db.execute(
+        update(RefreshToken)
+        .where(
+            RefreshToken.user_id == user_id,
+            RefreshToken.device_id == device_id,
+            RefreshToken.revoked.is_(False),
+        )
+        .values(revoked=True)
+    )
 
 
 @router.post("/login", response_model=ApiResponse)
@@ -134,23 +196,28 @@ async def login(
                 db.refresh(user)
 
     user = db.scalar(select(UserAuth).where(UserAuth.email == email))
-    user_data = None
-    if user and AuthService.verify_password(password, user.password_hash):
-        if not getattr(user, "is_active", True):
-            raise HTTPException(status_code=403, detail="Account has been suspended or deactivated.")
-        user_data = {
-            "sub": user.email,
-            "user_id": str(user.id),
-            "role": user.role.value if hasattr(user.role, "value") else str(user.role),
-        }
-
-    if not user_data:
+    if not user or not AuthService.verify_password(password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password credentials.")
+
+    if not getattr(user, "is_active", True):
+        raise HTTPException(status_code=403, detail="Account has been suspended or deactivated.")
+
+    user_data = {
+        "sub": user.email,
+        "user_id": str(user.id),
+        "role": user.role.value if hasattr(user.role, "value") else str(user.role),
+    }
 
     access_token = AuthService.create_access_token(user_data)
     raw_refresh = AuthService.create_refresh_token(user_data)
 
-    # Save Hashed Refresh Token in DB with a new Token Family
+    # Same-device re-login: drop prior refresh tokens for this fingerprint first.
+    try:
+        _revoke_device_tokens(db, user.id, device_info.get("device_id"))
+        db.commit()
+    except Exception:
+        db.rollback()
+
     AuthService.register_refresh_token(
         db,
         user_id=user.id,
@@ -161,17 +228,15 @@ async def login(
     # C2: Refresh token only in HttpOnly cookie — never in JSON body.
     _set_refresh_cookie(response, raw_refresh)
 
+    profile = db.scalar(select(Profile).where(Profile.auth_id == user.id))
+    full_name = profile.full_name if profile and profile.full_name else None
+
     return ApiResponse(
         success=True,
         data=AuthDataResponse(
             accessToken=access_token,
             refreshToken=None,
-            user=UserResponse(
-                id=user_data["user_id"],
-                email=user_data["sub"],
-                role=user_data["role"],
-                fullName=user_data["sub"].split("@")[0].title()
-            )
+            user=_user_response(user, full_name)
         )
     )
 
@@ -182,6 +247,7 @@ async def refresh_token(
     response: Response,
     db: Session = Depends(get_db)
 ):
+    _validate_cookie_request_origin(request)
     device_info = DeviceTracking.get_client_device(request)
 
     # Extract refresh token from HttpOnly cookie only (never from JSON body).
@@ -204,15 +270,16 @@ async def refresh_token(
         _clear_refresh_cookie(response)
         if err_code == "REPLAY_ATTACK_DETECTED":
             raise HTTPException(status_code=401, detail="Security violation: Token replay attack detected. All sessions revoked.")
-        elif err_code == "REFRESH_TOKEN_EXPIRED":
+        if err_code == "REFRESH_TOKEN_EXPIRED":
             raise HTTPException(status_code=401, detail="Refresh token has expired. Please log in again.")
-        elif err_code == "ACCOUNT_INACTIVE":
+        if err_code == "ACCOUNT_INACTIVE":
             raise HTTPException(status_code=403, detail="Account has been suspended or deactivated.")
-        else:
-            raise HTTPException(status_code=401, detail="Invalid or revoked refresh token.")
+        raise HTTPException(status_code=401, detail="Invalid or revoked refresh token.")
+    except HTTPException:
+        raise
     except Exception:
         _clear_refresh_cookie(response)
-        raise HTTPException(status_code=401, detail="Invalid refresh token signature.")
+        raise HTTPException(status_code=401, detail="Invalid or revoked refresh token.")
 
 
 @router.post("/logout", response_model=ApiResponse)
@@ -221,6 +288,7 @@ async def logout(
     response: Response,
     db: Session = Depends(get_db)
 ):
+    _validate_cookie_request_origin(request)
     raw_refresh = request.cookies.get("refreshToken") or request.cookies.get("refresh_token")
 
     if raw_refresh:
@@ -231,16 +299,16 @@ async def logout(
 
 
 @router.get("/me", response_model=ApiResponse)
-async def get_me(decoded: Dict[str, Any] = Depends(get_required_user)):
+async def get_me(
+    decoded: Dict[str, Any] = Depends(get_required_user),
+    db: Session = Depends(get_db),
+):
+    user = _resolve_user(db, decoded)
+    profile = db.scalar(select(Profile).where(Profile.auth_id == user.id))
+    full_name = profile.full_name if profile and profile.full_name else None
     return ApiResponse(
         success=True,
-        data=AuthDataResponse(
-            user=UserResponse(
-                id=decoded.get("user_id", decoded.get("userId", "")),
-                email=decoded.get("sub", decoded.get("email", "")),
-                role=decoded.get("role", "")
-            )
-        )
+        data=AuthDataResponse(user=_user_response(user, full_name))
     )
 
 
@@ -249,10 +317,8 @@ async def get_active_device_sessions(
     decoded: Dict[str, Any] = Depends(get_required_user),
     db: Session = Depends(get_db)
 ):
-    user_id_str = _require_user_id(decoded)
-    u_uuid = _parse_user_uuid(user_id_str)
-    if not u_uuid:
-        raise HTTPException(status_code=401, detail="Token missing user identity.")
+    u_uuid = _require_user_uuid(decoded)
+    _resolve_user(db, decoded)
 
     now = datetime.now(timezone.utc)
     records = list(db.scalars(
@@ -270,7 +336,7 @@ async def get_active_device_sessions(
             "platform": r.platform,
             "ipAddress": r.ip_address,
             "lastActivity": r.last_activity.isoformat() if r.last_activity else r.created_at.isoformat(),
-            "createdAt": r.created_at.isoformat()
+            "createdAt": r.created_at.isoformat() if r.created_at else None,
         }
         for r in records
     ]
@@ -284,18 +350,27 @@ async def logout_device(
     decoded: Dict[str, Any] = Depends(get_required_user),
     db: Session = Depends(get_db)
 ):
-    user_id_str = _require_user_id(decoded)
-    DeviceTracking.revoke_device_session(db, user_id_str, device_id)
+    u_uuid = _require_user_uuid(decoded)
+    _resolve_user(db, decoded)
+
+    revoked = DeviceTracking.revoke_device_session(db, u_uuid, device_id)
+    if not revoked:
+        raise HTTPException(status_code=404, detail="No active session found for this device.")
+
     return ApiResponse(success=True, data={"message": f"Device session '{device_id}' revoked."})
 
 
 @router.post("/logout-all-devices", response_model=ApiResponse)
 async def logout_all_devices(
+    response: Response,
     decoded: Dict[str, Any] = Depends(get_required_user),
     db: Session = Depends(get_db)
 ):
-    user_id_str = _require_user_id(decoded)
-    DeviceTracking.revoke_all_user_sessions(db, user_id_str)
+    u_uuid = _require_user_uuid(decoded)
+    _resolve_user(db, decoded)
+
+    DeviceTracking.revoke_all_user_sessions(db, u_uuid)
+    _clear_refresh_cookie(response)
     return ApiResponse(success=True, data={"message": "All device sessions successfully revoked."})
 
 
@@ -304,26 +379,23 @@ async def get_user_profile(
     decoded: Dict[str, Any] = Depends(get_required_user),
     db: Session = Depends(get_db)
 ):
-    user_id_str = decoded.get("user_id") or decoded.get("userId") or ""
-    email = decoded.get("sub", "")
-    u_uuid = _parse_user_uuid(user_id_str)
+    user = _resolve_user(db, decoded)
+    email = user.email
 
-    profile = None
-    if u_uuid:
-        profile = db.scalar(select(Profile).where(Profile.auth_id == u_uuid))
+    profile = db.scalar(select(Profile).where(Profile.auth_id == user.id))
     if not profile and email:
         profile = db.scalar(select(Profile).where(Profile.email == email.lower()))
 
     if not profile:
-        # Fallback from JWT claims — stable id (auth user id), never a random UUID
+        # Fallback from auth row — stable id (auth user id), never a random UUID
         return ApiResponse(
             success=True,
             data={
-                "id": user_id_str,
-                "auth_id": user_id_str,
+                "id": str(user.id),
+                "auth_id": str(user.id),
                 "email": email,
                 "full_name": email.split("@")[0].title() if email else "User",
-                "role": decoded.get("role", "CUSTOMER"),
+                "role": user.role.value if hasattr(user.role, "value") else str(user.role),
                 "phone_number": None,
                 "avatar_url": None,
                 "company": None,
@@ -342,22 +414,10 @@ async def update_user_profile(
     decoded: Dict[str, Any] = Depends(get_required_user),
     db: Session = Depends(get_db)
 ):
-    user_id_str = decoded.get("user_id") or decoded.get("userId")
-    email = (decoded.get("sub") or "").lower()
-    u_uuid = _parse_user_uuid(user_id_str)
+    user = _resolve_user(db, decoded)
+    email = user.email.lower()
 
-    user = None
-    if u_uuid:
-        user = db.scalar(select(UserAuth).where(UserAuth.id == u_uuid))
-    if not user and email:
-        user = db.scalar(select(UserAuth).where(UserAuth.email == email))
-
-    if not user:
-        raise HTTPException(status_code=404, detail="User account not found.")
-
-    profile = None
-    if u_uuid:
-        profile = db.scalar(select(Profile).where(Profile.auth_id == u_uuid))
+    profile = db.scalar(select(Profile).where(Profile.auth_id == user.id))
     if not profile and email:
         profile = db.scalar(select(Profile).where(Profile.email == email))
 
@@ -394,28 +454,15 @@ async def update_user_profile(
 @router.post("/change-password", response_model=ApiResponse)
 async def change_password(
     payload: ChangePasswordRequest,
+    response: Response,
     decoded: Dict[str, Any] = Depends(get_required_user),
     db: Session = Depends(get_db)
 ):
-    user_id_str = decoded.get("user_id") or decoded.get("userId")
-    email = (decoded.get("sub") or "").lower()
-    u_uuid = _parse_user_uuid(user_id_str)
-
-    user = None
-    if u_uuid:
-        user = db.scalar(select(UserAuth).where(UserAuth.id == u_uuid))
-    if not user and email:
-        user = db.scalar(select(UserAuth).where(UserAuth.email == email))
-
-    if not user:
-        raise HTTPException(status_code=404, detail="User account not found.")
-
-    if not getattr(user, "is_active", True):
-        raise HTTPException(status_code=403, detail="Account has been suspended or deactivated.")
+    user = _resolve_user(db, decoded)
 
     # Strictly verify current password
     if not payload.current_password or not AuthService.verify_password(payload.current_password, user.password_hash):
-        raise HTTPException(status_code=400, detail="Current password is incorrect.")
+        raise HTTPException(status_code=401, detail="Current password is incorrect.")
 
     # Prevent password reuse
     if payload.current_password == payload.new_password or AuthService.verify_password(payload.new_password, user.password_hash):
@@ -425,7 +472,11 @@ async def change_password(
     user.updated_at = datetime.now(timezone.utc)
     db.commit()
 
-    # Revoke all device and refresh token sessions upon password change
-    DeviceTracking.revoke_all_user_sessions(db, str(user.id))
+    # Revoke all refresh sessions and clear cookies so stolen sessions cannot continue.
+    DeviceTracking.revoke_all_user_sessions(db, user.id)
+    _clear_refresh_cookie(response)
 
-    return ApiResponse(success=True, data={"message": "Password updated successfully. All other active sessions have been revoked."})
+    return ApiResponse(
+        success=True,
+        data={"message": "Password updated successfully. All active sessions have been revoked. Please log in again."},
+    )

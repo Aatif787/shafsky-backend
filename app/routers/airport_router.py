@@ -2,12 +2,15 @@
 FastAPI Router for Airport Meet & Assist Module — Phase C.1.
 """
 
+import hashlib
+import hmac
 from typing import Optional, List, Dict, Any
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Body, status
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.security.dependencies import (
+    get_optional_user,
     get_required_user,
     get_required_staff_or_admin,
     get_required_admin,
@@ -27,8 +30,17 @@ from app.services.service_config_service import ServiceConfigService
 from app.services.assignment_service import AssignmentService
 from app.services.attachment_service import AttachmentService
 from app.services.timeline_service import TimelineService
+from app.config import settings
 
 router = APIRouter(prefix="/api/airport", tags=["Airport Meet & Greet"])
+
+
+def _draft_access_token(booking_ref: str, email: str) -> Optional[str]:
+    secret = settings.JWT_REFRESH_SECRET or settings.JWT_SECRET
+    if not secret:
+        return None
+    message = f"{booking_ref}:{email.strip().lower()}".encode("utf-8")
+    return hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
 
 
 @router.get(
@@ -170,8 +182,59 @@ def validate_authoritative_booking_endpoint(
 )
 def save_booking_draft_endpoint(
     payload: Dict[str, Any] = Body(...),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
 ):
+    supplied_ref = str(
+        payload.get("booking_ref")
+        or payload.get("bookingRef")
+        or payload.get("booking_reference")
+        or ""
+    ).strip()
+    if supplied_ref:
+        from sqlalchemy import select
+        from app.models.schema import Booking
+
+        existing = db.scalar(
+            select(Booking).where(Booking.booking_ref == supplied_ref)
+        )
+        if existing:
+            user_id = str(
+                (current_user or {}).get("user_id")
+                or (current_user or {}).get("userId")
+                or ""
+            )
+            user_email = str(
+                (current_user or {}).get("sub")
+                or (current_user or {}).get("email")
+                or ""
+            ).lower()
+            owns = bool(
+                (user_id and existing.user_id and str(existing.user_id) == user_id)
+                or (
+                    user_email
+                    and existing.passenger_email
+                    and existing.passenger_email.lower() == user_email
+                )
+            )
+            expected_token = _draft_access_token(
+                existing.booking_ref,
+                existing.passenger_email or "",
+            )
+            supplied_token = str(
+                payload.get("draft_token") or payload.get("draftToken") or ""
+            )
+            token_valid = bool(
+                expected_token
+                and supplied_token
+                and hmac.compare_digest(expected_token, supplied_token)
+            )
+            if not owns and not token_valid:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Valid draft ownership or draft token is required.",
+                )
+
     result = ServiceConfigService.save_booking_draft(db, payload)
     if not result.get("valid"):
         return {
@@ -181,10 +244,21 @@ def save_booking_draft_endpoint(
             "error": (result.get("errors") or [{}])[0].get("message") if result.get("errors") else "Invalid draft",
         }
     booking_ref = result.get("booking_reference")
+    email = str(
+        payload.get("email")
+        or payload.get("passenger_email")
+        or ""
+    )
+    draft_token = _draft_access_token(booking_ref, email) if booking_ref else None
     return {
         "success": True,
         "valid": True,
-        "draft": {"booking_ref": booking_ref, **result},
+        "draft": {
+            "booking_ref": booking_ref,
+            "draft_token": draft_token,
+            **result,
+        },
+        "draft_token": draft_token,
         **result,
     }
 
@@ -196,6 +270,41 @@ def save_booking_draft_endpoint(
     summary="Create Airport Booking",
     description="Creates an Airport Meet & Greet booking, validates flight details, auto-initializes Workflow Instance, and records Timeline activity."
 )
+def create_airport_booking_endpoint(
+    data: AirportBookingCreate,
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(get_required_user),
+):
+    customer_id = str(
+        current_user.get("user_id")
+        or current_user.get("userId")
+        or current_user.get("sub")
+        or ""
+    )
+    if not customer_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token missing user identity.",
+        )
+    actor_id = current_user.get("sub") or current_user.get("email") or customer_id
+    try:
+        return AirportService.create_booking(
+            db,
+            customer_id=customer_id,
+            service_package=data.service_package,
+            passengers_data=[p.model_dump() for p in data.passengers],
+            flight_detail_data=data.flight_detail.model_dump(),
+            addons_data=[a.model_dump() for a in data.addons],
+            special_instructions=data.special_instructions,
+            actor_id=actor_id,
+        )
+    except ValueError as err:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(err),
+        ) from err
+
+
 @router.post(
     "/flow/init",
     status_code=status.HTTP_200_OK,
@@ -210,7 +319,7 @@ def flow_init_endpoint(
     if not code or len(code) != 3:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid airport code")
 
-    config = ServiceConfigService.get_airport_configuration(code)
+    config = ServiceConfigService.get_airport_configuration(code, db=db)
     if not config:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Airport not supported")
 
@@ -417,8 +526,8 @@ def get_my_airport_bookings_endpoint(
     db: Session = Depends(get_db),
     current_user = Depends(get_required_user)
 ):
-    customer_id = getattr(current_user, "id", None) or getattr(current_user, "user_id", None)
-    customer_email = getattr(current_user, "email", None) or getattr(current_user, "sub", None)
+    customer_id = current_user.get("user_id") or current_user.get("userId")
+    customer_email = current_user.get("email") or current_user.get("sub")
     
     res = AirportService.list_bookings(
         db,
@@ -439,7 +548,7 @@ def get_my_airport_bookings_endpoint(
 def _check_airport_booking_access(booking: Any, current_user: Dict[str, Any]) -> None:
     if current_user.get("role") in STAFF_OR_ADMIN_ROLES:
         return
-    user_id = str(current_user.get("user_id") or getattr(current_user, "id", "") or "")
+    user_id = str(current_user.get("user_id") or current_user.get("userId") or "")
     user_email = str(current_user.get("sub") or current_user.get("email") or "").lower()
     b_cust_id = str(getattr(booking, "customer_id", "") or "").lower()
 
@@ -611,6 +720,8 @@ def register_attachment_endpoint(
 ):
     uploader = current_user.get("sub") or current_user.get("email") or "USER"
     try:
+        details = AirportService.get_booking_details(db, booking_id)
+        _check_airport_booking_access(details["booking"], current_user)
         att = AttachmentService.register(
             db,
             entity_type="AIRPORT_BOOKING",
@@ -639,5 +750,13 @@ def get_booking_timeline_endpoint(
     db: Session = Depends(get_db),
     current_user = Depends(get_required_user)
 ):
+    try:
+        details = AirportService.get_booking_details(db, booking_id)
+        _check_airport_booking_access(details["booking"], current_user)
+    except ValueError as err:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(err),
+        ) from err
     res = TimelineService.get_timeline(db, entity_type="AIRPORT_BOOKING", entity_id=str(booking_id), limit=limit, offset=offset)
     return {"success": True, "data": res["data"], "total": res["total"]}

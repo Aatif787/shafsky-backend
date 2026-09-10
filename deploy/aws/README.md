@@ -33,8 +33,10 @@ docker push $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/shafsky-backend:latest
 ## Register task & service
 
 1. Edit `ecs-task-definition.json` — replace `ACCOUNT_ID`, `REGION`, secret ARNs, image URI.
-2. `aws ecs register-task-definition --cli-input-json file://deploy/aws/ecs-task-definition.json`
-3. Create/update ECS service (Fargate, awsvpc, private subnets + ALB target group).
+2. Register a one-off migration task revision with `RUN_MIGRATIONS=true`, run it with desired count 1, and wait for exit code 0.
+3. Register the service task definition with `RUN_MIGRATIONS=false`:
+   `aws ecs register-task-definition --cli-input-json file://deploy/aws/ecs-task-definition.json`
+4. Create/update ECS service (Fargate, awsvpc, private subnets + ALB target group).
 
 ## Required production environment
 
@@ -44,8 +46,11 @@ docker push $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/shafsky-backend:latest
 | `TRUST_PROXY` | `true` |
 | `REQUIRE_REDIS` | `true` |
 | `ALLOWED_ORIGINS` | Exact HTTPS frontend origin(s) only |
-| `RUN_MIGRATIONS` | `true` (or run a one-off migrate task before traffic) |
+| `RUN_MIGRATIONS` | `false` on service tasks; `true` only on a one-off migration task |
 | `WEB_CONCURRENCY` | `2`+ based on CPU |
+
+Never enable migrations on every service task: concurrent task starts can race
+Alembic DDL. Deployment must stop if the one-off migration task fails.
 
 ## ALB notes
 

@@ -8,6 +8,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Depends, Header, status, Query, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ async def create_order_endpoint(
     Resolves authoritative amount from the persisted Booking and validates amounts.
     """
     from app.providers.razorpay_provider import razorpay_provider
-    from app.models.schema import Booking
+    from app.models.schema import Booking, BookingStatus
     from app.models.airport import AirportBooking
     from app.models.payment import PaymentTransaction, PaymentStatus, PaymentMethod
 
@@ -73,6 +74,16 @@ async def create_order_endpoint(
     customer_id = None
 
     if booking:
+        if booking.status == BookingStatus.CONFIRMED:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Booking '{booking_ref}' is already confirmed and paid.",
+            )
+        if booking.status in (BookingStatus.CANCELLED, BookingStatus.REJECTED):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Booking '{booking_ref}' cannot accept payment in its current state.",
+            )
         if booking.total_amount is None or float(booking.total_amount) <= 0:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Booking has no payable total amount.")
         authoritative_amount_rupees = float(booking.total_amount)
@@ -81,6 +92,16 @@ async def create_order_endpoint(
     else:
         apt_booking = db.scalar(select(AirportBooking).where(AirportBooking.booking_reference == booking_ref))
         if apt_booking:
+            if str(apt_booking.status or "").upper() in {
+                "CONFIRMED",
+                "CANCELLED",
+                "REJECTED",
+                "COMPLETED",
+            }:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Airport booking '{booking_ref}' cannot accept a new payment order.",
+                )
             if apt_booking.total_price is None or float(apt_booking.total_price) <= 0:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Airport booking has no payable total amount.")
             authoritative_amount_rupees = float(apt_booking.total_price)
@@ -94,6 +115,29 @@ async def create_order_endpoint(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Amount must be at least 100 paise (INR 1.00)."
+        )
+
+    # Reuse an active order for the booking. This makes repeated browser calls
+    # idempotent and prevents unauthenticated order-spam against a known ref.
+    existing_tx = db.scalar(
+        select(PaymentTransaction)
+        .where(
+            PaymentTransaction.entity_id == booking_ref,
+            PaymentTransaction.status.in_(
+                [PaymentStatus.PENDING, PaymentStatus.PROCESSING]
+            ),
+            PaymentTransaction.gateway_provider == "RAZORPAY",
+        )
+        .order_by(PaymentTransaction.created_at.desc())
+    )
+    existing_order_id = str(existing_tx.gateway_payment_id or "") if existing_tx else ""
+    if existing_order_id.startswith("order_") and not existing_order_id.startswith("order_sim_"):
+        return RazorpayCreateOrderResponse(
+            order_id=existing_order_id,
+            amount=authoritative_paise,
+            currency=authoritative_currency,
+            key_id=razorpay_provider.key_id,
+            receipt=booking_ref,
         )
 
     # Ensure client payload amount matches authoritative amount
@@ -411,7 +455,7 @@ async def razorpay_webhook_endpoint(
         import json
         payload = json.loads(body_bytes.decode("utf-8"))
     except Exception:
-        return PaymentApiResponse(success=False, error="Invalid JSON body")
+        raise HTTPException(status_code=400, detail="Invalid JSON body.")
 
     event_name = payload.get("event", "unknown")
     event_hdr_id = request.headers.get("X-Razorpay-Event-Id") or request.headers.get("x-razorpay-event-id")
@@ -449,7 +493,7 @@ async def razorpay_webhook_endpoint(
     plink_id = plink_entity.get("id") if isinstance(plink_entity, dict) else None
 
     # Construct canonical persistent event identifier
-    unique_event_id = event_hdr_id or payload.get("event_id") or f"{event_name}:{order_id or payment_id or booking_ref or plink_id}"
+    unique_event_id = event_hdr_id or payload.get("event_id") or f"{event_name}:{payment_id or order_id or plink_id or booking_ref}"
 
     # Persistent Webhook Idempotency Check
     existing_event = db.scalar(select(PaymentWebhookEvent).where(PaymentWebhookEvent.event_id == unique_event_id))
@@ -470,7 +514,20 @@ async def razorpay_webhook_endpoint(
         status="PROCESSED"
     )
     db.add(webhook_log)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError:
+        # A concurrent delivery may win the unique event_id insert after our
+        # initial lookup. Treat that race exactly like a normal duplicate.
+        db.rollback()
+        return PaymentApiResponse(
+            success=True,
+            data={
+                "status": "DUPLICATE_IGNORED",
+                "event": event_name,
+                "event_id": unique_event_id,
+            },
+        )
 
     logger.info(f"[Razorpay Webhook] Processing verified event '{event_name}' (ID: {unique_event_id}, ref: '{booking_ref}')")
 
@@ -498,6 +555,41 @@ async def razorpay_webhook_endpoint(
         except Exception:
             pass
         raise HTTPException(status_code=500, detail="Payment processing failed.") from None
+
+    if not result.get("success"):
+        result_status = str(result.get("status") or "PROCESSING_FAILED")
+        # These failures can be caused by delivery ordering or database
+        # availability. Roll back the event claim and ask Razorpay to retry.
+        if result_status in {
+            "COMMIT_FAILED",
+            "NOT_FOUND",
+            "REFUND_TRANSACTION_NOT_FOUND",
+        }:
+            db.rollback()
+            logger.error(
+                "[Razorpay Webhook] Retryable processing failure for event %s: %s",
+                unique_event_id,
+                result_status,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Webhook processing is temporarily incomplete.",
+            )
+
+        # Permanent validation failures are retained for investigation and
+        # acknowledged to avoid an endless gateway retry storm.
+        webhook_log.status = "FAILED"
+        db.commit()
+        return PaymentApiResponse(
+            success=False,
+            data={
+                "status": result_status,
+                "event": event_name,
+                "booking_ref": result.get("booking_ref"),
+                "event_id": unique_event_id,
+            },
+            error=result.get("reason") or "Webhook event was rejected.",
+        )
 
     return PaymentApiResponse(
         success=True,
@@ -577,7 +669,8 @@ def reconcile_sync_endpoint(
 )
 def reconcile_pending_endpoint(
     max_lookback_hours: int = 24,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _admin = Depends(get_required_admin),
 ):
     """
     Background-safe reconciliation worker. Scans pending transactions, queries Razorpay,
@@ -683,8 +776,14 @@ def customer_payment_history_endpoint(
     current_user = Depends(get_required_user)
 ):
     """Returns payment history for the authenticated customer."""
-    user_id = payload.userId or current_user.get("user_id") or current_user.get("userId")
+    user_id = current_user.get("user_id") or current_user.get("userId")
     email = current_user.get("email") or current_user.get("sub")
+
+    if payload.userId and str(payload.userId) != str(user_id or ""):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You may only view your own payment history.",
+        )
 
     history = PaymentService.get_customer_payment_history(
         db,

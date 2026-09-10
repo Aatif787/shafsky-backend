@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from sqlalchemy import select
-from app.models.schema import ServicesConfig, AirportManagement, Booking, BookingStatus
+from app.models.schema import ServicesConfig, Booking, BookingStatus
 
 logger = logging.getLogger("shafsky.services.service_config")
 EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
@@ -550,7 +550,13 @@ class ServiceConfigService:
 
         if db:
             from app.models.journey_models import SupportedAirport, Service, AirportService
-            airport = db.scalar(select(SupportedAirport).where(SupportedAirport.iata_code == code))
+            airport = db.scalar(
+                select(SupportedAirport).where(
+                    SupportedAirport.iata_code == code,
+                    SupportedAirport.is_supported.is_(True),
+                    SupportedAirport.is_active.is_(True),
+                )
+            )
             if airport:
                 stmt = select(AirportService).where(
                     AirportService.airport_id == airport.id,
@@ -611,6 +617,7 @@ class ServiceConfigService:
                         packages_out.append(pkg)
 
                     return {
+                        "id": str(airport.id),
                         "code": airport.iata_code,
                         "name": airport.airport_name,
                         "city": airport.city,
@@ -619,6 +626,13 @@ class ServiceConfigService:
                         "currency": "INR",
                         "operatingHours": "24/7",
                         "advanceNoticeHours": 6,
+                        "airport": {
+                            "id": str(airport.id),
+                            "code": airport.iata_code,
+                            "name": airport.airport_name,
+                            "city": airport.city,
+                            "country": airport.country,
+                        },
                         "packages": packages_out,
                         "individualServices": [],
                     }
@@ -641,7 +655,8 @@ class ServiceConfigService:
         """
         Unified Authoritative Master Catalog Resolution Engine.
         
-        Single Source of Truth: Reads directly from master AirportManagement & Service Catalog.
+        Single Source of Truth: Reads supported_airports, services, and
+        airport_services. AirportManagement demo JSON is not used for booking.
         Never invents synthetic packages or parallel service definitions.
         """
         from app.services.service_airport_rules import (
@@ -714,10 +729,6 @@ class ServiceConfigService:
         if isinstance(resolved_flight_type, str):
             resolved_flight_type = resolved_flight_type.lower()
 
-        db_airport = db.scalar(
-            select(AirportManagement).where(AirportManagement.code == code)
-        )
-
         master_config = cls.get_airport_configuration(
             code,
             db=db,
@@ -725,22 +736,22 @@ class ServiceConfigService:
             flight_type=catalog_flight_type,
         )
 
-        is_covered = True
-        if db_airport and not db_airport.is_active:
-            is_covered = False
-        elif not db_airport and not master_config:
-            is_covered = False
-        elif not master_config.get("packages") and not master_config.get("individualServices"):
-            is_covered = False
+        is_covered = bool(
+            master_config
+            and (
+                master_config.get("packages")
+                or master_config.get("individualServices")
+            )
+        )
 
         if not is_covered:
             return {
                 "covered": False,
                 "success": False,
                 "airport": {
-                    "id": str(db_airport.id) if db_airport else None,
+                    "id": master_config.get("id"),
                     "code": code,
-                    "name": db_airport.name if db_airport else f"{code} Airport"
+                    "name": master_config.get("name") or f"{code} Airport"
                 },
                 "journey_type": j_type,
                 "journeyType": j_type,
@@ -772,11 +783,11 @@ class ServiceConfigService:
             "covered": True,
             "success": True,
             "airport": {
-                "id": str(db_airport.id) if db_airport else code,
+                "id": master_config.get("id") or code,
                 "code": code,
-                "name": master_config.get("name") or (db_airport.name if db_airport else f"{code} Airport"),
-                "city": master_config.get("city") or (db_airport.city if db_airport else code),
-                "country": master_config.get("country") or (db_airport.country if db_airport else "India"),
+                "name": master_config.get("name") or f"{code} Airport",
+                "city": master_config.get("city") or code,
+                "country": master_config.get("country") or "India",
             },
             "journey_type": j_type,
             "journeyType": j_type,
@@ -879,10 +890,7 @@ class ServiceConfigService:
 
         # Check coverage in database
         is_covered = True
-        db_airport = db.scalar(select(AirportManagement).where(AirportManagement.code == target_airport_code))
-        if db_airport and not db_airport.is_active:
-            is_covered = False
-        elif not db_airport and not config:
+        if not config:
             is_covered = False
         elif not config.get("packages") and not config.get("individualServices"):
             is_covered = False

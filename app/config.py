@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "Shafsky Aviation FastAPI Backend Engine"
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
     DATABASE_URL: str = os.getenv("DATABASE_URL", "")
+    DB_POOL_SIZE: int = int(os.getenv("DB_POOL_SIZE", "20"))
+    DB_MAX_OVERFLOW: int = int(os.getenv("DB_MAX_OVERFLOW", "30"))
+    DB_POOL_TIMEOUT: int = int(os.getenv("DB_POOL_TIMEOUT", "30"))
     REDIS_HOST: str = os.getenv("REDIS_HOST", "localhost")
     REDIS_PORT: int = int(os.getenv("REDIS_PORT", "6379"))
     REDIS_PASSWORD: str = os.getenv("REDIS_PASSWORD", "")
@@ -35,6 +38,8 @@ class Settings(BaseSettings):
     JWT_PRIVATE_KEY: str = os.getenv("JWT_PRIVATE_KEY", "")
     JWT_PUBLIC_KEY: str = os.getenv("JWT_PUBLIC_KEY", "")
     JWT_PREVIOUS_PUBLIC_KEYS: str = os.getenv("JWT_PREVIOUS_PUBLIC_KEYS", "")
+    JWT_ISSUER: str = os.getenv("JWT_ISSUER", "shafsky-backend")
+    JWT_AUDIENCE: str = os.getenv("JWT_AUDIENCE", "shafsky-api")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "15"))
     REFRESH_TOKEN_EXPIRE_DAYS: int = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
     # Allow legacy HS256 fallback for JWT verification. Defaults to true in non-production, false in production.
@@ -83,6 +88,12 @@ class Settings(BaseSettings):
     CORS_ALLOW_CREDENTIALS: bool = os.getenv("CORS_ALLOW_CREDENTIALS", "true").lower() in ("1", "true", "yes")
     # Behind ALB/CloudFront/Cloudflare set TRUST_PROXY=true so rate limits use X-Forwarded-For.
     TRUST_PROXY: bool = os.getenv("TRUST_PROXY", "false").lower() in ("1", "true", "yes")
+    # Only immediate peers in these CIDRs may supply forwarded client-IP headers.
+    # Add official Cloudflare CIDRs explicitly when Cloudflare connects directly.
+    TRUSTED_PROXY_CIDRS: str = os.getenv(
+        "TRUSTED_PROXY_CIDRS",
+        "127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16",
+    )
     # Cookie SameSite: use "none" for cross-site Vercel frontend + Azure/API on another domain.
     # Allowed: lax | strict | none  (none requires Secure in production browsers)
     COOKIE_SAMESITE: str = (os.getenv("COOKIE_SAMESITE") or "").strip().lower() or (

@@ -68,8 +68,12 @@ async def provider_webhook_listener(
     provider: str,
     _payload: Dict[str, Any]
 ):
-    # Webhook delivery receipt processing
-    return {"status": "SUCCESS", "provider": provider, "processed": True}
+    # Delivery receipt signatures are provider-specific. Do not acknowledge
+    # unverified payloads until a verifier is implemented for that provider.
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail=f"Verified {provider} delivery webhooks are not implemented.",
+    )
 
 
 from datetime import datetime, timezone

@@ -24,6 +24,12 @@ from app.security.keys import (
 
 class SecurityJWT:
     @staticmethod
+    def _normalize_access_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+        if payload.get("sub") and not payload.get("email"):
+            payload["email"] = payload["sub"]
+        return payload
+
+    @staticmethod
     def hash_token(raw_token: str) -> str:
         """Computes SHA-256 hash of raw token string."""
         return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
@@ -41,7 +47,13 @@ class SecurityJWT:
         else:
             expire = now + timedelta(minutes=getattr(settings, "ACCESS_TOKEN_EXPIRE_MINUTES", 15))
 
-        to_encode.update({"exp": expire, "iat": now, "type": "access"})
+        to_encode.update({
+            "exp": expire,
+            "iat": now,
+            "type": "access",
+            "iss": settings.JWT_ISSUER,
+            "aud": settings.JWT_AUDIENCE,
+        })
         private_key = get_jwt_private_key()
         key_id = get_jwt_key_id()
         algorithm = getattr(settings, "JWT_ALGORITHM", "RS256")
@@ -88,18 +100,28 @@ class SecurityJWT:
                 keys_to_try.append(pub_pem)
 
         # 1. Verification with RSA Public Keys
+        decode_kwargs = {
+            "algorithms": ["RS256"],
+            "options": {"verify_aud": settings.is_production},
+        }
+        if settings.is_production:
+            decode_kwargs.update({
+                "audience": settings.JWT_AUDIENCE,
+                "issuer": settings.JWT_ISSUER,
+            })
+
         for public_key in keys_to_try:
             try:
                 payload = jwt.decode(
                     token,
                     public_key,
-                    algorithms=["RS256"],
-                    options={"verify_aud": False}
+                    **decode_kwargs,
                 )
                 if payload:
-                    if "sub" in payload and "email" not in payload:
-                        payload["email"] = payload["sub"]
-                    return payload
+                    if payload.get("type") != "access":
+                        payload = None
+                        continue
+                    return cls._normalize_access_payload(payload)
             except jwt.ExpiredSignatureError:
                 raise HTTPException(status_code=401, detail="Token has expired.")
             except (jwt.InvalidSignatureError, jwt.DecodeError, jwt.InvalidAlgorithmError):
@@ -123,9 +145,10 @@ class SecurityJWT:
                         options={"verify_aud": False}
                     )
                     if payload:
-                        if "sub" in payload and "email" not in payload:
-                            payload["email"] = payload["sub"]
-                        return payload
+                        if payload.get("type", "access") != "access":
+                            payload = None
+                        else:
+                            return cls._normalize_access_payload(payload)
                 except jwt.ExpiredSignatureError:
                     raise HTTPException(status_code=401, detail="Token has expired.")
                 except Exception:

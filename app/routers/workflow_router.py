@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc, asc
 from app.database import get_db
 from app.models.schema import WorkflowDefinition, WorkflowInstance, WorkflowHistory, WorkflowAuditLog, Role
-from app.security.dependencies import get_required_user, require_role
+from app.security.dependencies import get_required_staff_or_admin, require_role
 from app.workflow.engine import WorkflowEngine
 from app.workflow.definitions import seed_default_workflows
 from app.schemas.workflow import (
@@ -114,7 +114,7 @@ def get_definition_endpoint(
 def create_instance_endpoint(
     data: WorkflowInstanceCreate,
     db: Session = Depends(get_db),
-    current_user = Depends(get_required_user),
+    current_user = Depends(get_required_staff_or_admin),
     x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-ID")
 ):
     """Initialize a new version-pinned workflow instance."""
@@ -142,7 +142,7 @@ def create_instance_endpoint(
 def get_instance_endpoint(
     instance_id: UUID,
     db: Session = Depends(get_db),
-    current_user = Depends(get_required_user)
+    current_user = Depends(get_required_staff_or_admin)
 ):
     """Retrieve workflow instance by ID."""
     instance = db.query(WorkflowInstance).filter(WorkflowInstance.id == instance_id).first()
@@ -162,7 +162,7 @@ def execute_transition_endpoint(
     instance_id: UUID,
     data: WorkflowTransitionRequest,
     db: Session = Depends(get_db),
-    current_user = Depends(get_required_user),
+    current_user = Depends(get_required_staff_or_admin),
     x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-ID")
 ):
     """Execute state transition with guard evaluation and role authorization."""
@@ -206,7 +206,7 @@ def get_history_endpoint(
     offset: int = Query(0, ge=0, description="Pagination offset"),
     sort: str = Query("asc", pattern="^(asc|desc)$", description="Sort order by timestamp"),
     db: Session = Depends(get_db),
-    _user=Depends(get_required_user),
+    _user=Depends(get_required_staff_or_admin),
 ):
     """Retrieve paginated workflow execution history."""
     instance = db.query(WorkflowInstance).filter(WorkflowInstance.id == instance_id).first()
@@ -242,7 +242,7 @@ def get_audit_endpoint(
     offset: int = Query(0, ge=0, description="Pagination offset"),
     sort: str = Query("asc", pattern="^(asc|desc)$", description="Sort order by creation timestamp"),
     db: Session = Depends(get_db),
-    _user=Depends(get_required_user),
+    _user=Depends(get_required_staff_or_admin),
 ):
     """Retrieve paginated workflow audit log records."""
     instance = db.query(WorkflowInstance).filter(WorkflowInstance.id == instance_id).first()

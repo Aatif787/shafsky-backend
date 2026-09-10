@@ -118,15 +118,16 @@ def update_workflow_status(
     booking_reference: str,
     payload: StatusUpdateRequest,
     db: Session = Depends(get_db),
-    _staff=Depends(get_required_staff_or_admin),
+    staff=Depends(get_required_staff_or_admin),
 ):
+    actor_id = staff.get("sub") or staff.get("email") or staff.get("user_id") or "STAFF"
     try:
         updated = OperationsEngine.update_status(
             db=db,
             booking_reference=booking_reference,
             new_status=payload.status,
             reason=payload.reason,
-            actor_id=payload.actor_id or "STAFF",
+            actor_id=actor_id,
         )
         return OperationsQueueItemResponse.model_validate(updated)
     except ValueError as err:
@@ -144,8 +145,9 @@ def assign_duty_officer(
     booking_reference: str,
     payload: AssignStaffRequest,
     db: Session = Depends(get_db),
-    _staff=Depends(get_required_staff_or_admin),
+    staff=Depends(get_required_staff_or_admin),
 ):
+    actor_id = staff.get("sub") or staff.get("email") or staff.get("user_id") or "STAFF"
     item = db.query(OperationsQueue).filter_by(booking_reference=booking_reference).first()
     if not item:
         raise HTTPException(
@@ -159,7 +161,7 @@ def assign_duty_officer(
             booking_reference=booking_reference,
             staff_id=payload.staff_id,
             staff_name=payload.staff_name,
-            assigned_by=payload.assigned_by or "STAFF",
+            assigned_by=actor_id,
         )
     else:
         OperationsEngine.auto_assign_officer(db, item)
@@ -181,8 +183,9 @@ def add_internal_staff_note(
     booking_reference: str,
     payload: InternalNoteCreateRequest,
     db: Session = Depends(get_db),
-    _staff=Depends(get_required_staff_or_admin),
+    staff=Depends(get_required_staff_or_admin),
 ):
+    actor_id = staff.get("sub") or staff.get("email") or staff.get("user_id") or "STAFF"
     item = db.query(OperationsQueue).filter_by(booking_reference=booking_reference).first()
     if not item:
         raise HTTPException(
@@ -194,7 +197,7 @@ def add_internal_staff_note(
         db=db,
         booking_reference=booking_reference,
         content=payload.content,
-        author_id=payload.author_id or "STAFF",
+        author_id=actor_id,
     )
     return InternalNoteResponse.model_validate(note)
 

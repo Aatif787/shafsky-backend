@@ -1,0 +1,96 @@
+# Render Blueprint — Docker web service + Redis (Key Value).
+# Database is NOT created here: paste the existing Neon DATABASE_URL in the dashboard
+# when prompted (sync: false). Creating a new Render Postgres would start empty.
+#
+# Apply: Dashboard → New → Blueprint → this repo, or push this file to the linked branch.
+# Docs: https://render.com/docs/blueprint-spec
+
+services:
+  - type: keyvalue
+    name: shafsky-redis
+    plan: starter
+    region: singapore
+    maxmemoryPolicy: allkeys-lru
+    ipAllowList: []
+
+  - type: web
+    name: shafsky-backend
+    runtime: docker
+    plan: starter
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /ready
+    preDeployCommand: alembic upgrade head
+    autoDeployTrigger: commit
+    maxShutdownDelaySeconds: 30
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: RUN_MIGRATIONS
+        value: "false"
+      - key: RUN_STARTUP_SCHEMA_PATCHES
+        value: "false"
+      - key: REQUIRE_REDIS
+        value: "true"
+      - key: TRUST_PROXY
+        value: "true"
+      - key: COOKIE_SAMESITE
+        value: none
+      - key: CORS_ALLOW_CREDENTIALS
+        value: "true"
+      - key: ALLOW_HS256_LEGACY_FALLBACK
+        value: "false"
+      - key: ALLOW_ADMIN_BOOTSTRAP
+        value: "false"
+      - key: JWT_ALGORITHM
+        value: RS256
+      - key: JWT_ISSUER
+        value: shafsky-backend
+      - key: JWT_AUDIENCE
+        value: shafsky-api
+      - key: WEB_CONCURRENCY
+        value: "2"
+      - key: DB_POOL_SIZE
+        value: "5"
+      - key: DB_MAX_OVERFLOW
+        value: "5"
+      - key: BIND_HOST
+        value: "0.0.0.0"
+      - key: REDIS_URL
+        fromService:
+          name: shafsky-redis
+          type: keyvalue
+          property: connectionString
+      - key: DATABASE_URL
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: JWT_PRIVATE_KEY
+        sync: false
+      - key: JWT_PUBLIC_KEY
+        sync: false
+      - key: JWT_REFRESH_SECRET
+        sync: false
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
+      - key: WHATSAPP_ACCESS_TOKEN
+        sync: false
+      - key: WHATSAPP_APP_SECRET
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_WEBHOOK_VERIFY_TOKEN
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false

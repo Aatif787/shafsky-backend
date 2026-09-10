@@ -10,7 +10,7 @@ from typing import Dict, Any, Optional, List
 from decimal import Decimal
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
-from sqlalchemy import select, desc, or_
+from sqlalchemy import select, desc, or_, text
 from sqlalchemy.exc import IntegrityError
 
 logger = logging.getLogger(__name__)
@@ -790,6 +790,16 @@ class PaymentService:
         if not channel:
             channel = extracted_ids.get("channel") or channel
 
+        # Serialize distinct Razorpay events (for example payment.captured and
+        # order.paid) that target the same booking. Event-id deduplication alone
+        # cannot prevent those two different events from racing each other.
+        lock_key = booking_ref or order_id or payment_id or payment_link_id
+        if lock_key and db.bind is not None and db.bind.dialect.name == "postgresql":
+            db.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext(:payment_lock_key))"),
+                {"payment_lock_key": f"payment:{lock_key}"},
+            )
+
         logger.info(
             f"[PaymentService] Processing event '{event_name}' (order: {order_id}, payment: {payment_id}, plink: {payment_link_id}, ref: {booking_ref})"
         )
@@ -797,18 +807,40 @@ class PaymentService:
         # 1. Resolve PaymentTransaction
         transaction = None
         if order_id or payment_id or booking_ref or payment_link_id:
-            conditions = []
-            if order_id:
-                conditions.append(PaymentTransaction.gateway_payment_id == order_id)
-            if payment_id:
-                conditions.append(PaymentTransaction.gateway_payment_id == payment_id)
-            if payment_link_id:
-                conditions.append(PaymentTransaction.gateway_payment_id == payment_link_id)
-            if booking_ref:
-                conditions.append(PaymentTransaction.transaction_ref == booking_ref)
-                conditions.append(PaymentTransaction.entity_id == booking_ref)
-
-            transaction = db.scalar(select(PaymentTransaction).where(or_(*conditions)).order_by(PaymentTransaction.created_at.desc()))
+            # Prefer exact gateway identifiers. Falling back to booking_ref in the
+            # same OR query can attach a late failure from an old attempt to the
+            # newest retry transaction.
+            gateway_ids = {
+                value for value in (order_id, payment_id, payment_link_id) if value
+            }
+            if gateway_ids:
+                transaction = db.scalar(
+                    select(PaymentTransaction)
+                    .where(PaymentTransaction.gateway_payment_id.in_(gateway_ids))
+                    .order_by(PaymentTransaction.created_at.desc())
+                )
+            if not transaction and booking_ref:
+                booking_transactions = list(db.scalars(
+                    select(PaymentTransaction)
+                    .where(
+                        or_(
+                            PaymentTransaction.transaction_ref == booking_ref,
+                            PaymentTransaction.entity_id == booking_ref,
+                        )
+                    )
+                    .order_by(PaymentTransaction.created_at.desc())
+                ).all())
+                if gateway_ids:
+                    transaction = next(
+                        (
+                            candidate
+                            for candidate in booking_transactions
+                            if gateway_ids & cls._collect_tx_gateway_ids(candidate)
+                        ),
+                        None,
+                    )
+                else:
+                    transaction = booking_transactions[0] if booking_transactions else None
             if booking_ref and transaction and transaction.status != PaymentStatus.SUCCESSFUL:
                 successful = db.scalar(
                     select(PaymentTransaction).where(
@@ -860,6 +892,13 @@ class PaymentService:
                 "success": False,
                 "status": "NOT_FOUND",
                 "reason": f"No transaction or booking found matching order '{order_id}', payment '{payment_id}', ref '{booking_ref}'"
+            }
+        if event_name in ["payment.failed", "PAYMENT_FAILED"] and not transaction:
+            return {
+                "success": False,
+                "status": "NOT_FOUND",
+                "reason": "Failed payment event could not be matched to a transaction.",
+                "booking_ref": booking_ref,
             }
 
         # Cross-safety check: Ensure payment for Booking A cannot confirm Booking B
@@ -1011,6 +1050,34 @@ class PaymentService:
                     f"expected_currency={exp_curr_norm}, received_currency={rec_curr_norm}, "
                     f"result=EXACT_MATCH"
                 )
+
+                # A valid gateway event may arrive before the local transaction
+                # commit becomes visible. Preserve the financial event instead
+                # of confirming a booking without a SUCCESSFUL ledger row.
+                if transaction is None:
+                    transaction = PaymentTransaction(
+                        transaction_ref=f"PAY-REC-{uuid.uuid4().hex[:8].upper()}",
+                        entity_type="AIRPORT_BOOKING",
+                        entity_id=str(resolved_booking_ref),
+                        customer_id=(
+                            str(booking.user_id)
+                            if booking and booking.user_id
+                            else (
+                                str(airport_booking.customer_id)
+                                if airport_booking and airport_booking.customer_id
+                                else None
+                            )
+                        ),
+                        amount=float(exp_rupees),
+                        currency=exp_curr_norm,
+                        payment_method=PaymentMethod.CREDIT_CARD,
+                        status=PaymentStatus.PENDING,
+                        gateway_provider=gateway_provider,
+                        gateway_payment_id=order_id or payment_id or payment_link_id,
+                        gateway_response=raw_payload,
+                    )
+                    db.add(transaction)
+                    db.flush()
 
             # Double Payment & Overpayment Protection Guard
             is_booking_confirmed = booking and booking.status == BookingStatus.CONFIRMED
@@ -1478,6 +1545,28 @@ class PaymentService:
 
         # 5. Handle Refund Events
         elif event_name in ["refund.created", "refund.processed", "payment.refunded", "PAYMENT_REFUNDED"]:
+            if not transaction:
+                return {
+                    "success": False,
+                    "status": "REFUND_TRANSACTION_NOT_FOUND",
+                    "reason": "Refund event could not be matched to a payment transaction.",
+                    "booking_ref": resolved_booking_ref,
+                }
+            if transaction.status not in {
+                PaymentStatus.SUCCESSFUL,
+                PaymentStatus.PARTIALLY_REFUNDED,
+                PaymentStatus.REFUNDED,
+            }:
+                return {
+                    "success": False,
+                    "status": "INVALID_REFUND_STATE",
+                    "reason": (
+                        f"Cannot apply a refund to a transaction in "
+                        f"'{transaction.status.value}' state."
+                    ),
+                    "booking_ref": resolved_booking_ref,
+                }
+
             # Extract refund amounts from payload
             refund_amount_raw = None
             amount_refunded_raw = None
@@ -1494,8 +1583,8 @@ class PaymentService:
                 payment_amount_raw = pay_ent.get("amount")
                 refund_status_str = pay_ent.get("refund_status") or ref_ent.get("status")
 
-            # Determine if this is a full refund or partial refund
-            is_full_refund = True  # Default for explicit refund event unless partial indicators found
+            # Determine full vs partial only from explicit gateway evidence.
+            is_full_refund = None
 
             target_amount = float(booking.total_amount) if booking else (float(transaction.amount) if transaction else None)
 
@@ -1510,11 +1599,18 @@ class PaymentService:
                 refund_rupees = float(refund_amount_raw) / 100.0
                 is_full_refund = round(refund_rupees, 2) >= round(target_amount, 2)
 
-            if transaction:
-                transaction.status = PaymentStatus.REFUNDED if is_full_refund else PaymentStatus.PARTIALLY_REFUNDED
-                transaction.updated_at = datetime.now(timezone.utc)
-                for inv in transaction.invoices:
-                    inv.status = InvoiceStatus.CANCELLED if is_full_refund else InvoiceStatus.PARTIALLY_PAID
+            if is_full_refund is None:
+                return {
+                    "success": False,
+                    "status": "REFUND_DATA_INCOMPLETE",
+                    "reason": "Refund event did not contain enough amount or status data.",
+                    "booking_ref": resolved_booking_ref,
+                }
+
+            transaction.status = PaymentStatus.REFUNDED if is_full_refund else PaymentStatus.PARTIALLY_REFUNDED
+            transaction.updated_at = datetime.now(timezone.utc)
+            for inv in transaction.invoices:
+                inv.status = InvoiceStatus.CANCELLED if is_full_refund else InvoiceStatus.PARTIALLY_PAID
             
             if booking:
                 if is_full_refund:
@@ -2075,17 +2171,50 @@ class PaymentService:
         if not order_res.get("success"):
             raise ValueError(f"Failed to fetch order from Razorpay: {order_res.get('error')}")
 
-        order_status = order_res.get("status")
+        order_data = order_res.get("order") or order_res.get("data") or {}
+        order_status = order_data.get("status") or order_res.get("status")
         if order_status == "paid":
+            payments_res = razorpay_provider.fetch_order_payments(gateway_order_id)
+            if not payments_res.get("success"):
+                raise ValueError(
+                    f"Failed to fetch captured payment from Razorpay: {payments_res.get('error')}"
+                )
+
+            captured_payment = next(
+                (
+                    payment
+                    for payment in payments_res.get("items", [])
+                    if str(payment.get("status") or "").lower() == "captured"
+                ),
+                None,
+            )
+            if not captured_payment:
+                raise ValueError(
+                    f"Razorpay order '{gateway_order_id}' is paid but has no captured payment."
+                )
+
             result = cls.handle_verified_payment(
                 db,
-                event_name="RECONCILE_SYNC",
+                event_name="payment.captured",
                 gateway_provider="RAZORPAY",
                 order_id=gateway_order_id,
+                payment_id=captured_payment.get("id"),
                 booking_ref=booking_ref,
-                channel="web"
+                channel="web_reconciliation",
+                amount=captured_payment.get("amount"),
+                currency=captured_payment.get("currency"),
             )
-            return {"reconciled": True, "status": "CONFIRMED", "details": result}
+            if not result.get("success"):
+                return {
+                    "reconciled": False,
+                    "status": result.get("status", "RECONCILIATION_FAILED"),
+                    "details": result,
+                }
+            return {
+                "reconciled": True,
+                "status": result.get("status", "CONFIRMED"),
+                "details": result,
+            }
 
         return {
             "reconciled": True,
@@ -2102,6 +2231,7 @@ class PaymentService:
         conversations so abandoned links do not linger forever.
         """
         from datetime import timedelta
+        from app.providers.razorpay_provider import razorpay_provider
 
         threshold = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
         stale_txs = list(
@@ -2115,6 +2245,39 @@ class PaymentService:
 
         count = 0
         for tx in stale_txs:
+            gateway_id = str(tx.gateway_payment_id or "")
+            if (
+                tx.gateway_provider == "RAZORPAY"
+                and gateway_id
+                and razorpay_provider.is_configured()
+            ):
+                if gateway_id.startswith("order_"):
+                    order_result = razorpay_provider.fetch_order(gateway_id)
+                    if not order_result.get("success"):
+                        logger.warning(
+                            "Skipping expiry for %s: gateway order could not be verified.",
+                            tx.transaction_ref,
+                        )
+                        continue
+                    order_data = order_result.get("order") or order_result.get("data") or {}
+                    if str(order_data.get("status") or "").lower() == "paid":
+                        continue
+                    payments_result = razorpay_provider.fetch_order_payments(gateway_id)
+                    if not payments_result.get("success"):
+                        continue
+                    if any(
+                        str(item.get("status") or "").lower() in {"authorized", "captured"}
+                        for item in payments_result.get("items", [])
+                    ):
+                        continue
+                elif gateway_id.startswith("plink_"):
+                    link_result = razorpay_provider.fetch_payment_link(gateway_id)
+                    if not link_result.get("success"):
+                        continue
+                    link_data = link_result.get("data") or link_result
+                    if str(link_data.get("status") or "").lower() == "paid":
+                        continue
+
             tx.status = PaymentStatus.EXPIRED
             tx.updated_at = datetime.now(timezone.utc)
             count += 1

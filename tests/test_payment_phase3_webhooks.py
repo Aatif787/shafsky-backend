@@ -285,8 +285,9 @@ def test_6_unknown_order_id_handled_gracefully():
     sig = generate_webhook_signature(body_bytes, razorpay_provider.webhook_secret) if razorpay_provider.webhook_secret else "simulated_webhook_signature"
 
     res = client.post("/api/payments/razorpay/webhook", content=body_bytes, headers={"X-Razorpay-Signature": sig})
-    assert res.status_code == 200
-    assert res.json()["data"]["status"] == "NOT_FOUND"
+    # Unknown captured payments are retryable: the gateway event can race the
+    # local booking/transaction commit and must not be acknowledged as processed.
+    assert res.status_code == 503
 
 
 def test_7_payment_failed_leaves_booking_pending():

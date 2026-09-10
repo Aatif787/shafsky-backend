@@ -468,23 +468,6 @@ class RazorpayProvider:
                 "error": f"Network exception: {str(err)}"
             }
 
-    def fetch_order(self, order_id: str) -> Dict[str, Any]:
-        """Fetches Razorpay order details for status reconciliation."""
-        self._load_config()
-        if not self.is_configured() or order_id.startswith(("order_sim_", "order_test_", "order_initial_", "order_second_", "order_retry")):
-            return {"success": True, "order_id": order_id, "status": "paid", "simulated": True}
-
-        url = f"https://api.razorpay.com/v1/orders/{order_id}"
-        try:
-            with httpx.Client(timeout=15.0) as client:
-                res = client.get(url, auth=(self.key_id, self.key_secret))
-                if res.status_code == 200:
-                    data = res.json()
-                    return {"success": True, "data": data, "status": data.get("status")}
-                return {"success": False, "error": f"Order fetch error ({res.status_code}): {res.text}"}
-        except Exception as err:
-            return {"success": False, "error": str(err)}
-
     def fetch_payment(self, payment_id: str) -> Dict[str, Any]:
         """Fetches Razorpay payment details for status reconciliation."""
         self._load_config()

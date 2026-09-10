@@ -157,24 +157,40 @@ async def get_booking_status(
     from app.models.payment import PaymentTransaction, PaymentStatus
     from sqlalchemy import select, or_
 
-    tx = db.scalar(
+    successful_tx = db.scalar(
         select(PaymentTransaction).where(
             or_(
                 PaymentTransaction.transaction_ref == booking.booking_ref,
                 PaymentTransaction.entity_id == booking.booking_ref
+            ),
+            PaymentTransaction.status == PaymentStatus.SUCCESSFUL,
+        )
+        .order_by(PaymentTransaction.created_at.desc())
+    )
+    latest_tx = successful_tx or db.scalar(
+        select(PaymentTransaction)
+        .where(
+            or_(
+                PaymentTransaction.transaction_ref == booking.booking_ref,
+                PaymentTransaction.entity_id == booking.booking_ref,
             )
         )
+        .order_by(PaymentTransaction.created_at.desc())
     )
 
-    is_paid = booking.status == BookingStatus.CONFIRMED or (tx and tx.status == PaymentStatus.SUCCESSFUL)
+    is_paid = booking.status == BookingStatus.CONFIRMED or bool(successful_tx)
 
     return BookingApiResponse(
         success=True,
         data={
             "bookingRef": booking.booking_ref,
             "status": booking.status.value if hasattr(booking.status, "value") else str(booking.status),
-            "paymentStatus": "PAID" if is_paid else (tx.status.value if tx and hasattr(tx.status, "value") else "PENDING"),
-            "totalAmount": float(booking.total_amount),
+            "paymentStatus": "PAID" if is_paid else (
+                latest_tx.status.value
+                if latest_tx and hasattr(latest_tx.status, "value")
+                else "PENDING"
+            ),
+            "totalAmount": float(booking.total_amount or 0),
             "currency": booking.currency,
             # Intentionally omit passenger PII on this public polling endpoint (C4 remnant).
             "serviceType": booking.service_type,
@@ -322,6 +338,8 @@ async def get_booking_details(
     user_context: Dict[str, Any] = Depends(get_required_user)
 ):
     booking = BookingService.get_booking_by_ref_or_id(db, identifier)
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found.")
     role = user_context.get("role")
     email = (user_context.get("sub") or user_context.get("email") or "").lower()
     user_id = str(user_context.get("user_id") or user_context.get("userId") or "")

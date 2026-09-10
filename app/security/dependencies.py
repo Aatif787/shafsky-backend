@@ -4,7 +4,6 @@ from app.services.auth_service import AuthService
 
 ADMIN_ROLES = [
     "SUPER_ADMIN", "ADMIN", "OPERATIONS_MANAGER",
-    "DUTY_OFFICER", "CONCIERGE_TEAM", "CUSTOMER_SUPPORT", "DISPATCHER"
 ]
 
 STAFF_OR_ADMIN_ROLES = [

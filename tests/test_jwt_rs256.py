@@ -82,8 +82,8 @@ def test_04_expired_rs256_token_rejected():
     assert "expired" in exc_info.value.detail.lower()
 
 
-def test_05_hs256_backward_compatibility():
-    """Verify transition window backward compatibility for legacy HS256 tokens."""
+def test_05_hs256_legacy_token_rejected_when_fallback_disabled():
+    """Legacy HS256 tokens must be rejected unless fallback is explicitly enabled."""
     now = datetime.now(timezone.utc)
     legacy_payload = {
         "sub": "legacy_user@shafskyaviation.com",
@@ -99,10 +99,14 @@ def test_05_hs256_backward_compatibility():
     unverified_header = jwt.get_unverified_header(legacy_token)
     assert unverified_header["alg"] == "HS256"
 
-    # Decode using SecurityJWT.decode_token
-    decoded = SecurityJWT.decode_token(legacy_token)
-    assert decoded["email"] == "legacy_user@shafskyaviation.com"
-    assert decoded["role"] == "CUSTOMER"
+    previous = getattr(settings, "ALLOW_HS256_LEGACY_FALLBACK", False)
+    settings.ALLOW_HS256_LEGACY_FALLBACK = False
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            SecurityJWT.decode_token(legacy_token)
+        assert exc_info.value.status_code == 401
+    finally:
+        settings.ALLOW_HS256_LEGACY_FALLBACK = previous
 
 
 def test_06_startup_secrets_validation():
@@ -115,6 +119,6 @@ if __name__ == "__main__":
     test_02_create_and_decode_rs256_token()
     test_03_tampered_rs256_token_rejected()
     test_04_expired_rs256_token_rejected()
-    test_05_hs256_backward_compatibility()
+    test_05_hs256_legacy_token_rejected_when_fallback_disabled()
     test_06_startup_secrets_validation()
     print("ALL MILESTONE A1 RS256 TESTS PASSED 100%!")

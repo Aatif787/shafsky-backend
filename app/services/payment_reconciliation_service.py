@@ -72,31 +72,45 @@ class PaymentReconciliationService:
 
                         if captured_payment:
                             pay_id = captured_payment.get("id")
-                            amt = float(captured_payment.get("amount", 0)) / 100.0
+                            # Canonical payment handling expects Razorpay's raw amount in paise.
+                            amount_paise = captured_payment.get("amount")
                             curr = captured_payment.get("currency", "INR")
 
                             result = PaymentService.handle_verified_payment(
                                 db,
-                                event_name="ORDER_RECONCILED",
+                                event_name="payment.captured",
                                 gateway_provider="RAZORPAY",
                                 order_id=target_id,
                                 payment_id=pay_id,
                                 booking_ref=booking_ref,
-                                amount=amt,
+                                amount=amount_paise,
                                 currency=curr,
                                 channel="web_reconciliation"
                             )
 
-                            if result.get("success"):
+                            if result.get("success") and result.get("status") in {
+                                "CONFIRMED",
+                                "ALREADY_CONFIRMED",
+                            }:
                                 reconciled_count += 1
                                 reconciled_details.append({
                                     "booking_ref": booking_ref,
                                     "order_id": target_id,
                                     "payment_id": pay_id,
-                                    "amount": amt,
+                                    "amount": (
+                                        float(amount_paise) / 100.0
+                                        if amount_paise is not None
+                                        else None
+                                    ),
                                     "status": "CONFIRMED"
                                 })
                                 logger.info(f"[PaymentReconciliation] Successfully reconciled booking {booking_ref} (order: {target_id}, payment: {pay_id})")
+                            elif not result.get("success"):
+                                logger.warning(
+                                    "[PaymentReconciliation] Reconciliation rejected for booking %s: %s",
+                                    booking_ref,
+                                    result,
+                                )
 
                 # 2. Payment Link-based reconciliation (WhatsApp)
                 elif target_id.startswith("plink_") and booking_ref:

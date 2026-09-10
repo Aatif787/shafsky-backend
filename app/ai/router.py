@@ -116,6 +116,16 @@ def get_conversation_details_endpoint(
     """Retrieves full conversation session state and message history."""
     try:
         session = ConversationMemory.get_session(conversation_id)
+        if not session:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Conversation not found.",
+            )
         return AiApiResponse(success=True, data=session)
+    except HTTPException:
+        raise
     except Exception as err:
-        raise HTTPException(status_code=500, detail=str(err)) from err
+        raise HTTPException(
+            status_code=500,
+            detail="Conversation lookup temporarily unavailable.",
+        ) from err

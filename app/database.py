@@ -62,9 +62,9 @@ def _create_database_engine() -> Engine:
         db_url,
         json_serializer=_json_serializer,
         poolclass=QueuePool,
-        pool_size=20,            # Maintain 20 hot, persistent connections
-        max_overflow=30,         # Handle up to 30 burst connections
-        pool_timeout=30,         # Max seconds to wait for a connection from pool
+        pool_size=settings.DB_POOL_SIZE,
+        max_overflow=settings.DB_MAX_OVERFLOW,
+        pool_timeout=settings.DB_POOL_TIMEOUT,
         pool_recycle=300,        # Recycle connections every 5 minutes to prevent stale cloud drops
         pool_pre_ping=True,      # Proactively verify connection health before query execution
         pool_use_lifo=True,      # Re-use most recently used connection to keep database buffers hot

@@ -771,12 +771,31 @@ class BookingService:
         expected_version: Optional[int] = None
     ) -> Booking:
         booking = cls.get_booking_by_ref_or_id(db, identifier)
+        if not booking:
+            raise HTTPException(status_code=404, detail="Booking not found.")
 
         if not is_admin and booking.passenger_email != requester_email:
             raise HTTPException(status_code=403, detail="Access denied. You do not own this booking.")
 
         if booking.status in [BookingStatus.COMPLETED, BookingStatus.CANCELLED]:
             raise HTTPException(status_code=400, detail=f"Booking is already in '{booking.status}' status and cannot be cancelled.")
+        if booking.status == BookingStatus.CONFIRMED:
+            from app.models.payment import PaymentStatus, PaymentTransaction
+
+            has_unrefunded_payment = db.scalar(
+                select(PaymentTransaction.id).where(
+                    PaymentTransaction.entity_id == booking.booking_ref,
+                    PaymentTransaction.status.in_(
+                        [PaymentStatus.SUCCESSFUL, PaymentStatus.PARTIALLY_REFUNDED]
+                    ),
+                    PaymentTransaction.is_duplicate.isnot(True),
+                ).limit(1)
+            )
+            if has_unrefunded_payment:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Paid booking must be refunded before cancellation.",
+                )
 
         if expected_version is not None and booking.version != expected_version:
             raise ConcurrencyException(
@@ -869,6 +888,8 @@ class BookingService:
         expected_version: Optional[int] = None
     ) -> Booking:
         booking = cls.get_booking_by_ref_or_id(db, identifier)
+        if not booking:
+            raise HTTPException(status_code=404, detail="Booking not found.")
         
         try:
             new_status = BookingStatus(new_status_str.upper())
@@ -878,6 +899,24 @@ class BookingService:
                 status_code=400,
                 detail=f"Invalid status '{new_status_str}'. Must be one of: {valid_statuses}"
             )
+
+        if new_status == BookingStatus.CANCELLED:
+            from app.models.payment import PaymentStatus, PaymentTransaction
+
+            has_unrefunded_payment = db.scalar(
+                select(PaymentTransaction.id).where(
+                    PaymentTransaction.entity_id == booking.booking_ref,
+                    PaymentTransaction.status.in_(
+                        [PaymentStatus.SUCCESSFUL, PaymentStatus.PARTIALLY_REFUNDED]
+                    ),
+                    PaymentTransaction.is_duplicate.isnot(True),
+                ).limit(1)
+            )
+            if has_unrefunded_payment:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Paid booking must be refunded before cancellation.",
+                )
 
         if expected_version is not None and booking.version != expected_version:
             raise ConcurrencyException(

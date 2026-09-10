@@ -11,7 +11,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.security.dependencies import (
-    get_required_user,
     get_required_staff_or_admin,
     get_required_admin,
     STAFF_OR_ADMIN_ROLES,
@@ -152,7 +151,7 @@ def get_entity_assignments(
     entity_type: str,
     entity_id: str,
     db: Session = Depends(get_db),
-    current_user=Depends(get_required_user),
+    current_user=Depends(get_required_staff_or_admin),
 ):
     """Retrieve all assignments for an entity."""
     return AssignmentService.get_entity_assignments(db, entity_type, entity_id)
@@ -180,7 +179,7 @@ def get_staff_workload(
 def get_assignment_history(
     assignment_id: UUID,
     db: Session = Depends(get_db),
-    current_user=Depends(get_required_user),
+    current_user=Depends(get_required_staff_or_admin),
 ):
     """Retrieve immutable assignment change log."""
     return AssignmentService.get_history(db, assignment_id)
@@ -202,7 +201,7 @@ def get_timeline(
     offset: int = Query(0, ge=0),
     sort: str = Query("desc", pattern="^(asc|desc)$"),
     db: Session = Depends(get_db),
-    current_user=Depends(get_required_user),
+    current_user=Depends(get_required_staff_or_admin),
 ):
     """Retrieve paginated chronological timeline for an entity."""
     result = TimelineService.get_timeline(db, entity_type, entity_id, limit, offset, sort)
@@ -226,7 +225,7 @@ def add_timeline_comment(
     entity_id: str,
     data: TimelineCommentCreate,
     db: Session = Depends(get_db),
-    current_user=Depends(get_required_user),
+    current_user=Depends(get_required_staff_or_admin),
 ):
     """Add a comment to an entity's timeline."""
     actor_id = current_user.get("sub") or current_user.get("email") or "SYSTEM"
@@ -254,7 +253,7 @@ def add_timeline_comment(
 def create_note(
     data: NoteCreate,
     db: Session = Depends(get_db),
-    current_user=Depends(get_required_user),
+    current_user=Depends(get_required_staff_or_admin),
 ):
     """Create a new note for an entity."""
     author_id = current_user.get("sub") or current_user.get("email") or "SYSTEM"
@@ -282,7 +281,7 @@ def update_note(
     note_id: UUID,
     data: NoteUpdate,
     db: Session = Depends(get_db),
-    current_user=Depends(get_required_user),
+    current_user=Depends(get_required_staff_or_admin),
 ):
     """Update note content. Creates an immutable revision snapshot."""
     editor_id = current_user.get("sub") or current_user.get("email") or "SYSTEM"
@@ -328,7 +327,7 @@ def get_entity_notes(
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
-    current_user=Depends(get_required_user),
+    current_user=Depends(get_required_staff_or_admin),
 ):
     """Retrieve paginated notes for an entity with optional visibility filter."""
     role = current_user.get("role", "CUSTOMER")
@@ -393,7 +392,7 @@ def get_entity_attachments(
     entity_id: str,
     category: Optional[str] = Query(None, description="Filter by category"),
     db: Session = Depends(get_db),
-    current_user=Depends(get_required_user),
+    current_user=Depends(get_required_staff_or_admin),
 ):
     """Retrieve attachments for an entity."""
     user_role = current_user.get("role", "CUSTOMER")
@@ -479,7 +478,7 @@ def get_entity_sla(
     entity_type: str,
     entity_id: str,
     db: Session = Depends(get_db),
-    current_user=Depends(get_required_user),
+    current_user=Depends(get_required_staff_or_admin),
 ):
     """Retrieve the most recent SLA instance for an entity."""
     sla = SLAService.get_entity_sla(db, entity_type, entity_id)
@@ -534,7 +533,7 @@ def resolve_sla(
 def global_search(
     data: SearchRequest,
     db: Session = Depends(get_db),
-    current_user=Depends(get_required_user),
+    current_user=Depends(get_required_staff_or_admin),
 ):
     """Global multi-entity search across all shared domain tables."""
     result = SearchService.search(

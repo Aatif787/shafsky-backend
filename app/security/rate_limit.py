@@ -22,38 +22,33 @@ class RateLimiter:
     _lock = threading.Lock()
     _redis = None
 
-    # Attempt to initialize Redis client lazily
-    try:
-        redis_url = getattr(settings, "REDIS_URL", None)
-        if redis_url:
-            import redis
+    @classmethod
+    def _get_redis(cls):
+        if cls._redis is not None:
+            return cls._redis
+        try:
+            from app.core.redis import get_redis_client
 
-            _redis = redis.Redis.from_url(redis_url, decode_responses=True)
-            # quick ping to validate connection
-            try:
-                _redis.ping()
-                # Never log redis_url itself — it can embed the password.
-                logger.info("RateLimiter: connected to Redis")
-            except Exception as e:
-                logger.warning("RateLimiter: Redis ping failed, falling back to in-memory: %s", e)
-                _redis = None
-    except Exception as e:
-        logger.warning("RateLimiter: redis client not available: %s", e)
-        _redis = None
+            cls._redis = get_redis_client()
+        except Exception as exc:
+            logger.warning("RateLimiter: Redis client unavailable: %s", exc)
+            cls._redis = None
+        return cls._redis
 
     @classmethod
     def check_rate_limit(cls, key: str, max_requests: int = 100, window_seconds: int = 60):
         now = time.time()
 
-        # Use Redis-backed counter when available
-        if cls._redis:
+        # Use the centralized reconnecting Redis client when available.
+        redis_client = cls._get_redis()
+        if redis_client:
             try:
-                count = cls._redis.incr(key)
+                count = redis_client.incr(key)
                 if count == 1:
-                    cls._redis.expire(key, window_seconds)
+                    redis_client.expire(key, window_seconds)
 
                 if count > max_requests:
-                    ttl = cls._redis.ttl(key)
+                    ttl = redis_client.ttl(key)
                     retry_after = int(ttl if ttl and ttl > 0 else window_seconds)
                     raise HTTPException(
                         status_code=429,
@@ -64,6 +59,7 @@ class RateLimiter:
             except HTTPException:
                 raise
             except Exception as e:
+                cls._redis = None
                 if getattr(settings, "REQUIRE_REDIS", False):
                     logger.error(
                         "Redis rate limiter failed with REQUIRE_REDIS=true; refusing in-memory fallback: %s",

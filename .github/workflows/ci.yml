@@ -49,7 +49,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.13"
           cache: pip
 
       - name: Install dependencies
@@ -84,3 +84,17 @@ jobs:
 
       - name: Build production image
         run: docker build -t shafsky-backend:ci .
+
+      - name: Smoke-test production image imports
+        run: >-
+          docker run --rm --entrypoint python
+          -e ENVIRONMENT=test
+          -e DATABASE_URL=sqlite:////tmp/ci-smoke.db
+          -e JWT_REFRESH_SECRET=ci-refresh-secret-min-32-chars-ok
+          shafsky-backend:ci
+          -c "from app.main import app; assert app"
+
+      - name: Validate deploy manifests
+        run: |
+          python -m json.tool deploy/aws/ecs-task-definition.json > /dev/null
+          test -f render.yaml

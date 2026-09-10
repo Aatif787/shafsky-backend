@@ -1,29 +1,43 @@
-# Disaster Recovery & Business Continuity Specification - Shafsky Aviation
+# Disaster Recovery & Business Continuity — Shafsky Aviation
 
-This document details the Disaster Recovery (DR) topology, backup strategy, and business continuity mechanisms for the **Shafsky Aviation** platform.
+This runbook describes the current AWS production recovery design. Recovery
+targets are objectives, not guarantees, until restore drills measure them.
 
----
+## Source of truth
 
-## 1. RPO & RTO Targets
+- PostgreSQL recovery uses **Amazon RDS automated backups and point-in-time
+  recovery (PITR)**. Configure retention, encryption, Multi-AZ, and deletion
+  protection in AWS before launch.
+- The application endpoint `/api/admin/dr/backup` creates **drill metadata
+  only**. It is not a database dump, backup, or restore point.
+- No application code currently creates AES-encrypted dumps or uploads database
+  backups to S3. Do not rely on those mechanisms.
 
-| System Component | Target RPO | Target RTO | Backup Method |
-| :--- | :---: | :---: | :--- |
-| **Booking Engine** | **$\le$ 5 minutes** | **$\le$ 15 minutes** | Neon Continuous WAL Archiving / PITR |
-| **Authentication & Users** | **$\le$ 15 minutes** | **$\le$ 30 minutes** | AES-256 Encrypted Daily Snapshots |
-| **CRM & Analytics** | **$\le$ 30 minutes** | **$\le$ 45 minutes** | Encrypted S3 Multi-Region Dump |
+## Required production controls
 
----
+1. Enable RDS automated backups and PITR with a retention period approved by
+   operations.
+2. Encrypt RDS, snapshots, and replicas with KMS.
+3. Restrict snapshot restore and deletion permissions to dedicated operators.
+4. Take a final snapshot before destructive migrations or major releases.
+5. Run and document a restore drill at least quarterly in an isolated account
+   or VPC.
+6. Record the measured recovery point and recovery time from each drill.
 
-## 2. Backup & Verification Strategy
+## Restore procedure
 
-- **Encrypted Database Dumps**: Generated with AES-256 encryption.
-- **Integrity Validation**: SHA-256 checksum stored in metadata (`.meta.json`). Verified before any restore action.
-- **Point-In-Time Recovery (PITR)**: Supported by Neon PostgreSQL WAL archiving, allowing state restoration to any second.
+1. Stop write traffic or place the API in maintenance mode.
+2. Select the required RDS restore timestamp and restore into a new instance.
+3. Validate schema revision with `alembic current`.
+4. Run read-only integrity checks for users, bookings, payments, and invoices.
+5. Point a staging task at the restored database and run smoke tests.
+6. Update the production secret/endpoint only after approval.
+7. Resume traffic, verify `/ready`, and monitor payment reconciliation.
 
----
+## Business continuity
 
-## 3. Business Continuity & Circuit Breakers
-
-- **Flight Provider Outage**: Circuit breaker falls back to local `FlightStatusRecord` TTL cache. Booking creation succeeds with warning.
-- **Notification Provider Outage**: Enqueues dispatches in `NotificationRecord` database table. Background worker retries delivery every 60 seconds.
-- **Payment Provider Outage**: Switches booking status to `PENDING_PAYMENT` without dropping booking.
+- Flight provider failure may fall back to cached flight data where available.
+- Notification failures remain recorded for retry and must not roll back paid
+  bookings.
+- Payment provider failure leaves a booking pending; verified reconciliation
+  must run before an operator manually confirms payment.

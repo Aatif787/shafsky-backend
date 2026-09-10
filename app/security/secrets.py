@@ -6,6 +6,7 @@ RSA JWT signing keys on application launch.
 """
 
 import logging
+import os
 from app.config import settings
 from app.security.keys import get_jwt_private_key, get_jwt_public_key, get_jwt_key_id
 
@@ -18,6 +19,22 @@ def validate_secrets_on_startup():
     In non-development modes (e.g. production, staging), raises ValueError on missing or insecure credentials.
     """
     env = getattr(settings, "ENVIRONMENT", "development").lower()
+    cloud_runtime = any(
+        os.getenv(name)
+        for name in (
+            "AWS_EXECUTION_ENV",
+            "ECS_CONTAINER_METADATA_URI_V4",
+            "WEBSITE_INSTANCE_ID",
+            "K_SERVICE",
+            "RENDER",
+            "RENDER_SERVICE_ID",
+        )
+    )
+    if cloud_runtime and env in ["development", "dev", "test", "testing"]:
+        raise ValueError(
+            "ENVIRONMENT must be explicitly set to production or staging in a cloud runtime."
+        )
+
     critical_secrets = [
         ("DATABASE_URL", str(settings.DATABASE_URL)),
     ]
@@ -35,6 +52,7 @@ def validate_secrets_on_startup():
         critical_secrets.extend([
             ("RAZORPAY_KEY_ID", str(getattr(settings, "RAZORPAY_KEY_ID", ""))),
             ("RAZORPAY_KEY_SECRET", str(getattr(settings, "RAZORPAY_KEY_SECRET", ""))),
+            ("RAZORPAY_WEBHOOK_SECRET", os.getenv("RAZORPAY_WEBHOOK_SECRET", "")),
             ("WHATSAPP_ACCESS_TOKEN", str(getattr(settings, "WHATSAPP_ACCESS_TOKEN", ""))),
             ("WHATSAPP_APP_SECRET", str(getattr(settings, "WHATSAPP_APP_SECRET", ""))),
             ("RESEND_API_KEY", str(getattr(settings, "RESEND_API_KEY", ""))),
