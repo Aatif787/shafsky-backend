@@ -26,9 +26,10 @@ async def get_dr_status(
             "criticalApisRPO": "<= 15 Minutes",
             "criticalApisRTO": "<= 30 Minutes"
         },
-        "pitrStatus": "NEON_WAL_ARCHIVING_ACTIVE",
+        "pitrStatus": "USE_RDS_AUTOMATED_BACKUPS_PITR",
         "latestBackup": latest_backup,
         "totalBackupsCount": len(backups),
+        "inAppBackupNote": "In-app /backup creates drill metadata only — not a real DB dump.",
         "runbooks": DisasterSimulator.get_runbook_procedures()
     }
     return ApiResponse(success=True, data=status_data)
@@ -41,7 +42,7 @@ async def trigger_backup(
     return ApiResponse(
         success=True,
         data={
-            "message": "AES-256 encrypted database backup generated successfully.",
+            "message": "DR drill metadata artifact created (not a real database backup). Use RDS snapshots/PITR in production.",
             "backupMetadata": meta_data
         }
     )

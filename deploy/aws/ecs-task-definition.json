@@ -1,0 +1,79 @@
+# ECS Fargate task definition template for Shafsky FastAPI backend.
+# Replace ACCOUNT_ID, REGION, secrets ARNs, and image URI before register-task-definition.
+{
+  "family": "shafsky-backend",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::ACCOUNT_ID:role/shafskyBackendTaskRole",
+  "containerDefinitions": [
+    {
+      "name": "shafsky-backend",
+      "image": "ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/shafsky-backend:latest",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 4000,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        { "name": "ENVIRONMENT", "value": "production" },
+        { "name": "PORT", "value": "4000" },
+        { "name": "WEB_CONCURRENCY", "value": "2" },
+        { "name": "RUN_MIGRATIONS", "value": "true" },
+        { "name": "TRUST_PROXY", "value": "true" },
+        { "name": "REQUIRE_REDIS", "value": "true" },
+        { "name": "JWT_ALGORITHM", "value": "RS256" },
+        { "name": "ALLOW_HS256_LEGACY_FALLBACK", "value": "false" },
+        { "name": "CORS_ALLOW_CREDENTIALS", "value": "true" }
+      ],
+      "secrets": [
+        {
+          "name": "DATABASE_URL",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:shafsky/DATABASE_URL"
+        },
+        {
+          "name": "JWT_PRIVATE_KEY",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:shafsky/JWT_PRIVATE_KEY"
+        },
+        {
+          "name": "JWT_PUBLIC_KEY",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:shafsky/JWT_PUBLIC_KEY"
+        },
+        {
+          "name": "JWT_REFRESH_SECRET",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:shafsky/JWT_REFRESH_SECRET"
+        },
+        {
+          "name": "REDIS_URL",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:shafsky/REDIS_URL"
+        },
+        {
+          "name": "ALLOWED_ORIGINS",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:shafsky/ALLOWED_ORIGINS"
+        }
+      ],
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "python -c \"import urllib.request,sys; r=urllib.request.urlopen('http://127.0.0.1:4000/ready'); sys.exit(0 if r.status==200 else 1)\""
+        ],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 60
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/shafsky-backend",
+          "awslogs-region": "REGION",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}

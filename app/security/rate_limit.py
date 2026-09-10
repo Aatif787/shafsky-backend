@@ -32,7 +32,8 @@ class RateLimiter:
             # quick ping to validate connection
             try:
                 _redis.ping()
-                logger.info("RateLimiter: connected to Redis at %s", redis_url)
+                # Never log redis_url itself — it can embed the password.
+                logger.info("RateLimiter: connected to Redis")
             except Exception as e:
                 logger.warning("RateLimiter: Redis ping failed, falling back to in-memory: %s", e)
                 _redis = None
@@ -63,7 +64,28 @@ class RateLimiter:
             except HTTPException:
                 raise
             except Exception as e:
+                if getattr(settings, "REQUIRE_REDIS", False):
+                    logger.error(
+                        "Redis rate limiter failed with REQUIRE_REDIS=true; refusing in-memory fallback: %s",
+                        e,
+                    )
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Rate limiting unavailable. Please retry shortly.",
+                    ) from e
                 logger.warning("Redis rate limiter failed; falling back to local limiter: %s", e)
+
+        if getattr(settings, "REQUIRE_REDIS", False):
+            raise HTTPException(
+                status_code=503,
+                detail="Rate limiting unavailable (Redis required).",
+            )
+
+        if getattr(settings, "is_production", False) and cls._redis is None:
+            logger.warning(
+                "RateLimiter using in-memory fallback in production — "
+                "set REQUIRE_REDIS=true and ElastiCache for multi-instance safety."
+            )
 
         # In-process fallback (not distributed)
         with cls._lock:

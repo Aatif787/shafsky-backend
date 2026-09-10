@@ -26,6 +26,7 @@ from app.models.journey_models import SupportedAirport
 from app.integrations.whatsapp.client import whatsapp_client
 from app.integrations.whatsapp import copy as wa_copy
 from app.integrations.whatsapp import delivery as wa_delivery
+from app.config import settings
 from app.integrations.whatsapp.handlers import (
     AirportFlowMixin,
     FlightFlowMixin,
@@ -1383,7 +1384,13 @@ def trigger_booking_whatsapp_notifications(booking: Any) -> None:
     try:
         if not whatsapp_client.is_configured():
             return
-        officer_phone = os.getenv("WHATSAPP_OFFICER_NOTIFY_PHONE", "919599087959").strip()
+        officer_phone = (
+            getattr(settings, "WHATSAPP_OFFICER_NOTIFY_PHONE", None)
+            or os.getenv("WHATSAPP_OFFICER_NOTIFY_PHONE", "")
+        ).strip()
+        if not officer_phone:
+            logger.warning("[WhatsApp Notification Hook] WHATSAPP_OFFICER_NOTIFY_PHONE not set; skipping officer notify")
+            return
         msg = (
             "🚨 *NEW DIRECT BOOKING CREATED*\n\n"
             f"• *Booking Ref*: {getattr(booking, 'booking_ref', 'N/A')}\n"

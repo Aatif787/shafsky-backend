@@ -1,8 +1,23 @@
 import os
+from urllib.parse import quote
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 load_dotenv()
+
+
+def _build_redis_url() -> str:
+    """Prefer explicit REDIS_URL; otherwise build from host/port/password."""
+    explicit = (os.getenv("REDIS_URL") or "").strip()
+    if explicit:
+        return explicit
+    host = os.getenv("REDIS_HOST", "localhost")
+    port = os.getenv("REDIS_PORT", "6379")
+    password = os.getenv("REDIS_PASSWORD", "")
+    if password:
+        return f"redis://:{quote(password, safe='')}@{host}:{port}/0"
+    return f"redis://{host}:{port}/0"
+
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Shafsky Aviation FastAPI Backend Engine"
@@ -11,6 +26,8 @@ class Settings(BaseSettings):
     REDIS_HOST: str = os.getenv("REDIS_HOST", "localhost")
     REDIS_PORT: int = int(os.getenv("REDIS_PORT", "6379"))
     REDIS_PASSWORD: str = os.getenv("REDIS_PASSWORD", "")
+    # When true (recommended for multi-instance AWS), Redis must be reachable or readiness fails.
+    REQUIRE_REDIS: bool = os.getenv("REQUIRE_REDIS", "false").lower() in ("1", "true", "yes")
 
     JWT_SECRET: str = os.getenv("JWT_SECRET", "")
     JWT_REFRESH_SECRET: str = os.getenv("JWT_REFRESH_SECRET", "")
@@ -18,13 +35,12 @@ class Settings(BaseSettings):
     JWT_PRIVATE_KEY: str = os.getenv("JWT_PRIVATE_KEY", "")
     JWT_PUBLIC_KEY: str = os.getenv("JWT_PUBLIC_KEY", "")
     JWT_PREVIOUS_PUBLIC_KEYS: str = os.getenv("JWT_PREVIOUS_PUBLIC_KEYS", "")
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
-    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "15"))
+    REFRESH_TOKEN_EXPIRE_DAYS: int = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
     # Allow legacy HS256 fallback for JWT verification. Disable in production by default.
     ALLOW_HS256_LEGACY_FALLBACK: bool = os.getenv("ALLOW_HS256_LEGACY_FALLBACK", "False").lower() in ("1", "true", "yes")
 
-    # Optional: explicit Redis URL; falls back to host/port values above
-    REDIS_URL: str = os.getenv("REDIS_URL", f"redis://{os.getenv('REDIS_HOST','localhost')}:{os.getenv('REDIS_PORT','6379')}")
+    REDIS_URL: str = _build_redis_url()
 
     AVIATION_EDGE_API_KEY: str = os.getenv("AVIATION_EDGE_API_KEY", "")
     AVIATION_EDGE_BASE_URL: str = os.getenv("AVIATION_EDGE_BASE_URL", "https://aviation-edge.com/v2/public")
@@ -48,6 +64,7 @@ class Settings(BaseSettings):
     WHATSAPP_WEBHOOK_VERIFY_TOKEN: str = os.getenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "")
     WHATSAPP_API_VERSION: str = os.getenv("WHATSAPP_API_VERSION", "v21.0")
     WHATSAPP_APP_SECRET: str = os.getenv("WHATSAPP_APP_SECRET", os.getenv("META_APP_SECRET", os.getenv("APP_SECRET", "")))
+    WHATSAPP_OFFICER_NOTIFY_PHONE: str = os.getenv("WHATSAPP_OFFICER_NOTIFY_PHONE", "")
 
     # Razorpay Payment Gateway
     RAZORPAY_KEY_ID: str = os.getenv("RAZORPAY_KEY_ID", "")
@@ -63,7 +80,8 @@ class Settings(BaseSettings):
         "ALLOWED_ORIGINS",
         "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,http://localhost:3000,http://127.0.0.1:3000",
     )
-    CORS_ALLOW_CREDENTIALS: bool = True
+    CORS_ALLOW_CREDENTIALS: bool = os.getenv("CORS_ALLOW_CREDENTIALS", "true").lower() in ("1", "true", "yes")
+    # Behind ALB/CloudFront set TRUST_PROXY=true so rate limits use X-Forwarded-For.
     TRUST_PROXY: bool = os.getenv("TRUST_PROXY", "false").lower() in ("1", "true", "yes")
 
     IDEMPOTENCY_LOCK_TTL: int = int(os.getenv("IDEMPOTENCY_LOCK_TTL", "120"))

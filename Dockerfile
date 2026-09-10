@@ -27,12 +27,20 @@ COPY . /src
 FROM python:3.13-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PORT=4000 \
+    WEB_CONCURRENCY=2 \
+    RUN_MIGRATIONS=true
 
 # Create a non-root user
 RUN addgroup --system shafsky && adduser --system --ingroup shafsky shafsky
 
 WORKDIR /app
+
+# Runtime shared libs for psycopg2-binary on slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libpq5 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install runtime deps from built wheels for reproducible installs
 COPY --from=builder /wheels /wheels
@@ -40,18 +48,31 @@ COPY --from=builder /src/requirements.txt /app/requirements.txt
 RUN python -m pip install --no-cache-dir --no-index --find-links=/wheels -r /app/requirements.txt \
     && rm -rf /wheels
 
-# Copy app code and set ownership
+# Copy app code (exclude secrets via .dockerignore)
 COPY --from=builder /src /app
-RUN chown -R shafsky:shafsky /app
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+
+# Ensure airports.csv exists for global airport search (use repo copy if present)
+RUN mkdir -p /app/data \
+    && if [ ! -f /app/data/airports.csv ]; then \
+         apt-get update \
+         && apt-get install -y --no-install-recommends curl ca-certificates \
+         && curl -fsSL -o /app/data/airports.csv \
+              "https://davidmegginson.github.io/ourairports-data/airports.csv" \
+         && apt-get purge -y curl \
+         && apt-get autoremove -y \
+         && rm -rf /var/lib/apt/lists/*; \
+       fi \
+    && chmod +x /app/docker-entrypoint.sh \
+    && chown -R shafsky:shafsky /app
 
 USER shafsky
 
 EXPOSE 4000
 
-# Lightweight Python healthcheck (uses stdlib urllib)
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD python -c 'import os, urllib.request, sys; port=os.environ.get("PORT", "4000"); resp=urllib.request.urlopen("http://127.0.0.1:%s/live" % port); sys.exit(0 if resp.status == 200 else 1)'
+# Readiness-based healthcheck (stdlib urllib; /ready returns 503 when DB/Redis not ready)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+  CMD python -c 'import os, urllib.request, sys; port=os.environ.get("PORT", "4000"); resp=urllib.request.urlopen("http://127.0.0.1:%s/ready" % port); sys.exit(0 if resp.status == 200 else 1)'
 
-ENV PORT=4000
-
-CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-4000}"]
+# Entrypoint runs optional alembic migrations then gunicorn/uvicorn workers
+ENTRYPOINT ["/app/docker-entrypoint.sh"]

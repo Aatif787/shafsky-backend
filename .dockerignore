@@ -1,26 +1,40 @@
 # ---- secrets: never bake into images ----
 .env
 .env.*
+!.env.example
 *.env
+*.pem
+*.key
+id_rsa*
 
 # ---- VCS & tooling ----
 .git
 .gitignore
+.cursor
 .vscode
 .idea
-.pytest_cache
+.pylintrc
+pyrightconfig.json
+
+# ---- Python ----
 __pycache__/
 *.py[cod]
 *$py.class
-.pylintrc
-pyrightconfig.json
+.pytest_cache
+.mypy_cache
+.coverage
+htmlcov
+.tox
+*.egg-info
 
 # ---- virtualenvs ----
 .venv/
 venv/
+.envrc
 
 # ---- tests, scratch, local data ----
 tests/
+requirements-dev.txt
 scratch/
 backups/
 *.db
@@ -36,3 +50,16 @@ safety-report*
 scratch_mapping.txt
 regression_audit_out.txt
 audit_p3.txt
+audit_*.txt
+regression_*.txt
+
+# ---- docs / CI (not needed at runtime; keep alembic + app) ----
+docs
+.github
+deploy
+*.md
+!Runbook.md
+
+# ---- OS ----
+.DS_Store
+Thumbs.db

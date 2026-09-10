@@ -95,6 +95,7 @@ class HealthCheckSuite:
 
         start = time.perf_counter()
         db_health = cls.check_database()
+        redis_health = cls.check_redis()
         resources = cls.check_system_resources()
         notify = cls._notification_status()
         wa_configured = bool(settings.WHATSAPP_ACCESS_TOKEN and settings.WHATSAPP_PHONE_NUMBER_ID)
@@ -105,6 +106,7 @@ class HealthCheckSuite:
             "totalCheckLatencyMs": elapsed_ms,
             "subsystems": {
                 "database": db_health,
+                "redis": redis_health,
                 "notificationService": notify,
                 "whatsapp": {
                     "status": "CONFIGURED" if wa_configured else "NOT_CONFIGURED",
@@ -120,13 +122,37 @@ class HealthCheckSuite:
         return payload
 
     @classmethod
+    def check_redis(cls) -> Dict[str, Any]:
+        start = time.perf_counter()
+        try:
+            from app.core.redis import get_redis_client
+
+            client = get_redis_client()
+            if client is None:
+                return {"status": "UNAVAILABLE", "configured": bool(getattr(settings, "REDIS_URL", None))}
+            client.ping()
+            elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
+            return {"status": "HEALTHY", "latencyMs": elapsed_ms, "configured": True}
+        except Exception as e:
+            return {"status": "UNHEALTHY", "error": str(e), "configured": True}
+
+    @classmethod
     def run_readiness(cls) -> Dict[str, Any]:
         db_health = cls.check_database()
-        ready = db_health.get("status") in ("HEALTHY", "SLOW")
+        redis_health = cls.check_redis()
+        require_redis = bool(getattr(settings, "REQUIRE_REDIS", False))
+        db_ready = db_health.get("status") in ("HEALTHY", "SLOW")
+        redis_ready = (not require_redis) or redis_health.get("status") == "HEALTHY"
+        ready = bool(db_ready and redis_ready)
         return {
             "ready": ready,
             "status": "READY" if ready else "NOT_READY",
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "checks": {
+                "database": db_health,
+                "redis": redis_health,
+                "requireRedis": require_redis,
+            },
         }
 
     @classmethod

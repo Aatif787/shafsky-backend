@@ -25,7 +25,7 @@ class RestoreEngine:
         if calculated_checksum != meta.get("checksumSha256"):
             return {"verified": False, "error": "Checksum mismatch! Backup artifact corrupted or tampered."}
 
-        secret = getattr(settings, "JWT_SECRET", "shafsky-backup-encryption-key")
+        secret = getattr(settings, "JWT_REFRESH_SECRET", None) or getattr(settings, "JWT_SECRET", "shafsky-backup-encryption-key")
         try:
             decrypted_str = BackupEngine.decrypt_data(enc_content, secret)
             payload = json.loads(decrypted_str)
@@ -38,6 +38,7 @@ class RestoreEngine:
             "checksumVerified": True,
             "decryptionVerified": True,
             "schemaVersion": payload.get("schema_version"),
-            "tableCount": payload.get("table_count"),
+            "artifactType": payload.get("artifact_type"),
+            "warning": payload.get("warning") or meta.get("warning"),
             "timestamp": datetime.now(timezone.utc).isoformat()
         }

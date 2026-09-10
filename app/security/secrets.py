@@ -78,4 +78,27 @@ def validate_secrets_on_startup():
         if alg.upper() != "RS256" and env not in ["development", "dev", "test", "testing"]:
             raise ValueError("JWT_ALGORITHM must be RS256 in production environments.")
 
+        if getattr(settings, "REQUIRE_REDIS", False):
+            try:
+                from app.core.redis import get_redis_client
+
+                client = get_redis_client()
+                if client is None:
+                    raise RuntimeError("Redis client unavailable")
+                client.ping()
+                logger.info("REQUIRE_REDIS: Redis connectivity verified.")
+            except Exception as redis_err:
+                msg = f"REQUIRE_REDIS is enabled but Redis is unreachable: {redis_err}"
+                logger.critical(msg)
+                if env not in ["development", "dev", "test", "testing"]:
+                    raise ValueError(msg) from redis_err
+                logger.warning("Development mode: continuing despite REQUIRE_REDIS failure.")
+
+        if settings.is_production and not settings.TRUST_PROXY:
+            logger.warning(
+                "TRUST_PROXY is false while ENVIRONMENT=%s. "
+                "Set TRUST_PROXY=true behind ALB/CloudFront for correct client IPs.",
+                settings.ENVIRONMENT,
+            )
+
         logger.info(f"Startup secrets and RSA key infrastructure (Key ID: {active_kid}) validation passed successfully.")

@@ -5,47 +5,88 @@ Authentication Router with Refresh Token Rotation, HttpOnly Cookie Security, and
 import os
 import uuid
 from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException, Depends, Header, Request, Response
+from typing import Dict, Any
+
+from fastapi import APIRouter, HTTPException, Depends, Request, Response
 from sqlalchemy.orm import Session
-from sqlalchemy import select, update
-from typing import Optional, List, Dict, Any
+from sqlalchemy import select
 
 from app.database import get_db
 from app.models.schema import UserAuth, Profile, RefreshToken, Role
 from app.schemas.auth import (
     LoginRequest,
-    RefreshTokenRequest,
     ApiResponse,
     AuthDataResponse,
     UserResponse,
     ProfileUpdateRequest,
-    ProfileResponse,
+    ChangePasswordRequest,
 )
 from app.services.auth_service import AuthService
 from app.security.device_tracking import DeviceTracking
+from app.security.dependencies import get_required_user
 from app.config import settings
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication & Session Security"])
 
 
-def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
-    """Sets HttpOnly refresh token cookies. Secure flag is required in production."""
-    max_age_seconds = int(getattr(settings, "REFRESH_TOKEN_EXPIRE_DAYS", 7)) * 86400
-    cookie_kwargs = dict(
+def _refresh_cookie_kwargs(max_age_seconds: int | None = None) -> dict:
+    """Shared cookie attributes so set/clear stay in sync for browsers."""
+    kwargs = dict(
         httponly=True,
         secure=settings.is_production,
         samesite="strict" if settings.is_production else "lax",
-        max_age=max_age_seconds,
         path="/api/auth",
     )
+    if max_age_seconds is not None:
+        kwargs["max_age"] = max_age_seconds
+    return kwargs
+
+
+def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
+    """Sets HttpOnly refresh token cookies. Secure flag is required in production."""
+    max_age_seconds = int(getattr(settings, "REFRESH_TOKEN_EXPIRE_DAYS", 7)) * 86400
+    cookie_kwargs = _refresh_cookie_kwargs(max_age_seconds)
     response.set_cookie(key="refreshToken", value=refresh_token, **cookie_kwargs)
     response.set_cookie(key="refresh_token", value=refresh_token, **cookie_kwargs)
 
 
 def _clear_refresh_cookie(response: Response) -> None:
-    """Clears HttpOnly refresh token cookies."""
-    response.delete_cookie(key="refreshToken", path="/api/auth")
-    response.delete_cookie(key="refresh_token", path="/api/auth")
+    """Clears HttpOnly refresh token cookies with matching attributes."""
+    cookie_kwargs = _refresh_cookie_kwargs()
+    response.delete_cookie(key="refreshToken", **cookie_kwargs)
+    response.delete_cookie(key="refresh_token", **cookie_kwargs)
+
+
+def _parse_user_uuid(user_id_str: str | None) -> uuid.UUID | None:
+    if not user_id_str:
+        return None
+    try:
+        return uuid.UUID(user_id_str)
+    except Exception:
+        return None
+
+
+def _require_user_id(decoded: Dict[str, Any]) -> str:
+    user_id_str = decoded.get("user_id") or decoded.get("userId")
+    if not user_id_str:
+        raise HTTPException(status_code=401, detail="Token missing user identity.")
+    return str(user_id_str)
+
+
+def _profile_payload(profile: Profile) -> dict:
+    return {
+        "id": str(profile.id),
+        "auth_id": str(profile.auth_id),
+        "email": profile.email,
+        "full_name": profile.full_name or (profile.email.split("@")[0].title() if profile.email else "User"),
+        "phone_number": profile.phone_number,
+        "avatar_url": profile.avatar_url,
+        "role": profile.role.value if hasattr(profile.role, "value") else str(profile.role),
+        "company": profile.company,
+        "vip_status": profile.vip_status,
+        "vip_tier": profile.vip_tier.value if hasattr(profile.vip_tier, "value") else str(profile.vip_tier),
+        "passport_number": profile.passport_number,
+    }
 
 
 @router.post("/login", response_model=ApiResponse)
@@ -134,7 +175,6 @@ async def login(
 async def refresh_token(
     request: Request,
     response: Response,
-    payload: Optional[RefreshTokenRequest] = None,
     db: Session = Depends(get_db)
 ):
     device_info = DeviceTracking.get_client_device(request)
@@ -174,7 +214,6 @@ async def refresh_token(
 async def logout(
     request: Request,
     response: Response,
-    payload: Optional[RefreshTokenRequest] = None,
     db: Session = Depends(get_db)
 ):
     raw_refresh = request.cookies.get("refreshToken") or request.cookies.get("refresh_token")
@@ -187,48 +226,36 @@ async def logout(
 
 
 @router.get("/me", response_model=ApiResponse)
-async def get_me(authorization: Optional[str] = Header(None)):
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid authorization header.")
-
-    token = authorization.split(" ")[1]
-    try:
-        decoded = AuthService.decode_access_token(token)
-        return ApiResponse(
-            success=True,
-            data=AuthDataResponse(
-                user=UserResponse(
-                    id=decoded.get("user_id", decoded.get("userId", "")),
-                    email=decoded.get("sub", decoded.get("email", "")),
-                    role=decoded.get("role", "")
-                )
+async def get_me(decoded: Dict[str, Any] = Depends(get_required_user)):
+    return ApiResponse(
+        success=True,
+        data=AuthDataResponse(
+            user=UserResponse(
+                id=decoded.get("user_id", decoded.get("userId", "")),
+                email=decoded.get("sub", decoded.get("email", "")),
+                role=decoded.get("role", "")
             )
         )
-    except Exception:
-        raise HTTPException(status_code=401, detail="Token expired or invalid.")
+    )
 
 
 @router.get("/device-sessions", response_model=ApiResponse)
 async def get_active_device_sessions(
-    authorization: Optional[str] = Header(None),
+    decoded: Dict[str, Any] = Depends(get_required_user),
     db: Session = Depends(get_db)
 ):
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing authorization header.")
-    token = authorization.split(" ")[1]
-    decoded = AuthService.decode_access_token(token)
-    user_id_str = decoded.get("user_id")
-
-    try:
-        u_uuid = uuid.UUID(user_id_str) if user_id_str else None
-    except Exception:
-        u_uuid = None
-
+    user_id_str = _require_user_id(decoded)
+    u_uuid = _parse_user_uuid(user_id_str)
     if not u_uuid:
-        return ApiResponse(success=True, data=[])
+        raise HTTPException(status_code=401, detail="Token missing user identity.")
 
+    now = datetime.now(timezone.utc)
     records = list(db.scalars(
-        select(RefreshToken).where(RefreshToken.user_id == u_uuid, RefreshToken.revoked.is_(False))
+        select(RefreshToken).where(
+            RefreshToken.user_id == u_uuid,
+            RefreshToken.revoked.is_(False),
+            RefreshToken.expires_at > now,
+        )
     ).all())
 
     sessions = [
@@ -249,55 +276,32 @@ async def get_active_device_sessions(
 @router.post("/logout-device/{device_id}", response_model=ApiResponse)
 async def logout_device(
     device_id: str,
-    authorization: Optional[str] = Header(None),
+    decoded: Dict[str, Any] = Depends(get_required_user),
     db: Session = Depends(get_db)
 ):
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing authorization header.")
-    token = authorization.split(" ")[1]
-    decoded = AuthService.decode_access_token(token)
-    user_id_str = decoded.get("user_id")
-
-    if user_id_str:
-        DeviceTracking.revoke_device_session(db, user_id_str, device_id)
-
+    user_id_str = _require_user_id(decoded)
+    DeviceTracking.revoke_device_session(db, user_id_str, device_id)
     return ApiResponse(success=True, data={"message": f"Device session '{device_id}' revoked."})
 
 
 @router.post("/logout-all-devices", response_model=ApiResponse)
 async def logout_all_devices(
-    authorization: Optional[str] = Header(None),
+    decoded: Dict[str, Any] = Depends(get_required_user),
     db: Session = Depends(get_db)
 ):
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing authorization header.")
-    token = authorization.split(" ")[1]
-    decoded = AuthService.decode_access_token(token)
-    user_id_str = decoded.get("user_id")
-
-    if user_id_str:
-        DeviceTracking.revoke_all_user_sessions(db, user_id_str)
-
+    user_id_str = _require_user_id(decoded)
+    DeviceTracking.revoke_all_user_sessions(db, user_id_str)
     return ApiResponse(success=True, data={"message": "All device sessions successfully revoked."})
 
 
 @router.get("/profile", response_model=ApiResponse)
 async def get_user_profile(
-    authorization: Optional[str] = Header(None),
+    decoded: Dict[str, Any] = Depends(get_required_user),
     db: Session = Depends(get_db)
 ):
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing authorization header.")
-
-    token = authorization.split(" ")[1]
-    decoded = AuthService.decode_access_token(token)
-    user_id_str = decoded.get("user_id")
+    user_id_str = decoded.get("user_id") or decoded.get("userId") or ""
     email = decoded.get("sub", "")
-
-    try:
-        u_uuid = uuid.UUID(user_id_str) if user_id_str else None
-    except Exception:
-        u_uuid = None
+    u_uuid = _parse_user_uuid(user_id_str)
 
     profile = None
     if u_uuid:
@@ -306,12 +310,12 @@ async def get_user_profile(
         profile = db.scalar(select(Profile).where(Profile.email == email.lower()))
 
     if not profile:
-        # Fallback profile response constructed from user claims
+        # Fallback from JWT claims — stable id (auth user id), never a random UUID
         return ApiResponse(
             success=True,
             data={
-                "id": user_id_str or str(uuid.uuid4()),
-                "auth_id": user_id_str or "",
+                "id": user_id_str,
+                "auth_id": user_id_str,
                 "email": email,
                 "full_name": email.split("@")[0].title() if email else "User",
                 "role": decoded.get("role", "CUSTOMER"),
@@ -324,42 +328,18 @@ async def get_user_profile(
             }
         )
 
-    return ApiResponse(
-        success=True,
-        data={
-            "id": str(profile.id),
-            "auth_id": str(profile.auth_id),
-            "email": profile.email,
-            "full_name": profile.full_name or profile.email.split("@")[0].title(),
-            "phone_number": profile.phone_number,
-            "avatar_url": profile.avatar_url,
-            "role": profile.role.value if hasattr(profile.role, "value") else str(profile.role),
-            "company": profile.company,
-            "vip_status": profile.vip_status,
-            "vip_tier": profile.vip_tier.value if hasattr(profile.vip_tier, "value") else str(profile.vip_tier),
-            "passport_number": profile.passport_number,
-        }
-    )
+    return ApiResponse(success=True, data=_profile_payload(profile))
 
 
 @router.patch("/profile", response_model=ApiResponse)
 async def update_user_profile(
     payload: ProfileUpdateRequest,
-    authorization: Optional[str] = Header(None),
+    decoded: Dict[str, Any] = Depends(get_required_user),
     db: Session = Depends(get_db)
 ):
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing authorization header.")
-
-    token = authorization.split(" ")[1]
-    decoded = AuthService.decode_access_token(token)
-    user_id_str = decoded.get("user_id")
-    email = decoded.get("sub", "").lower()
-
-    try:
-        u_uuid = uuid.UUID(user_id_str) if user_id_str else None
-    except Exception:
-        u_uuid = None
+    user_id_str = decoded.get("user_id") or decoded.get("userId")
+    email = (decoded.get("sub") or "").lower()
+    u_uuid = _parse_user_uuid(user_id_str)
 
     user = None
     if u_uuid:
@@ -367,8 +347,8 @@ async def update_user_profile(
     if not user and email:
         user = db.scalar(select(UserAuth).where(UserAuth.email == email))
 
-        if not user and email:
-            raise HTTPException(status_code=404, detail="User account not found.")
+    if not user:
+        raise HTTPException(status_code=404, detail="User account not found.")
 
     profile = None
     if u_uuid:
@@ -376,8 +356,7 @@ async def update_user_profile(
     if not profile and email:
         profile = db.scalar(select(Profile).where(Profile.email == email))
 
-    if not profile and user:
-        # Create profile record if missing
+    if not profile:
         profile = Profile(
             auth_id=user.id,
             email=user.email,
@@ -404,44 +383,18 @@ async def update_user_profile(
     db.commit()
     db.refresh(profile)
 
-    return ApiResponse(
-        success=True,
-        data={
-            "id": str(profile.id),
-            "auth_id": str(profile.auth_id),
-            "email": profile.email,
-            "full_name": profile.full_name,
-            "phone_number": profile.phone_number,
-            "avatar_url": profile.avatar_url,
-            "role": profile.role.value if hasattr(profile.role, "value") else str(profile.role),
-            "company": profile.company,
-            "vip_status": profile.vip_status,
-            "vip_tier": profile.vip_tier.value if hasattr(profile.vip_tier, "value") else str(profile.vip_tier),
-            "passport_number": profile.passport_number,
-        }
-    )
+    return ApiResponse(success=True, data=_profile_payload(profile))
 
-
-from app.schemas.auth import ChangePasswordRequest
 
 @router.post("/change-password", response_model=ApiResponse)
 async def change_password(
     payload: ChangePasswordRequest,
-    authorization: Optional[str] = Header(None),
+    decoded: Dict[str, Any] = Depends(get_required_user),
     db: Session = Depends(get_db)
 ):
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing authorization header.")
-
-    token = authorization.split(" ")[1]
-    decoded = AuthService.decode_access_token(token)
-    user_id_str = decoded.get("user_id")
-    email = decoded.get("sub", "").lower()
-
-    try:
-        u_uuid = uuid.UUID(user_id_str) if user_id_str else None
-    except Exception:
-        u_uuid = None
+    user_id_str = decoded.get("user_id") or decoded.get("userId")
+    email = (decoded.get("sub") or "").lower()
+    u_uuid = _parse_user_uuid(user_id_str)
 
     user = None
     if u_uuid:
@@ -460,7 +413,7 @@ async def change_password(
         raise HTTPException(status_code=400, detail="Current password is incorrect.")
 
     # Prevent password reuse
-    if AuthService.verify_password(payload.new_password, user.password_hash):
+    if payload.current_password == payload.new_password or AuthService.verify_password(payload.new_password, user.password_hash):
         raise HTTPException(status_code=400, detail="New password cannot be the same as the current password.")
 
     user.password_hash = AuthService.hash_password(payload.new_password)

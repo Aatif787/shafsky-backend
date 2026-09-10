@@ -13,6 +13,13 @@ logger = logging.getLogger("shafsky.disaster_recovery.backup")
 
 
 class BackupEngine:
+    """DR-drill backup engine.
+
+    Produces encrypted schema-metadata artifacts on local disk so restore/verify
+    drills can be exercised end to end. It does NOT dump table data and does NOT
+    upload to S3 — production recovery depends on RDS automated snapshots/PITR.
+    """
+
     BACKUP_DIR = os.path.join(os.getcwd(), "backups")
 
     @classmethod
@@ -43,8 +50,8 @@ class BackupEngine:
     @classmethod
     def generate_database_backup(cls) -> Dict[str, Any]:
         """
-        Creates an encrypted, authenticated database metadata & schema backup
-        with real SHA-256 integrity verification and accurate cloud sync status.
+        Creates an encrypted, authenticated schema-metadata drill artifact with
+        real SHA-256 integrity verification. Not a database dump, not an S3 backup.
         """
         cls.ensure_backup_directory()
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -52,19 +59,22 @@ class BackupEngine:
         filename = f"{backup_id}.enc"
         filepath = os.path.join(cls.BACKUP_DIR, filename)
 
-        # Inspect real registered database tables
+        # DR drill artifact only — captures registered schema metadata, NOT table
+        # rows. This is not a database dump and is not shipped to S3; production
+        # recovery relies on RDS automated snapshots / PITR.
         registered_tables = sorted(list(Base.metadata.tables.keys()))
         table_count = len(registered_tables)
 
         dump_payload = json.dumps({
             "backup_id": backup_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
+            "artifact_type": "METADATA_DRILL_ONLY",
+            "warning": "Not a real database backup. Use RDS snapshots/PITR in production.",
             "database_target": "PostgreSQL",
             "schema_version": "2.0.0",
             "table_count": table_count,
             "registered_tables": registered_tables,
-            "pitr_status": "ENABLED_WAL_ARCHIVING",
-            "status": "COMPLETED"
+            "status": "DRILL_COMPLETED",
         }, indent=2)
 
         secret = getattr(settings, "JWT_REFRESH_SECRET", None) or getattr(settings, "JWT_SECRET", "shafsky-backup-encryption-key")
@@ -79,10 +89,11 @@ class BackupEngine:
         meta_filepath = os.path.join(cls.BACKUP_DIR, meta_filename)
 
         # Check cloud sync configuration
+        # Nothing is uploaded here; the artifact only ever exists on local disk.
         s3_bucket = getattr(settings, "AWS_S3_BUCKET", None)
-        s3_status = "LOCAL_ARCHIVE_VERIFIED"
+        s3_status = "NOT_SYNCED_LOCAL_ONLY"
         if s3_bucket:
-            s3_status = "PENDING_S3_DISPATCH"
+            s3_status = "NOT_SYNCED_S3_DISPATCH_NOT_IMPLEMENTED"
 
         meta_data = {
             "backupId": backup_id,
@@ -92,12 +103,14 @@ class BackupEngine:
             "encryption": "FERNET_AES128_HMAC_SHA256",
             "tableCount": table_count,
             "createdAt": datetime.now(timezone.utc).isoformat(),
-            "s3SyncStatus": s3_status
+            "s3SyncStatus": s3_status,
+            "isProductionBackup": False,
+            "warning": "Schema-metadata drill artifact only. Rely on RDS automated backups/PITR for production.",
         }
         with open(meta_filepath, "w", encoding="utf-8") as f:
             json.dump(meta_data, f, indent=2)
 
-        logger.info(f"Database backup {backup_id} created successfully with {table_count} tables.")
+        logger.info(f"DR drill artifact {backup_id} created with schema metadata for {table_count} tables.")
         return meta_data
 
     @classmethod

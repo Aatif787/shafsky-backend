@@ -545,7 +545,11 @@ class ReviewPaymentFlowMixin(BaseFlowMixin):
         link_sent: bool,
         quote_request: bool = False,
     ) -> None:
-        officer_phone = os.getenv("WHATSAPP_OFFICER_NOTIFY_PHONE", "919599087959").strip()
+        officer_phone = (
+            os.getenv("WHATSAPP_OFFICER_NOTIFY_PHONE", "") or ""
+        ).strip()
+        if not officer_phone:
+            return
         if quote_request:
             status_line = "QUOTE REQUESTED — no online price, send a manual quote + payment link"
         elif link_sent:

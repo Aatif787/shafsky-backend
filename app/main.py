@@ -62,15 +62,17 @@ async def startup_checks():
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
             try:
-                conn.execute(text("ALTER TABLE payment_transactions ADD COLUMN IF NOT EXISTS is_duplicate BOOLEAN DEFAULT FALSE"))
-                conn.execute(text("ALTER TABLE payment_transactions ADD COLUMN IF NOT EXISTS notes TEXT"))
-                conn.execute(text("ALTER TABLE user_auth ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE"))
-                conn.execute(text("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deleted_by_user_id UUID"))
-                conn.execute(text("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deleted_by_email VARCHAR"))
-                conn.execute(text("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deleted_by_role VARCHAR"))
-                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_bookings_deleted_at ON bookings (deleted_at)"))
-                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_bookings_deleted_by_email ON bookings (deleted_by_email)"))
-                conn.commit()
+                # Prefer Alembic migrations. Opt-in only for emergency column patches.
+                if (os.getenv("RUN_STARTUP_SCHEMA_PATCHES") or "").strip().lower() in ("1", "true", "yes"):
+                    conn.execute(text("ALTER TABLE payment_transactions ADD COLUMN IF NOT EXISTS is_duplicate BOOLEAN DEFAULT FALSE"))
+                    conn.execute(text("ALTER TABLE payment_transactions ADD COLUMN IF NOT EXISTS notes TEXT"))
+                    conn.execute(text("ALTER TABLE user_auth ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE"))
+                    conn.execute(text("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deleted_by_user_id UUID"))
+                    conn.execute(text("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deleted_by_email VARCHAR"))
+                    conn.execute(text("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deleted_by_role VARCHAR"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_bookings_deleted_at ON bookings (deleted_at)"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_bookings_deleted_by_email ON bookings (deleted_by_email)"))
+                    conn.commit()
             except Exception:
                 pass
     except Exception as err:
@@ -103,20 +105,21 @@ app.add_middleware(SecurityMiddleware)
 app.add_middleware(IdempotencyMiddleware)
 
 # CORS Middleware
-# The permissive tunnel/localhost origin regex is a DEVELOPMENT convenience.
-# In production only explicit ALLOWED_ORIGINS are honoured, so credentialed
-# cross-origin requests cannot be made from arbitrary ngrok/vercel origins.
+# The permissive tunnel/localhost origin regex is a DEVELOPMENT convenience and is
+# omitted entirely in production, so only explicit ALLOWED_ORIGINS are honoured and
+# credentialed cross-origin requests cannot come from arbitrary ngrok/vercel origins.
 _CORS_DEV_ORIGIN_REGEX = (
     r"^https?://(localhost|127\.0\.0\.1|.*\.ngrok-free\.(dev|app)|.*\.ngrok\.io|.*\.vercel\.app)(:\d+)?$"
 )
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=getattr(settings, "ALLOWED_ORIGINS", []),
-    allow_origin_regex=None if getattr(settings, "is_production", False) else _CORS_DEV_ORIGIN_REGEX,
-    allow_credentials=getattr(settings, "CORS_ALLOW_CREDENTIALS", False),
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
-)
+_cors_kwargs = {
+    "allow_origins": getattr(settings, "ALLOWED_ORIGINS", []),
+    "allow_credentials": getattr(settings, "CORS_ALLOW_CREDENTIALS", False),
+    "allow_methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    "allow_headers": ["*"],
+}
+if not _prod:
+    _cors_kwargs["allow_origin_regex"] = _CORS_DEV_ORIGIN_REGEX
+app.add_middleware(CORSMiddleware, **_cors_kwargs)
 
 @app.exception_handler(SQLAlchemyError)
 async def sqlalchemy_exception_handler(_request, _exc: SQLAlchemyError):
@@ -212,14 +215,22 @@ async def backend_connectivity_health_check():
 
 @app.get("/health", tags=["Observability & Health"])
 async def deep_health_check():
-    return HealthCheckSuite.run_deep_health()
+    """Deep health for ops. Returns 503 when the database is unhealthy (ALB/ECS safe)."""
+    payload = HealthCheckSuite.run_deep_health()
+    db_status = (payload.get("subsystems") or {}).get("database", {}).get("status")
+    status_code = 503 if db_status == "UNHEALTHY" else 200
+    return JSONResponse(content=payload, status_code=status_code)
 
 @app.get("/ready", tags=["Observability & Health"])
 async def readiness_check():
-    return HealthCheckSuite.run_readiness()
+    """Readiness probe — 503 when not ready so load balancers stop sending traffic."""
+    payload = HealthCheckSuite.run_readiness()
+    status_code = 200 if payload.get("ready") else 503
+    return JSONResponse(content=payload, status_code=status_code)
 
 @app.get("/live", tags=["Observability & Health"])
 async def liveness_check():
+    """Liveness probe — process is up (always 200 if this handler runs)."""
     return HealthCheckSuite.run_liveness()
 
 @app.get("/metrics", tags=["Observability & Health"])

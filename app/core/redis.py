@@ -40,22 +40,33 @@ def get_redis_client() -> Optional[redis.Redis]:
     if (now - _last_failure_time) < _FAILURE_COOLDOWN_SECONDS:
         return None
 
-    try:
-        host = getattr(settings, "REDIS_HOST", "localhost")
-        port = int(getattr(settings, "REDIS_PORT", 6379))
-        password = getattr(settings, "REDIS_PASSWORD", None) or None
+    host = getattr(settings, "REDIS_HOST", "localhost")
+    port = int(getattr(settings, "REDIS_PORT", 6379))
 
+    try:
+        redis_url = getattr(settings, "REDIS_URL", None)
         if _redis_pool is None:
-            _redis_pool = redis.ConnectionPool(
-                host=host,
-                port=port,
-                password=password,
-                decode_responses=True,
-                max_connections=20,
-                socket_timeout=0.5,
-                socket_connect_timeout=0.5,
-                retry_on_timeout=False
-            )
+            if redis_url:
+                _redis_pool = redis.ConnectionPool.from_url(
+                    redis_url,
+                    decode_responses=True,
+                    max_connections=20,
+                    socket_timeout=0.5,
+                    socket_connect_timeout=0.5,
+                    retry_on_timeout=False,
+                )
+            else:
+                password = getattr(settings, "REDIS_PASSWORD", None) or None
+                _redis_pool = redis.ConnectionPool(
+                    host=host,
+                    port=port,
+                    password=password,
+                    decode_responses=True,
+                    max_connections=20,
+                    socket_timeout=0.5,
+                    socket_connect_timeout=0.5,
+                    retry_on_timeout=False,
+                )
 
         client = redis.Redis(connection_pool=_redis_pool)
         client.ping()
