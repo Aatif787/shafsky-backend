@@ -18,6 +18,8 @@ depends_on = None
 
 def upgrade() -> None:
     # 1. airport_bookings
+    # Note: do not combine index=True with a later create_index of the same
+    # auto-generated name (ix_<table>_<column>) — that fails on PostgreSQL.
     op.create_table(
         'airport_bookings',
         sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True),
@@ -32,8 +34,6 @@ def upgrade() -> None:
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
-    op.create_index('ix_airport_bookings_customer', 'airport_bookings', ['customer_id'])
-    op.create_index('ix_airport_bookings_status', 'airport_bookings', ['status'])
 
     # 2. airport_passengers
     op.create_table(
@@ -67,7 +67,6 @@ def upgrade() -> None:
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
     op.create_index('ix_airport_flights_booking', 'airport_flight_details', ['booking_id'])
-    op.create_index('ix_airport_flights_number', 'airport_flight_details', ['flight_number'])
 
     # 4. airport_service_addons
     op.create_table(
