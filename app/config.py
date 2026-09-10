@@ -1,6 +1,8 @@
 import os
+from typing import Any
 from urllib.parse import quote
 from dotenv import load_dotenv
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 load_dotenv()
@@ -33,6 +35,27 @@ def _build_redis_url() -> str:
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Shafsky Aviation FastAPI Backend Engine"
     ENVIRONMENT: str = _default_environment()
+
+    @field_validator("ENVIRONMENT", mode="before")
+    @classmethod
+    def _validate_environment(cls, v: Any) -> str:
+        explicit = str(v or "").strip().lower()
+        cloud_runtime = any(
+            os.getenv(name)
+            for name in (
+                "AWS_EXECUTION_ENV",
+                "ECS_CONTAINER_METADATA_URI_V4",
+                "WEBSITE_INSTANCE_ID",
+                "K_SERVICE",
+                "RENDER",
+                "RENDER_SERVICE_ID",
+            )
+        )
+        if cloud_runtime:
+            if explicit in ("staging",):
+                return "staging"
+            return "production"
+        return explicit or "development"
     DATABASE_URL: str = os.getenv("DATABASE_URL", "")
     DB_POOL_SIZE: int = int(os.getenv("DB_POOL_SIZE", "20"))
     DB_MAX_OVERFLOW: int = int(os.getenv("DB_MAX_OVERFLOW", "30"))

@@ -1,4 +1,4 @@
-﻿# Production hardened multi-stage Dockerfile for Shafsky FastAPI backend
+# Production hardened multi-stage Dockerfile for Shafsky FastAPI backend
 
 # python:3.13-slim aligns the container runtime with the tested dev/test Python (3.13.x).
 # TODO: pin to an explicit digest for supply-chain integrity, e.g.:
@@ -28,6 +28,7 @@ FROM python:3.13-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    ENVIRONMENT=production \
     PORT=4000 \
     WEB_CONCURRENCY=2 \
     RUN_MIGRATIONS=true
