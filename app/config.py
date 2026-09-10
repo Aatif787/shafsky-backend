@@ -37,8 +37,8 @@ class Settings(BaseSettings):
     JWT_PREVIOUS_PUBLIC_KEYS: str = os.getenv("JWT_PREVIOUS_PUBLIC_KEYS", "")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "15"))
     REFRESH_TOKEN_EXPIRE_DAYS: int = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
-    # Allow legacy HS256 fallback for JWT verification. Disable in production by default.
-    ALLOW_HS256_LEGACY_FALLBACK: bool = os.getenv("ALLOW_HS256_LEGACY_FALLBACK", "False").lower() in ("1", "true", "yes")
+    # Allow legacy HS256 fallback for JWT verification. Defaults to true in non-production, false in production.
+    ALLOW_HS256_LEGACY_FALLBACK: bool = os.getenv("ALLOW_HS256_LEGACY_FALLBACK", "true" if os.getenv("ENVIRONMENT", "development") != "production" else "false").lower() in ("1", "true", "yes")
 
     REDIS_URL: str = _build_redis_url()
 

@@ -1,10 +1,11 @@
-from typing import Optional, Dict, Any
-from fastapi import APIRouter, Depends, Query
-from sqlalchemy.orm import Session
-
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import select, update, delete
+from typing import Optional, Dict, Any
+
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
 from app.models.schema import AirportManagement, FeatureFlag, Coupon
 
 from app.database import get_db
@@ -523,5 +524,3 @@ async def delete_admin_airport_service(
         admin_context=super_admin_context,
     )
     return AdminApiResponse(success=True, data=result)
-
-

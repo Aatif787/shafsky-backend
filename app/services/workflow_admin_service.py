@@ -9,10 +9,10 @@ retry execution, and health diagnostics.
 import uuid
 import time
 import logging
-from typing import List, Optional, Dict, Any
+from typing import Optional, Dict, Any
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
-from sqlalchemy import desc, asc, func, or_
+from sqlalchemy import desc, func, text
 
 from app.models.schema import (
     WorkflowInstance,
@@ -22,7 +22,7 @@ from app.models.schema import (
 )
 from app.models.system_events import WorkflowEventRecord
 from app.workflow.engine import WorkflowEngine
-from app.core.redis import check_redis_health, get_redis_client
+from app.core.redis import check_redis_health
 
 logger = logging.getLogger("shafsky.workflow.admin")
 
@@ -46,7 +46,7 @@ class WorkflowAdminService:
         Dashboard query listing active workflows with filters for service, state,
         assigned staff, and airport code with pagination and sorting.
         """
-        query = db.query(WorkflowInstance).filter(WorkflowInstance.is_completed == False)
+        query = db.query(WorkflowInstance).filter(WorkflowInstance.is_completed.is_(False))
 
         if service_type:
             query = query.filter(func.upper(WorkflowInstance.service_type) == service_type.strip().upper())
@@ -104,7 +104,6 @@ class WorkflowAdminService:
         Multi-field search across Workflow ID, Entity ID, and context keys:
         booking_id, passenger_name, flight_number, awb, visa_reference, hotel_confirmation, pnr.
         """
-        pattern = f"%{query_str.strip()}%"
         q = db.query(WorkflowInstance)
 
         if service_type:
@@ -120,7 +119,8 @@ class WorkflowAdminService:
 
         for inst in all_instances:
             # Match UUID or Entity ID
-            if q_lower in str(inst.id).lower() or q_lower in str(inst.entity_id).lower():
+            entity_id_str = inst.entity_id.lower() if inst.entity_id else ""
+            if q_lower in str(inst.id).lower() or q_lower in entity_id_str:
                 matched.append(inst)
                 continue
 
@@ -379,8 +379,8 @@ class WorkflowAdminService:
 
         # 1. Workflow Engine Status
         start_t = time.perf_counter()
-        active_count = db.query(WorkflowInstance).filter(WorkflowInstance.is_completed == False).count()
-        def_count = db.query(WorkflowDefinition).filter(WorkflowDefinition.is_active == True).count()
+        active_count = db.query(WorkflowInstance).filter(WorkflowInstance.is_completed.is_(False)).count()
+        def_count = db.query(WorkflowDefinition).filter(WorkflowDefinition.is_active.is_(True)).count()
         engine_latency = round((time.perf_counter() - start_t) * 1000, 2)
 
         engine_health = {
@@ -392,7 +392,6 @@ class WorkflowAdminService:
         # 2. DB Status
         start_t = time.perf_counter()
         try:
-            from sqlalchemy import text
             db.execute(text("SELECT 1"))
             db_latency = round((time.perf_counter() - start_t) * 1000, 2)
             db_health = {"status": "healthy", "latency_ms": db_latency, "details": {"connected": True}}

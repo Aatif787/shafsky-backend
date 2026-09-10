@@ -24,6 +24,30 @@ from sqlalchemy import select
 client = TestClient(app)
 
 
+@pytest.fixture(autouse=True, scope="module")
+def setup_test_admin_user():
+    db = SessionLocal()
+    try:
+        user = db.scalar(select(UserAuth).where(UserAuth.email == "admin@shafskyaviation.com"))
+        if not user:
+            user = UserAuth(
+                email="admin@shafskyaviation.com",
+                password_hash=AuthService.hash_password("ShafskyAdmin2026!"),
+                role=Role.SUPER_ADMIN,
+                is_verified=True,
+                is_active=True,
+            )
+            db.add(user)
+            db.commit()
+        else:
+            user.password_hash = AuthService.hash_password("ShafskyAdmin2026!")
+            user.is_active = True
+            db.commit()
+    finally:
+        db.close()
+
+
+
 def _cookie_refresh(response) -> str:
     """Extract refreshToken from Set-Cookie / TestClient cookie jar."""
     token = response.cookies.get("refreshToken") or response.cookies.get("refresh_token")

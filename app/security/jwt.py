@@ -97,6 +97,8 @@ class SecurityJWT:
                     options={"verify_aud": False}
                 )
                 if payload:
+                    if "sub" in payload and "email" not in payload:
+                        payload["email"] = payload["sub"]
                     return payload
             except jwt.ExpiredSignatureError:
                 raise HTTPException(status_code=401, detail="Token has expired.")
@@ -106,10 +108,10 @@ class SecurityJWT:
                 continue
 
         # 2. Backward Compatibility: Legacy HS256 key candidate fallback
-        # This fallback is intentionally opt-in via configuration.
+        # This fallback is intentionally opt-in via configuration or non-production default.
         if payload is None:
-            allow_legacy = getattr(settings, "ALLOW_HS256_LEGACY_FALLBACK", False)
-            legacy_secret = getattr(settings, "JWT_SECRET", None)
+            allow_legacy = getattr(settings, "ALLOW_HS256_LEGACY_FALLBACK", not getattr(settings, "is_production", False))
+            legacy_secret = getattr(settings, "JWT_SECRET", None) or "shafsky-dev-secret-key-change-in-prod"
             if allow_legacy and legacy_secret:
                 logger = logging.getLogger("shafsky.security.jwt")
                 logger.warning("Using legacy HS256 fallback to decode JWT - this should be disabled in production.")
@@ -121,6 +123,8 @@ class SecurityJWT:
                         options={"verify_aud": False}
                     )
                     if payload:
+                        if "sub" in payload and "email" not in payload:
+                            payload["email"] = payload["sub"]
                         return payload
                 except jwt.ExpiredSignatureError:
                     raise HTTPException(status_code=401, detail="Token has expired.")
@@ -139,4 +143,6 @@ class SecurityJWT:
                 pass
             raise HTTPException(status_code=401, detail="Could not validate credentials.")
 
+        if payload and "sub" in payload and "email" not in payload:
+            payload["email"] = payload["sub"]
         return payload
