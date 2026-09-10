@@ -6,6 +6,17 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 load_dotenv()
 
 
+def _default_environment() -> str:
+    """On Render, development/test/unset become production so pre-deploy cannot fail-open."""
+    explicit = (os.getenv("ENVIRONMENT") or "").strip().lower()
+    on_render = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
+    if on_render:
+        if explicit in ("staging",):
+            return "staging"
+        return "production"
+    return explicit or "development"
+
+
 def _build_redis_url() -> str:
     """Prefer explicit REDIS_URL; otherwise build from host/port/password."""
     explicit = (os.getenv("REDIS_URL") or "").strip()
@@ -21,7 +32,7 @@ def _build_redis_url() -> str:
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Shafsky Aviation FastAPI Backend Engine"
-    ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
+    ENVIRONMENT: str = _default_environment()
     DATABASE_URL: str = os.getenv("DATABASE_URL", "")
     DB_POOL_SIZE: int = int(os.getenv("DB_POOL_SIZE", "20"))
     DB_MAX_OVERFLOW: int = int(os.getenv("DB_MAX_OVERFLOW", "30"))
@@ -97,7 +108,7 @@ class Settings(BaseSettings):
     # Cookie SameSite: use "none" for cross-site Vercel frontend + Azure/API on another domain.
     # Allowed: lax | strict | none  (none requires Secure in production browsers)
     COOKIE_SAMESITE: str = (os.getenv("COOKIE_SAMESITE") or "").strip().lower() or (
-        "none" if os.getenv("ENVIRONMENT", "development").lower() not in ("development", "dev", "test", "testing") else "lax"
+        "none" if _default_environment().lower() not in ("development", "dev", "test", "testing") else "lax"
     )
 
     IDEMPOTENCY_LOCK_TTL: int = int(os.getenv("IDEMPOTENCY_LOCK_TTL", "120"))
