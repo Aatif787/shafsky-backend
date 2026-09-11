@@ -56,7 +56,7 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             content={
                 "success": False,
                 "code": "ERR_IDEMPOTENCY_KEY_REUSE",
-                "error": "X-Idempotency-Key was already used for a different request.",
+                "error": "Idempotency-Key was already used for a different request.",
             },
         )
 
@@ -64,13 +64,28 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         if request.method.upper() != "POST":
             return await call_next(request)
 
-        idempotency_key = request.headers.get("X-Idempotency-Key") or request.headers.get(
-            "x-idempotency-key"
-        )
-        if not idempotency_key or not idempotency_key.strip():
+        # Primary header: Idempotency-Key (RFC standard); Backward-compatibility: X-Idempotency-Key
+        primary_key = request.headers.get("Idempotency-Key") or request.headers.get("idempotency-key")
+        legacy_key = request.headers.get("X-Idempotency-Key") or request.headers.get("x-idempotency-key")
+
+        primary_clean = primary_key.strip() if primary_key is not None else None
+        legacy_clean = legacy_key.strip() if legacy_key is not None else None
+
+        # Reject conflicting values if both headers are supplied with different non-empty values
+        if primary_clean and legacy_clean and primary_clean != legacy_clean:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "code": "ERR_IDEMPOTENCY_HEADER_CONFLICT",
+                    "error": "Conflicting Idempotency-Key and X-Idempotency-Key headers supplied.",
+                },
+            )
+
+        key = primary_clean or legacy_clean
+        if not key:
             return await call_next(request)
 
-        key = idempotency_key.strip()
         max_len = int(getattr(settings, "IDEMPOTENCY_MAX_KEY_LENGTH", 256))
         if len(key) > max_len:
             return JSONResponse(
@@ -78,7 +93,7 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
                 content={
                     "success": False,
                     "code": "ERR_IDEMPOTENCY_KEY_INVALID",
-                    "error": f"X-Idempotency-Key must be at most {max_len} characters.",
+                    "error": f"Idempotency-Key must be at most {max_len} characters.",
                 },
             )
 
@@ -117,7 +132,7 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
                 content={
                     "success": False,
                     "code": "ERR_CONCURRENT_SUBMISSION",
-                    "error": "A request with this X-Idempotency-Key is currently being processed. Please wait.",
+                    "error": "A request with this Idempotency-Key is currently being processed. Please wait.",
                 },
             )
 

@@ -127,3 +127,133 @@ def test_post_lock_cache_hit_does_not_reexecute():
     res = client.post("/echo", content=b"hello", headers={"X-Idempotency-Key": key})
     assert res.status_code == 200
     assert res.headers.get("x-cache") == "HIT"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Targeted Tests for Idempotency Scenarios (a through g)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_scenario_a_primary_idempotency_key_header():
+    """Scenario a: Primary 'Idempotency-Key' header is respected (MISS on first, HIT on replay)."""
+    client = _client()
+    key = f"canonical_{uuid.uuid4().hex[:8]}"
+    res1 = client.post("/echo", content=b'{"action":"book"}', headers={"Idempotency-Key": key})
+    assert res1.status_code == 200
+    assert res1.headers.get("x-cache") == "MISS"
+
+    res2 = client.post("/echo", content=b'{"action":"book"}', headers={"Idempotency-Key": key})
+    assert res2.status_code == 200
+    assert res2.headers.get("x-cache") == "HIT"
+    assert res2.json() == {"echo": '{"action":"book"}'}
+
+
+def test_scenario_b_legacy_x_idempotency_key_header():
+    """Scenario b: Legacy 'X-Idempotency-Key' header is accepted for backward compatibility."""
+    client = _client()
+    key = f"legacy_{uuid.uuid4().hex[:8]}"
+    res1 = client.post("/echo", content=b'{"action":"pay"}', headers={"X-Idempotency-Key": key})
+    assert res1.status_code == 200
+    assert res1.headers.get("x-cache") == "MISS"
+
+    res2 = client.post("/echo", content=b'{"action":"pay"}', headers={"X-Idempotency-Key": key})
+    assert res2.status_code == 200
+    assert res2.headers.get("x-cache") == "HIT"
+    assert res2.json() == {"echo": '{"action":"pay"}'}
+
+
+def test_scenario_c_both_headers_same_value():
+    """Scenario c: Both 'Idempotency-Key' and 'X-Idempotency-Key' supplied with identical value."""
+    client = _client()
+    key = f"both_same_{uuid.uuid4().hex[:8]}"
+    headers = {
+        "Idempotency-Key": key,
+        "X-Idempotency-Key": key,
+    }
+    res1 = client.post("/echo", content=b'{"action":"order"}', headers=headers)
+    assert res1.status_code == 200
+    assert res1.headers.get("x-cache") == "MISS"
+
+    # Replay with both headers same value hits cache
+    res2 = client.post("/echo", content=b'{"action":"order"}', headers=headers)
+    assert res2.status_code == 200
+    assert res2.headers.get("x-cache") == "HIT"
+
+    # Replay with only primary canonical header also hits cache
+    res3 = client.post("/echo", content=b'{"action":"order"}', headers={"Idempotency-Key": key})
+    assert res3.status_code == 200
+    assert res3.headers.get("x-cache") == "HIT"
+
+
+def test_scenario_d_both_headers_different_values_conflict():
+    """Scenario d: Both headers supplied with different values -> 400 ERR_IDEMPOTENCY_HEADER_CONFLICT."""
+    client = _client()
+    headers = {
+        "Idempotency-Key": "key_canonical_alpha",
+        "X-Idempotency-Key": "key_legacy_beta",
+    }
+    res = client.post("/echo", content=b'{"action":"order"}', headers=headers)
+    assert res.status_code == 400
+    data = res.json()
+    assert data["success"] is False
+    assert data["code"] == "ERR_IDEMPOTENCY_HEADER_CONFLICT"
+    assert "Conflicting" in data["error"]
+
+
+def test_scenario_e_replay_cached_response():
+    """Scenario e: Replaying an idempotent mutation returns exact cached status and body."""
+    client = _client()
+    key = f"replay_{uuid.uuid4().hex[:8]}"
+    payload = b'{"flight":"AI-101","seats":2}'
+    res1 = client.post("/echo", content=payload, headers={"Idempotency-Key": key})
+    assert res1.status_code == 200
+    assert res1.headers.get("x-cache") == "MISS"
+    orig_data = res1.json()
+
+    res2 = client.post("/echo", content=payload, headers={"Idempotency-Key": key})
+    assert res2.status_code == 200
+    assert res2.headers.get("x-cache") == "HIT"
+    assert res2.json() == orig_data
+
+
+def test_scenario_f_concurrent_duplicate_in_flight():
+    """Scenario f: Concurrent duplicate request while lock is held returns 409 ERR_CONCURRENT_SUBMISSION."""
+    client = _client()
+    key = f"concurrent_{uuid.uuid4().hex[:8]}"
+    lock_token = IdempotencyService.acquire_lock(key, ttl_seconds=30)
+    assert lock_token is not None
+    try:
+        # Request with canonical Idempotency-Key
+        res1 = client.post("/echo", content=b'{"hold":true}', headers={"Idempotency-Key": key})
+        assert res1.status_code == 409
+        data1 = res1.json()
+        assert data1["code"] == "ERR_CONCURRENT_SUBMISSION"
+
+        # Request with legacy X-Idempotency-Key also rejected with 409
+        res2 = client.post("/echo", content=b'{"hold":true}', headers={"X-Idempotency-Key": key})
+        assert res2.status_code == 409
+        data2 = res2.json()
+        assert data2["code"] == "ERR_CONCURRENT_SUBMISSION"
+    finally:
+        IdempotencyService.release_lock(key, lock_token)
+
+
+def test_scenario_g_key_reuse_different_fingerprint():
+    """Scenario g: Key reuse with a different request payload returns 422 ERR_IDEMPOTENCY_KEY_REUSE."""
+    client = _client()
+    key = f"reuse_{uuid.uuid4().hex[:8]}"
+    res1 = client.post("/echo", content=b'{"amount": 1000}', headers={"Idempotency-Key": key})
+    assert res1.status_code == 200
+    assert res1.headers.get("x-cache") == "MISS"
+
+    # Reusing same key for different body must fail with 422
+    res2 = client.post("/echo", content=b'{"amount": 9999}', headers={"Idempotency-Key": key})
+    assert res2.status_code == 422
+    data2 = res2.json()
+    assert data2["success"] is False
+    assert data2["code"] == "ERR_IDEMPOTENCY_KEY_REUSE"
+
+    # Also using legacy header with different body fails with 422
+    res3 = client.post("/echo", content=b'{"amount": 5555}', headers={"X-Idempotency-Key": key})
+    assert res3.status_code == 422
+    assert res3.json()["code"] == "ERR_IDEMPOTENCY_KEY_REUSE"
+

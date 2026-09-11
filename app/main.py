@@ -122,6 +122,7 @@ _cors_kwargs = {
         "Origin",
         "X-Device-ID",
         "Idempotency-Key",
+        "X-Idempotency-Key",
         "X-Correlation-ID",
     ],
 }
