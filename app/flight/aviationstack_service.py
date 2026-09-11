@@ -1,4 +1,4 @@
-﻿"""
+"""
 AviationStack secondary flight verification for WhatsApp booking confirmation.
 
 Aviation Edge remains the primary provider for website /api/flights/validate.
@@ -300,7 +300,7 @@ def _http_fetch_flights(flight_iata: str) -> Dict[str, Any]:
 
     base = (settings.AVIATIONSTACK_BASE_URL or "https://api.aviationstack.com/v1").rstrip("/")
     url = f"{base}/flights"
-    timeout = float(getattr(settings, "AVIATIONSTACK_TIMEOUT", 10.0) or 10.0)
+    timeout = float(getattr(settings, "AVIATIONSTACK_TIMEOUT", 5.0) or 5.0)
     max_retries = max(1, int(getattr(settings, "AVIATIONSTACK_MAX_RETRIES", 2) or 2))
 
     params = {"access_key": api_key, "flight_iata": flight_iata, "limit": 10}
@@ -444,7 +444,7 @@ def _edge_fallback_verification(flight_iata: str, svc: Optional[str], jt: Option
         provider = AviationEdgeProvider()
         # Bound the fallback so a slow Edge API can never stall the webhook thread:
         provider.max_retries = 1
-        provider.timeout = 8.0
+        provider.timeout = 5.0
         probe_date = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
         rows = provider._make_request("timetable", {"key": provider.api_key, "flight_iata": flight_iata, "limit": 5})
     except Exception as err:

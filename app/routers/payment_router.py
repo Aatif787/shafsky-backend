@@ -45,7 +45,8 @@ router = APIRouter(prefix="/api/payments", tags=["Payment & Invoicing"])
     "/orders",
     response_model=RazorpayCreateOrderResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Create Razorpay Order"
+    summary="Create Razorpay Order (Alias)",
+    deprecated=True,
 )
 async def create_order_endpoint(
     payload: RazorpayCreateOrderRequest,
@@ -197,7 +198,15 @@ async def create_order_endpoint(
         tx.gateway_payment_id = order_id
         tx.gateway_response = res
 
-    db.commit()
+    try:
+        db.commit()
+    except Exception as db_err:
+        db.rollback()
+        logger.error(f"Failed to persist payment transaction for {booking_ref}: {db_err}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to record payment order in database."
+        ) from db_err
 
     return RazorpayCreateOrderResponse(
         order_id=order_id,
@@ -247,7 +256,8 @@ def initiate_payment_endpoint(
     "/verify",
     response_model=PaymentApiResponse,
     status_code=status.HTTP_200_OK,
-    summary="Verify Frontend Razorpay Checkout Payment Signature"
+    summary="Verify Frontend Razorpay Checkout Payment Signature (Alias)",
+    deprecated=True,
 )
 async def verify_payment_endpoint(
     payload: PaymentVerifyRequest,

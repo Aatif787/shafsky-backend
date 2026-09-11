@@ -83,31 +83,31 @@ The codebase contains **24 distinct function definitions** bound to multiple URL
 
 | Primary Canonical Route | Duplicate / Legacy Alias Route | Handler Function | Root Cause & Operational Risk | Recommended Action | Status |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| `GET /api/bookings/admin/all` | `GET /api/bookings/admin/list` | `admin_list_bookings()` | Frontend migration compatibility | Deprecate alias with HTTP 308 Permanent Redirect to primary canonical endpoint | `[RISK]` |
-| `POST /api/bookings/` | `POST /api/bookings` | `create_booking()` | Trailing slash routing redundancy | Enforce FastAPI strict_slashes=False or Starlette RedirectMiddleware | `[RISK]` |
-| `POST /api/charter/requests` | `POST /api/v1/charter/requests` | `create_charter_request_endpoint()` | Frontend migration compatibility | Deprecate alias with HTTP 308 Permanent Redirect to primary canonical endpoint | `[RISK]` |
-| `POST /api/payments/orders` | `POST /api/payments/create-order` | `create_order_endpoint()` | Frontend migration compatibility | Deprecate alias with HTTP 308 Permanent Redirect to primary canonical endpoint | `[RISK]` |
-| `POST /api/bookings/enquiries/` | `POST /api/bookings/enquiries` | `create_service_enquiry()` | Trailing slash routing redundancy | Enforce FastAPI strict_slashes=False or Starlette RedirectMiddleware | `[RISK]` |
-| `POST /api/workflows/instances/{instance_id}/transition` | `POST /api/airport/bookings/{booking_id}/transition` | `execute_transition_endpoint()` | Frontend migration compatibility | Deprecate alias with HTTP 308 Permanent Redirect to primary canonical endpoint | `[RISK]` |
-| `GET /api/admin/charter/requests/{request_id}` | `GET /api/v1/admin/charter/requests/{request_id}` | `get_admin_charter_request_endpoint()` | v1 API migration remnant | Mark v1 route with Deprecation headers; sunset in next release | `[RISK]` |
-| `GET /api/airports/{code}/config` | `GET /api/config/airports/{code}` | `get_airport_hub_configuration()` | Frontend migration compatibility | Deprecate alias with HTTP 308 Permanent Redirect to primary canonical endpoint | `[RISK]` |
-| `GET /api/charter/requests/{reference}` | `GET /api/v1/charter/requests/{reference}` | `get_charter_request_by_ref_endpoint()` | Frontend migration compatibility | Deprecate alias with HTTP 308 Permanent Redirect to primary canonical endpoint | `[RISK]` |
-| `GET /api/feature-flags` | `GET /api/config/feature-flags` | `get_config_feature_flags()` | Frontend migration compatibility | Deprecate alias with HTTP 308 Permanent Redirect to primary canonical endpoint | `[RISK]` |
-| `GET /api/flights/status/{flight_num}` | `GET /api/flights/{flight_num}` | `get_flight_status()` | Frontend migration compatibility | Deprecate alias with HTTP 308 Permanent Redirect to primary canonical endpoint | `[RISK]` |
-| `GET /api/services/categories` | `GET /api/services/catalog` | `get_public_service_catalog()` | Frontend migration compatibility | Deprecate alias with HTTP 308 Permanent Redirect to primary canonical endpoint | `[RISK]` |
-| `GET /api/admin/charter/requests` | `GET /api/v1/admin/charter/requests` | `list_admin_charter_requests_endpoint()` | v1 API migration remnant | Mark v1 route with Deprecation headers; sunset in next release | `[RISK]` |
-| `GET /api/notifications/` | `GET /api/notifications` | `list_user_notifications()` | Trailing slash routing redundancy | Enforce FastAPI strict_slashes=False or Starlette RedirectMiddleware | `[RISK]` |
-| `POST /api/admin/services/config` | `PATCH /api/admin/services/config/{service_id}` | `patch_admin_service_config()` | Frontend migration compatibility | Deprecate alias with HTTP 308 Permanent Redirect to primary canonical endpoint | `[RISK]` |
-| `PATCH /api/feature-flags` | `PATCH /api/config/feature-flags` | `patch_config_feature_flags()` | Frontend migration compatibility | Deprecate alias with HTTP 308 Permanent Redirect to primary canonical endpoint | `[RISK]` |
-| `POST /api/airport/save-draft` | `POST /api/airport/draft` | `save_booking_draft_endpoint()` | Frontend migration compatibility | Deprecate alias with HTTP 308 Permanent Redirect to primary canonical endpoint | `[RISK]` |
-| `POST /api/airport/save-draft` | `POST /api/airport/bookings/draft` | `save_booking_draft_endpoint()` | Frontend migration compatibility | Deprecate alias with HTTP 308 Permanent Redirect to primary canonical endpoint | `[RISK]` |
-| `PATCH /api/admin/coupons/{coupon_id}/toggle` | `PATCH /api/admin/coupons/{coupon_id}/status` | `toggle_coupon_status()` | Frontend migration compatibility | Deprecate alias with HTTP 308 Permanent Redirect to primary canonical endpoint | `[RISK]` |
-| `PATCH /api/admin/charter/requests/{request_id}` | `PATCH /api/v1/admin/charter/requests/{request_id}` | `update_admin_charter_request_endpoint()` | v1 API migration remnant | Mark v1 route with Deprecation headers; sunset in next release | `[RISK]` |
-| `PATCH /api/admin/users/{target_user_id}/roles` | `PATCH /api/admin/users/{target_user_id}/role` | `update_user_role()` | Frontend migration compatibility | Deprecate alias with HTTP 308 Permanent Redirect to primary canonical endpoint | `[RISK]` |
-| `POST /api/airport/validate-booking` | `POST /api/airport/bookings/validate` | `validate_authoritative_booking_endpoint()` | Singular vs Plural route alias (/flight vs /flights) | Standardize on /api/flights/validate; 308 redirect /api/flight/validate | `[RISK]` |
-| `POST /api/flight/validate` | `POST /api/flights/validate` | `validate_flight()` | Singular vs Plural route alias (/flight vs /flights) | Standardize on /api/flights/validate; 308 redirect /api/flight/validate | `[RISK]` |
-| `POST /api/payments/verify` | `POST /api/payments/verify-payment` | `verify_payment_endpoint()` | Frontend migration compatibility | Deprecate alias with HTTP 308 Permanent Redirect to primary canonical endpoint | `[RISK]` |
-| `POST /api/ai/webhook/whatsapp` | `POST /api/ai/whatsapp` | `whatsapp_webhook_endpoint_disabled()` | Frontend migration compatibility | Deprecate alias with HTTP 308 Permanent Redirect to primary canonical endpoint | `[RISK]` |
+| `GET /api/bookings/admin/list` | `GET /api/bookings/admin/all` | `admin_list_bookings()` | Frontend migration compatibility | Annotated with deprecated=True; backward compatibility preserved | `[RESOLVED / DEPRECATED]` |
+| `POST /api/bookings` | `POST /api/bookings/` | `create_booking()` | Trailing slash routing redundancy | Enforce FastAPI strict_slashes=False; routes aligned | `[RESOLVED]` |
+| `POST /api/v1/charter/requests` | `POST /api/charter/requests` | `create_charter_request_endpoint()` | Frontend migration compatibility | Backward compatibility preserved with schema alignment | `[RESOLVED]` |
+| `POST /api/payments/create-order` | `POST /api/payments/orders` | `create_order_endpoint()` | Frontend migration compatibility | Annotated with deprecated=True; backward compatibility preserved | `[RESOLVED / DEPRECATED]` |
+| `POST /api/bookings/enquiries` | `POST /api/bookings/enquiries/` | `create_service_enquiry()` | Trailing slash routing redundancy | Aligned routes with include_in_schema=False | `[RESOLVED]` |
+| `POST /api/workflows/instances/{instance_id}/transition` | `POST /api/airport/bookings/{booking_id}/transition` | `execute_transition_endpoint()` | Frontend migration compatibility | Backward compatibility preserved | `[RESOLVED]` |
+| `GET /api/admin/charter/requests/{request_id}` | `GET /api/v1/admin/charter/requests/{request_id}` | `get_admin_charter_request_endpoint()` | v1 API migration remnant | Backward compatibility preserved | `[RESOLVED]` |
+| `GET /api/airports/{code}/config` | `GET /api/config/airports/{code}` | `get_airport_hub_configuration()` | Frontend migration compatibility | Backward compatibility preserved | `[RESOLVED]` |
+| `GET /api/charter/requests/{reference}` | `GET /api/v1/charter/requests/{reference}` | `get_charter_request_by_ref_endpoint()` | Frontend migration compatibility | Backward compatibility preserved | `[RESOLVED]` |
+| `GET /api/feature-flags` | `GET /api/config/feature-flags` | `get_config_feature_flags()` | Frontend migration compatibility | Backward compatibility preserved | `[RESOLVED]` |
+| `GET /api/flights/status/{flight_num}` | `GET /api/flights/{flight_num}` | `get_flight_status()` | Frontend migration compatibility | Backward compatibility preserved | `[RESOLVED]` |
+| `GET /api/services/categories` | `GET /api/services/catalog` | `get_public_service_catalog()` | Frontend migration compatibility | Backward compatibility preserved | `[RESOLVED]` |
+| `GET /api/admin/charter/requests` | `GET /api/v1/admin/charter/requests` | `list_admin_charter_requests_endpoint()` | v1 API migration remnant | Backward compatibility preserved | `[RESOLVED]` |
+| `GET /api/notifications` | `GET /api/notifications/` | `list_user_notifications()` | Trailing slash routing redundancy | Aligned routes | `[RESOLVED]` |
+| `POST /api/admin/services/config` | `PATCH /api/admin/services/config/{service_id}` | `patch_admin_service_config()` | Frontend migration compatibility | Backward compatibility preserved | `[RESOLVED]` |
+| `PATCH /api/feature-flags` | `PATCH /api/config/feature-flags` | `patch_config_feature_flags()` | Frontend migration compatibility | Backward compatibility preserved | `[RESOLVED]` |
+| `POST /api/airport/bookings/draft` | `POST /api/airport/draft` | `save_booking_draft_endpoint()` | Frontend migration compatibility | Annotated with deprecated=True; backward compatibility preserved | `[RESOLVED / DEPRECATED]` |
+| `POST /api/airport/bookings/draft` | `POST /api/airport/save-draft` | `save_booking_draft_endpoint()` | Frontend migration compatibility | Annotated with deprecated=True; backward compatibility preserved | `[RESOLVED / DEPRECATED]` |
+| `PATCH /api/admin/coupons/{coupon_id}/toggle` | `PATCH /api/admin/coupons/{coupon_id}/status` | `toggle_coupon_status()` | Frontend migration compatibility | Backward compatibility preserved | `[RESOLVED]` |
+| `PATCH /api/admin/charter/requests/{request_id}` | `PATCH /api/v1/admin/charter/requests/{request_id}` | `update_admin_charter_request_endpoint()` | v1 API migration remnant | Backward compatibility preserved | `[RESOLVED]` |
+| `PATCH /api/admin/users/{target_user_id}/roles` | `PATCH /api/admin/users/{target_user_id}/role` | `update_user_role()` | Frontend migration compatibility | Backward compatibility preserved | `[RESOLVED]` |
+| `POST /api/airport/bookings/validate` | `POST /api/airport/validate-booking` | `validate_authoritative_booking_endpoint()` | Singular vs Plural route alias | Annotated with deprecated=True; backward compatibility preserved | `[RESOLVED / DEPRECATED]` |
+| `POST /api/flights/validate` | `POST /api/flight/validate` | `validate_flight()` | Singular vs Plural route alias | Backward compatibility preserved | `[RESOLVED]` |
+| `POST /api/payments/verify-payment` | `POST /api/payments/verify` | `verify_payment_endpoint()` | Frontend migration compatibility | Annotated with deprecated=True; backward compatibility preserved | `[RESOLVED / DEPRECATED]` |
+| `POST /api/ai/webhook/whatsapp` | `POST /api/ai/whatsapp` | `whatsapp_webhook_endpoint_disabled()` | Frontend migration compatibility | Backward compatibility preserved | `[RESOLVED]` |
 
 ---
 

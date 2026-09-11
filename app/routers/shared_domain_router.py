@@ -150,11 +150,16 @@ def complete_assignment(
 def get_entity_assignments(
     entity_type: str,
     entity_id: str,
+    limit: Optional[int] = Query(None, ge=1, le=200, description="Optional page limit"),
+    offset: int = Query(0, ge=0, description="Optional page offset"),
     db: Session = Depends(get_db),
     current_user=Depends(get_required_staff_or_admin),
 ):
-    """Retrieve all assignments for an entity."""
-    return AssignmentService.get_entity_assignments(db, entity_type, entity_id)
+    """Retrieve all assignments for an entity with optional pagination."""
+    items = AssignmentService.get_entity_assignments(db, entity_type, entity_id)
+    if limit is not None:
+        return items[offset : offset + limit]
+    return items[offset:] if offset else items
 
 
 @router.get(
@@ -178,11 +183,16 @@ def get_staff_workload(
 )
 def get_assignment_history(
     assignment_id: UUID,
+    limit: Optional[int] = Query(None, ge=1, le=200, description="Optional page limit"),
+    offset: int = Query(0, ge=0, description="Optional page offset"),
     db: Session = Depends(get_db),
     current_user=Depends(get_required_staff_or_admin),
 ):
-    """Retrieve immutable assignment change log."""
-    return AssignmentService.get_history(db, assignment_id)
+    """Retrieve immutable assignment change log with optional pagination."""
+    items = AssignmentService.get_history(db, assignment_id)
+    if limit is not None:
+        return items[offset : offset + limit]
+    return items[offset:] if offset else items
 
 
 # ─────────────────────────────────────────────

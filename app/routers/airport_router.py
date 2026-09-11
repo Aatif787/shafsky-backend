@@ -150,7 +150,8 @@ def calculate_authoritative_price_endpoint(payload: Dict[str, Any] = Body(...), 
     "/validate-booking",
     status_code=status.HTTP_200_OK,
     summary="Validate Booking & Calculate Authoritative Price (Alias)",
-    description="Authoritative backend booking validation and price calculation API alias."
+    description="Authoritative backend booking validation and price calculation API alias.",
+    deprecated=True,
 )
 def validate_authoritative_booking_endpoint(
     payload: Dict[str, Any] = Body(...),
@@ -172,13 +173,15 @@ def validate_authoritative_booking_endpoint(
     "/draft",
     status_code=status.HTTP_200_OK,
     summary="Save / Update Booking Draft (Alias)",
-    description="Alias endpoint for saving or updating a booking draft."
+    description="Alias endpoint for saving or updating a booking draft.",
+    deprecated=True,
 )
 @router.post(
     "/save-draft",
     status_code=status.HTTP_200_OK,
     summary="Save / Update Booking Draft (Alias 2)",
-    description="Alias endpoint for saving or updating a booking draft."
+    description="Alias endpoint for saving or updating a booking draft.",
+    deprecated=True,
 )
 def save_booking_draft_endpoint(
     payload: Dict[str, Any] = Body(...),

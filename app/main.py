@@ -2,6 +2,7 @@ import os
 import uvicorn
 from datetime import datetime, timezone
 from fastapi import FastAPI, Depends, Response, Request, HTTPException
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
@@ -134,20 +135,47 @@ app.add_middleware(CORSMiddleware, **_cors_kwargs)
 async def sqlalchemy_exception_handler(_request, _exc: SQLAlchemyError):
     return JSONResponse(
         status_code=500,
-        content={"success": False, "error": "A database error occurred. Please try again later."}
+        content={
+            "success": False,
+            "code": "ERR_500",
+            "error": "A database error occurred. Please try again later.",
+            "detail": "A database error occurred. Please try again later.",
+        }
     )
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(_request, exc: RequestValidationError):
     content = {
         "success": False,
+        "code": "ERR_422",
         "error": "Validation error in request payload.",
+        "detail": "Validation error in request payload.",
     }
     if not settings.is_production:
         content["details"] = jsonable_encoder(exc.errors())
     return JSONResponse(
         status_code=422,
         content=content,
+    )
+
+@app.exception_handler(HTTPException)
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(_request: Request, exc: StarletteHTTPException):
+    headers = getattr(exc, "headers", None)
+    detail = exc.detail
+    error_msg = detail if isinstance(detail, str) else "Request error"
+    content = {
+        "success": False,
+        "code": f"ERR_{exc.status_code}",
+        "error": error_msg,
+        "detail": detail,
+    }
+    if not isinstance(detail, str):
+        content["details"] = detail
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=content,
+        headers=headers,
     )
 
 from app.routers import workflow_router

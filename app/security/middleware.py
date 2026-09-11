@@ -120,7 +120,12 @@ class SecurityMiddleware(BaseHTTPMiddleware):
                     headers[key] = val
                 return JSONResponse(
                     status_code=exc.status_code,
-                    content={"detail": exc.detail},
+                    content={
+                        "success": False,
+                        "code": f"ERR_{exc.status_code}",
+                        "error": exc.detail,
+                        "detail": exc.detail,
+                    },
                     headers=headers,
                 )
 
@@ -128,6 +133,25 @@ class SecurityMiddleware(BaseHTTPMiddleware):
 
         for key, val in get_security_headers().items():
             response.headers[key] = val
+
+        # Cache-Control Guardrails:
+        # 1. State mutations (POST, PUT, PATCH, DELETE) must never be cached by intermediaries or browsers.
+        if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+        elif request.method == "GET":
+            # 2. Static master catalogs and public metadata routes are safe for client/CDN caching
+            normalized_path = normalize_request_path(request.url.path)
+            if (
+                normalized_path.startswith("/api/shared/")
+                or normalized_path.startswith("/api/journey/airports")
+                or normalized_path.startswith("/api/airports")
+                or normalized_path.startswith("/api/airport/services")
+                or normalized_path.startswith("/api/config/")
+                or normalized_path.startswith("/api/global-airports")
+            ):
+                if "Cache-Control" not in response.headers:
+                    response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
 
         return response
 

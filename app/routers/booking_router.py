@@ -113,6 +113,7 @@ async def create_booking(
         transaction = PaymentService.initiate_payment(db, init_request)
         db.commit()
     except Exception as e:
+        db.rollback()
         logger.exception("Payment initiation failed after booking %s was created", booking.booking_ref)
         from app.providers.razorpay_provider import razorpay_provider
         booking_dict = BookingService.format_booking_dict(booking)
@@ -213,7 +214,7 @@ async def get_my_bookings(
     )
 
 @router.get("/admin/list", response_model=BookingApiResponse)
-@router.get("/admin/all", response_model=BookingApiResponse)
+@router.get("/admin/all", response_model=BookingApiResponse, deprecated=True)
 async def admin_list_bookings(
     status: Optional[str] = Query(None),
     search: Optional[str] = Query(None),

@@ -513,7 +513,7 @@ class AviationEdgeProvider(FlightProvider):
     def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None):
         self.api_key = api_key or getattr(settings, "AVIATION_EDGE_API_KEY", "")
         self.base_url = base_url or getattr(settings, "AVIATION_EDGE_BASE_URL", "https://aviation-edge.com/v2/public")
-        self.timeout = float(getattr(settings, "AVIATION_EDGE_TIMEOUT", 12.0))
+        self.timeout = float(getattr(settings, "AVIATION_EDGE_TIMEOUT", 5.0))
         self.max_retries = int(getattr(settings, "AVIATION_EDGE_MAX_RETRIES", 2))
 
     def _get_redis(self):
