@@ -42,6 +42,22 @@ def upgrade() -> None:
     if "ix_airport_services_terminal" not in indexes:
         op.create_index("ix_airport_services_terminal", "airport_services", ["terminal"])
 
+    constraints = {
+        constraint["name"] for constraint in inspector.get_unique_constraints("airport_services")
+    }
+    # The old constraint prevented distinct terminal-specific packages from
+    # coexisting. Replace it with the uniqueness contract in AirportService.
+    if "uq_airport_service_journey_flight" in constraints:
+        op.drop_constraint(
+            "uq_airport_service_journey_flight", "airport_services", type_="unique"
+        )
+    if "uq_airport_service_journey_flight_terminal" not in constraints:
+        op.create_unique_constraint(
+            "uq_airport_service_journey_flight_terminal",
+            "airport_services",
+            ["airport_id", "service_id", "journey_type", "flight_type", "terminal"],
+        )
+
 
 def downgrade() -> None:
     bind = op.get_bind()
@@ -49,6 +65,20 @@ def downgrade() -> None:
     indexes = {index["name"] for index in inspector.get_indexes("airport_services")}
     if "ix_airport_services_terminal" in indexes:
         op.drop_index("ix_airport_services_terminal", table_name="airport_services")
+
+    constraints = {
+        constraint["name"] for constraint in inspector.get_unique_constraints("airport_services")
+    }
+    if "uq_airport_service_journey_flight_terminal" in constraints:
+        op.drop_constraint(
+            "uq_airport_service_journey_flight_terminal", "airport_services", type_="unique"
+        )
+    if "uq_airport_service_journey_flight" not in constraints:
+        op.create_unique_constraint(
+            "uq_airport_service_journey_flight",
+            "airport_services",
+            ["airport_id", "service_id", "journey_type", "flight_type"],
+        )
 
     airport_service_columns = {
         column["name"] for column in inspector.get_columns("airport_services")
@@ -59,3 +89,4 @@ def downgrade() -> None:
     user_columns = {column["name"] for column in inspector.get_columns("user_auth")}
     if "is_active" in user_columns:
         op.drop_column("user_auth", "is_active")
+
