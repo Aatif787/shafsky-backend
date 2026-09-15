@@ -67,6 +67,9 @@ jobs:
       - name: Alembic upgrade
         run: alembic upgrade head
 
+      - name: Seed journey catalog
+        run: python -m app.seeds.seed_journey_data
+
       - name: Pytest
         run: pytest -q --tb=short
 
