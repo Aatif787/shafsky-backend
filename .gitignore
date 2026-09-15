@@ -16,6 +16,8 @@ ENV/
 
 # Testing & Logs
 .pytest_cache/
+.ci-logs/
+pytest-ci-out.txt
 *.log
 *.db
 backups/

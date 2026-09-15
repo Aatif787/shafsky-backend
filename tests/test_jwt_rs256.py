@@ -112,6 +112,33 @@ def test_05_hs256_legacy_token_rejected_when_fallback_disabled():
         settings.ALLOW_HS256_LEGACY_FALLBACK = previous
 
 
+def test_05b_empty_jwt_secret_cannot_authenticate_even_with_fallback():
+    """Empty HMAC secrets must never verify, including when HS256 fallback is on."""
+    now = datetime.now(timezone.utc)
+    token = jwt.encode(
+        {
+            "sub": "legacy_user@shafskyaviation.com",
+            "role": "CUSTOMER",
+            "exp": now + timedelta(minutes=15),
+            "iat": now,
+            "type": "access",
+        },
+        "any-nonempty-hmac-key-min-32-bytes",
+        algorithm="HS256",
+    )
+    previous_flag = settings.ALLOW_HS256_LEGACY_FALLBACK
+    previous_secret = settings.JWT_SECRET
+    settings.ALLOW_HS256_LEGACY_FALLBACK = True
+    settings.JWT_SECRET = ""
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            SecurityJWT.decode_token(token)
+        assert exc_info.value.status_code == 401
+    finally:
+        settings.ALLOW_HS256_LEGACY_FALLBACK = previous_flag
+        settings.JWT_SECRET = previous_secret
+
+
 def test_06_startup_secrets_validation():
     """Verify that startup secrets validation passes cleanly with RSA keys initialized."""
     validate_secrets_on_startup()

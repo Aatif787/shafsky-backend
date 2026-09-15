@@ -1,4 +1,4 @@
-﻿"""
+"""
 Database Connection & Engine Singleton Module.
 Configures persistent, high-performance PostgreSQL connection pooling (QueuePool)
 with LIFO checkout, TCP keepalive socket settings, and proactive health checks

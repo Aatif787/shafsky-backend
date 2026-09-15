@@ -422,9 +422,11 @@ class WhatsAppClient:
             logger.error("[WhatsApp] Invalid recipient phone for document: '%s'", to_phone)
             return {"success": False, "error": "invalid_recipient_phone", "status": "failed"}
 
-        if os.getenv("PYTEST_CURRENT_TEST") and os.getenv("WHATSAPP_INVOICE_ENABLED") != "1":
-            logger.info("[WhatsApp] Skipping live document send during pytest")
-            return {"success": False, "error": "pytest_skipped_live_send", "status": "failed"}
+        from app.core.runtime import offline_third_party_calls
+
+        if offline_third_party_calls() and os.getenv("WHATSAPP_INVOICE_ENABLED") != "1":
+            logger.info("[WhatsApp] Skipping live document send in offline/test runtime")
+            return {"success": False, "error": "offline_document_send", "status": "failed"}
 
         safe_name = (filename or "invoice.pdf").replace("\\", "_").replace("/", "_")[:180]
         document: Dict[str, Any] = {"filename": safe_name}
