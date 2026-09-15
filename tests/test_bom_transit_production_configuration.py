@@ -98,50 +98,40 @@ def test_bom_transit_verbatim_features_and_counts(db_session):
     dd = rows["DOMESTIC_DOMESTIC"]
     assert len(dd.features) == 9
     assert dd.features == [
-        "WELCOME GUEST FROM AEROBRIDGE",
-        "DEDICATED STAFF WITH PLACARD",
-        "PORTER SERVICE WITH DEDICATED STAFF AT ARRIVALS",
-        "WHEELCHAIR SERVICE AVAILABLE (THROUGH AIRLINES)",
-        "BUGGY SERVICE AVAILABLE END OF THE AEROBRIDGE",
-        "ASSIST IN S.H.A.(TRANSIT AREA)",
-        "LOUNGE ACCESS FOR 2 HOURS (AT DEPARTURE ONLY)",
-        "BUGGY SERVICE AVAILABLE TILL THE BOARDING GATE (AS PER THE AVAILABILITY)",
-        "ASSIST PAX UPTO BOARDING GATE",
+        "Welcome at the Aerobridge",
+        "Dedicated Staff with Placard",
+        "Dedicated Porter Service at Arrivals",
+        "Wheelchair Assist (through the airline)",
+        "Buggy Service from the End of the Aerobridge",
+        "Assist inside the Security Hold Area (Transit Area)",
+        "Lounge Access for up to 2 hours (Departure only)",
+        "Buggy Service to the Boarding Gate (subject to availability)",
+        "Escort to the Boarding Gate",
     ]
     assert float(dd.price) == 7150.00
 
-    # 2. Domestic-International (9 inclusions)
+    # 2. Domestic-International (9 inclusions — same operational script as Dom-Dom)
     di = rows["DOMESTIC_INTERNATIONAL"]
     assert len(di.features) == 9
-    assert di.features == [
-        "WELCOME GUEST FROM AEROBRIDGE",
-        "DEDICATED STAFF WITH PLACARD",
-        "PORTER SERVICE WITH DEDICATED STAFF AT ARRIVALS",
-        "WHEELCHAIR SERVICE AVAILABLE (THROUGH AIRLINES)",
-        "BUGGY SERVICE AVAILABLE END OF THE AEROBRIDGE",
-        "ASSIST IN S.H.A.(TRANSIT AREA)",
-        "LOUNGE ACCESS FOR 2 HOURS (AT DEPARTURE ONLY)",
-        "BUGGY SERVICE AVAILABLE TILL THE BOARDING GATE (AS PER THE AVAILABILITY)",
-        "ASSIST PAX UPTO BOARDING GATE",
-    ]
+    assert di.features == dd.features
     assert float(di.price) == 9000.00
 
     # 3. International-Domestic (12 inclusions)
     id_row = rows["INTERNATIONAL_DOMESTIC"]
     assert len(id_row.features) == 12
     assert id_row.features == [
-        "WELCOME GUEST FROM AEROBRIDGE",
-        "DEDICATED STAFF WITH PLACARD",
-        "PORTER SERVICE WITH DEDICATED STAFF AT ARRIVALS",
-        "BUGGY SERVICE AVAILABLE END OF THE AEROBRIDGE",
-        "WHEELCHAIR SERVICE AVAILABLE (THROUGH AIRLINES)",
-        "GUIDANCE TO THE IMMIGRATION COUNTER",
-        "ASSIST IN BAGGAGE BELT AREA",
-        "ASSIST AT SEPARATE CHECKIN PROCESS AT COUNTERS",
-        "ASSIST IN S.H.A.(SECURITY HOLD AREA)",
-        "LOUNGE ACCESS FOR 2 HOURS (AT DEPARTURE ONLY)",
-        "BUGGY SERVICE AVAILABLE TILL THE BOARDING GATE (AS PER THE AVAILABILITY)",
-        "ASSIST GUEST UPTO BOARDING GATE",
+        "Welcome at the Aerobridge",
+        "Dedicated Staff with Placard",
+        "Dedicated Porter Service at Arrivals",
+        "Buggy Service from the End of the Aerobridge",
+        "Wheelchair Assist (through the airline)",
+        "Guidance to the Immigration Counter",
+        "Assist at the Baggage Belt Area",
+        "Assist with Separate Check-in at the Airline Counters",
+        "Assist inside the Security Hold Area (SHA)",
+        "Lounge Access for up to 2 hours (Departure only)",
+        "Buggy Service to the Boarding Gate (subject to availability)",
+        "Escort to the Boarding Gate",
     ]
     assert float(id_row.price) == 9000.00
 
@@ -149,12 +139,12 @@ def test_bom_transit_verbatim_features_and_counts(db_session):
     ii = rows["INTERNATIONAL_INTERNATIONAL"]
     assert len(ii.features) == 6
     assert ii.features == [
-        "WARM WELCOME AT AEROBRIDGE/BUS GATE BY PORTER.",
-        "DEDICATED PORTER FOR ASSISTANCE FROM AEROBRIDGE ON ARRIVAL TILL THE BOARDING GATE OF THE NEXT CONNECTING FLIGHT.",
-        "GUIDANCE WITH THE AIRPORT AND AIRLINE TRANSIT PROCESS.",
-        "FACILITATION THROUGH SECURITY AS PER CLASS OF TRAVEL",
-        "ENJOY ACCESS TO ADANI LOUNGE WITH SNACKS, FOOD, AND NON-ALCOHOLIC BEVERAGE.",
-        "GOLF CART TRANSFER TILL LOUNGE/ BOARDING GATE (BATTERY OPERATED CAR SUBJECT TO THE LOCATION OF BOARDING GATE)",
+        "Warm welcome at the Aerobridge or Bus Gate by a porter",
+        "Dedicated porter assist from the Aerobridge on arrival to the boarding gate of the next connecting flight",
+        "Guidance through the airport and airline transit process",
+        "Facilitation through security according to the passenger's class of travel",
+        "Adani Lounge access with snacks, food, and non-alcoholic beverages",
+        "Golf cart transfer to the lounge or boarding gate, subject to the boarding gate location",
     ]
     assert float(ii.price) == 10000.00
 

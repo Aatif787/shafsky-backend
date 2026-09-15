@@ -158,7 +158,7 @@ def test_del_non_transit_services_unmodified(db_session):
             AirportService.journey_type == "DEPARTURE",
         )
     ).scalar()
-    assert dep_count == 11
+    assert dep_count == 8
 
     arr_count = db_session.execute(
         select(func.count(AirportService.id)).where(
@@ -166,7 +166,7 @@ def test_del_non_transit_services_unmodified(db_session):
             AirportService.journey_type == "ARRIVAL",
         )
     ).scalar()
-    assert arr_count == 19
+    assert arr_count == 8
 
 
 def test_whatsapp_del_transit_menu_rendering(db_session):

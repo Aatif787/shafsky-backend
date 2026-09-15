@@ -28,6 +28,18 @@ class BookingService:
         "platinum-service": "platinum",
         "bronze-service": "bronze",
         "diamond-service": "diamond",
+        # Legacy client/API ids used by web and booking payloads.
+        "meet-and-greet": "silver",
+        "meetandgreet": "silver",
+        "vip-meet": "silver",
+        "vipmeet": "silver",
+        "vip-lounge": "gold",
+        "viplounge": "gold",
+        "premium": "elite",
+        "essential": "silver",
+        "concierge": "silver",
+        "fast-track": "silver",
+        "fasttrack": "silver",
     }
 
     @classmethod

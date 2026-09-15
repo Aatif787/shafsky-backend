@@ -19,7 +19,7 @@ AIRPORTS = [
         "airport_name": "Indira Gandhi International Airport",
         "iata_code": "DEL",
         "icao_code": "VIDP",
-        "city": "Delhi",
+        "city": "New Delhi",
         "country": "India",
         "timezone": "Asia/Kolkata",
         "is_supported": True,
@@ -282,6 +282,38 @@ SERVICES = [
         "display_order": 6,
         "is_active": True,
     },
+    {
+        "name": "Porter Assist",
+        "slug": "porter",
+        "description": "Dedicated porter for baggage handling through the terminal.",
+        "icon": "Luggage",
+        "display_order": 7,
+        "is_active": True,
+    },
+    {
+        "name": "Buggy Transfer",
+        "slug": "buggy",
+        "description": "Golf-cart / buggy transfer through the terminal (subject to availability).",
+        "icon": "Car",
+        "display_order": 8,
+        "is_active": True,
+    },
+    {
+        "name": "Wheelchair Assist",
+        "slug": "wheelchair",
+        "description": "Wheelchair assistance coordinated through the airline or airport.",
+        "icon": "Accessibility",
+        "display_order": 9,
+        "is_active": True,
+    },
+    {
+        "name": "Ground Transport",
+        "slug": "transport",
+        "description": "Airport-to-city or hotel ground transportation coordination.",
+        "icon": "Bus",
+        "display_order": 10,
+        "is_active": True,
+    },
 ]
 
 JOURNEY_TYPES = ["ARRIVAL", "DEPARTURE", "TRANSIT"]
@@ -292,6 +324,13 @@ def seed_airports(db: Session) -> dict[str, SupportedAirport]:
     for data in AIRPORTS:
         existing = db.query(SupportedAirport).filter_by(iata_code=data["iata_code"]).first()
         if existing:
+            existing.airport_name = str(data["airport_name"])
+            existing.icao_code = data.get("icao_code")
+            existing.city = str(data["city"])
+            existing.country = str(data["country"])
+            existing.timezone = data.get("timezone")
+            existing.is_supported = bool(data.get("is_supported", True))
+            existing.is_active = bool(data.get("is_active", True))
             print(f"  [OK] Airport {data['iata_code']} exists.")
             airport_map[data["iata_code"]] = existing
         else:

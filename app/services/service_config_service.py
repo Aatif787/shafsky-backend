@@ -918,7 +918,18 @@ class ServiceConfigService:
         included_service_ids = set()
 
         if package_id:
-            pkg_match = next((p for p in db_packages if p["id"] == package_id), None)
+            from app.services.booking_service import BookingService
+            resolved_id = BookingService.normalize_package_slug(str(package_id))
+            pkg_match = next(
+                (
+                    p for p in db_packages
+                    if p["id"] == package_id
+                    or p["id"] == resolved_id
+                    or (p["id"] or "").replace("_", "-") == resolved_id
+                    or (p["id"] or "").replace("-", "_") == resolved_id.replace("-", "_")
+                ),
+                None,
+            )
             if not pkg_match:
                 errors.append(f"Package '{package_id}' is unavailable or invalid at {target_airport_code}.")
             else:
@@ -942,6 +953,12 @@ class ServiceConfigService:
 
             svc_match = next((s for s in db_services if s["id"] == sid), None)
             if not svc_match:
+                addon_slug = str(sid or "").strip().lower().replace("-", "_")
+                if addon_slug in _ADDON_SERVICE_SLUGS:
+                    # Catalog add-ons are not sold as standalone airport packages.
+                    # Treat an unmatched add-on id as already included (no extra charge).
+                    overlapping_ignored.append(sid)
+                    continue
                 errors.append(f"Service '{sid}' is unavailable at {target_airport_code}.")
             elif not svc_match.get("isAvailable", True):
                 errors.append(f"Service '{svc_match.get('title', sid)}' is currently sold out or restricted at {target_airport_code}.")

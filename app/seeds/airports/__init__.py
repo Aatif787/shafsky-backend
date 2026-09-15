@@ -23,6 +23,7 @@ from app.seeds.airports.blr import *
 from app.seeds.airports.ixc import *
 from app.seeds.airports.ixr import *
 from app.seeds.airports.gox import *
+from app.seeds.airports.trv import *
 
 AIRPORT_SEEDERS = {
     "AMD": seed_amd_production_packages,
@@ -44,4 +45,5 @@ AIRPORT_SEEDERS = {
     "IXC": seed_ixc_production_packages,
     "IXR": seed_ixr_production_packages,
     "GOX": seed_gox_production_packages,
+    "TRV": seed_trv_production_packages,
 }
