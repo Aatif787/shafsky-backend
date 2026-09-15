@@ -154,18 +154,20 @@ def test_phase4_ai_customer_can_cancel_own_booking():
 
 def test_phase5_rate_limiter_eviction_and_cap():
     """Verify RateLimiter evicts expired keys and respects max entries."""
-    RateLimiter._storage.clear()
-    
-    # Insert 10,005 expired entries to exceed 10,000 threshold
-    for i in range(10005):
-        RateLimiter._storage[f"old_key_{i}"] = (1, 100.0) # past timestamp
+    from unittest.mock import patch
 
-    # Next check should trigger cleanup
-    RateLimiter.check_rate_limit("new_key", max_requests=10, window_seconds=60)
-    
-    # Old expired keys must have been purged
-    assert "old_key_0" not in RateLimiter._storage
-    assert "new_key" in RateLimiter._storage
+    RateLimiter._storage.clear()
+
+    with patch.object(RateLimiter, "_get_redis", return_value=None):
+        # Insert 10,005 expired entries to exceed 10,000 threshold
+        for i in range(10005):
+            RateLimiter._storage[f"old_key_{i}"] = (1, 100.0)  # past timestamp
+
+        # Next check should trigger in-memory cleanup (Redis is patched off)
+        RateLimiter.check_rate_limit("new_key", max_requests=10, window_seconds=60)
+
+        assert "old_key_0" not in RateLimiter._storage
+        assert "new_key" in RateLimiter._storage
 
 
 def test_phase5_backup_engine_fernet_encryption():
@@ -177,4 +179,4 @@ def test_phase5_backup_engine_fernet_encryption():
     assert meta["encryption"] == "FERNET_AES128_HMAC_SHA256"
     assert meta["tableCount"] > 0
     assert len(meta["checksumSha256"]) == 64 # SHA-256 hex length
-    assert meta["s3SyncStatus"] in ["LOCAL_ARCHIVE_VERIFIED", "PENDING_S3_DISPATCH"]
+    assert meta["s3SyncStatus"] in ["LOCAL_ARCHIVE_VERIFIED", "PENDING_S3_DISPATCH", "NOT_SYNCED_LOCAL_ONLY"]

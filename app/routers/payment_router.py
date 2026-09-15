@@ -62,6 +62,13 @@ async def create_order_endpoint(
     from app.models.payment import PaymentTransaction, PaymentStatus, PaymentMethod
 
     booking_ref = (payload.receipt or (payload.notes.get("booking_ref") if payload.notes else None) or "").strip()
+
+    if payload.amount is not None and int(round(float(payload.amount))) < 100:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Amount must be at least 100 paise (INR 1.00)."
+        )
+
     if not booking_ref:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

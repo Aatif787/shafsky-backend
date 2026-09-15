@@ -167,6 +167,9 @@ def test_1_rapid_payment_authorized_and_captured_single_fulfillment(db_session):
 def test_2_concurrent_fulfill_paid_invoice_calls(db_session):
     """2. two concurrent fulfill_paid_invoice() calls for same invoice -> one actually performs work"""
     booking, tx = _create_test_booking_and_tx(db_session)
+    tx.status = PaymentStatus.SUCCESSFUL
+    db_session.commit()
+    db_session.refresh(tx)
     invoice = Invoice(
         id=uuid.uuid4(),
         invoice_number=f"INV-TEST-{uuid.uuid4().hex[:6].upper()}",
