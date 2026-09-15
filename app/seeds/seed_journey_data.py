@@ -347,11 +347,6 @@ def run_seed():
 
     db = SessionLocal()
     try:
-        from sqlalchemy import text
-        db.execute(text("ALTER TABLE airport_services ADD COLUMN IF NOT EXISTS terminal VARCHAR(50);"))
-        db.execute(text("ALTER TABLE airport_services DROP CONSTRAINT IF EXISTS uq_airport_service_journey_flight;"))
-        db.commit()
-
         airport_map = seed_airports(db)
         service_map = seed_services(db)
 
