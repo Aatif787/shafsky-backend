@@ -97,12 +97,16 @@ def test_whatsapp_future_date_booking_flow_allows_confirmation(mock_text, mock_l
         }
         db.commit()
 
-        # Step 1: Customer enters travel date 31/08/2026
-        res_date = WhatsAppBookingStateMachine.process_incoming_event(db, phone, "31/08/2026")
+        travel = datetime.now(timezone.utc).date() + timedelta(days=21)
+        typed = travel.strftime("%d/%m/%Y")
+        iso_day = travel.isoformat()
+
+        # Step 1: Customer enters a travel date that is still in the future
+        res_date = WhatsAppBookingStateMachine.process_incoming_event(db, phone, typed)
         assert res_date["status"] == "passenger_count_prompt_sent"
         db.refresh(conv)
-        assert conv.booking_date == "31 August 2026"
-        assert "2026-08-31" in conv.flight_details_json.get("departure_scheduled", "")
+        assert travel.strftime("%B") in (conv.booking_date or "")
+        assert iso_day in conv.flight_details_json.get("departure_scheduled", "")
 
         # Step 2: Transition to review and confirm
         conv.current_state = "BOOKING_REVIEW"
@@ -124,7 +128,7 @@ def test_whatsapp_future_date_booking_flow_allows_confirmation(mock_text, mock_l
         from app.models.schema import Booking
         booking_row = db.query(Booking).filter(Booking.booking_ref == conv.booking_ref).first()
         assert booking_row is not None
-        assert booking_row.departure_time.date() == date(2026, 8, 31)
+        assert booking_row.departure_time.date() == travel
         assert booking_row.passenger_name == "Farooqui"
         assert booking_row.total_amount == 6000.0
     finally:

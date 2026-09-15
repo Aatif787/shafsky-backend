@@ -28,6 +28,20 @@ from app.integrations.whatsapp.handlers.base import BaseFlowMixin
 
 logger = logging.getLogger(__name__)
 
+# Common English spellings that must resolve to the seeded IATA city names.
+_AIRPORT_QUERY_ALIASES = {
+    "BANGALORE": "BLR",
+    "BENGALURU": "BLR",
+    "BOMBAY": "BOM",
+    "CALCUTTA": "CCU",
+    "MADRAS": "MAA",
+    "TRIVANDRUM": "TRV",
+    "COCHIN": "COK",
+    "NEW DELHI": "DEL",
+    "DELHI": "DEL",
+}
+
+
 OFFICIAL_CATEGORIES = [
     {"id": "cat_airport", "name": "Airport Services", "db_categories": ["Airport Assistance", "Airport Services"]},
     {"id": "cat_travel", "name": "Travel Services", "db_categories": ["Travel Support", "Travel Services"]},
@@ -367,17 +381,28 @@ class AirportFlowMixin(BaseFlowMixin):
             whatsapp_client.send_text_message(conv.phone_number, "✨ *Shafsky Aviation Services*\n\nPlease enter an Airport Name, City, or IATA Code (e.g. Delhi, DEL, Lucknow).")
             return {"status": "empty_airport_query", "success": False}
 
+        airport = None
         try:
-            search_stmt = select(SupportedAirport).where(
-                SupportedAirport.is_active == True,
-                SupportedAirport.is_supported == True,
-                or_(
-                    SupportedAirport.iata_code.ilike(query_clean),
-                    SupportedAirport.city.ilike(f"%{query_clean}%"),
-                    SupportedAirport.airport_name.ilike(f"%{query_clean}%")
+            alias_iata = _AIRPORT_QUERY_ALIASES.get(query_clean.upper())
+            if alias_iata:
+                airport = db.execute(
+                    select(SupportedAirport).where(
+                        SupportedAirport.is_active == True,
+                        SupportedAirport.is_supported == True,
+                        SupportedAirport.iata_code == alias_iata,
+                    )
+                ).scalars().first()
+            if not airport:
+                search_stmt = select(SupportedAirport).where(
+                    SupportedAirport.is_active == True,
+                    SupportedAirport.is_supported == True,
+                    or_(
+                        SupportedAirport.iata_code.ilike(query_clean),
+                        SupportedAirport.city.ilike(f"%{query_clean}%"),
+                        SupportedAirport.airport_name.ilike(f"%{query_clean}%")
+                    )
                 )
-            )
-            airport = db.execute(search_stmt).scalars().first()
+                airport = db.execute(search_stmt).scalars().first()
         except Exception as err:
             logger.error(f"[WhatsApp Airport Resolution] DB query error: {err}")
             airport = None
@@ -672,8 +697,15 @@ class AirportFlowMixin(BaseFlowMixin):
             if is_pkg:
                 package_rows.append((aps, svc))
 
-        if not package_rows and journey_type == "TRANSIT":
-            return [(r[0], r[1]) for r in all_rows]
+        if not package_rows:
+            # ATQ (and transit at BOM/DEL/HYD) sell meet_greet as the catalog product.
+            # Never leak porter/buggy/wheelchair/transport/fast_track/lounge as packages.
+            allowed_standalone = {"meet_greet"}
+            return [
+                (aps, svc)
+                for aps, svc in all_rows
+                if (svc.slug or "").lower().strip() in allowed_standalone
+            ]
 
         return package_rows
 

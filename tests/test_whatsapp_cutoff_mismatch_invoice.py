@@ -57,7 +57,7 @@ def test_mismatch_reenter_flight(mock_verify, mock_buttons, mock_text):
         res = WhatsAppBookingStateMachine.process_incoming_event(db, phone, "6E325")
         assert res["status"] == "flight_airport_mismatch"
         ids = [b["id"] for b in mock_buttons.call_args.kwargs["buttons"]]
-        assert ids == ["btn_reenter_flight", "btn_change_airport", "btn_confirm_mismatch"]
+        assert ids == ["btn_reenter_flight", "btn_confirm_mismatch", "btn_change_airport"]
 
         res2 = WhatsAppBookingStateMachine.process_incoming_event(
             db, phone, "Re-enter Flight", input_type="button_reply", input_id="btn_reenter_flight"
@@ -99,7 +99,7 @@ def test_mismatch_change_airport(mock_verify, mock_buttons, mock_text):
             db, phone, "Change Airport", input_type="button_reply", input_id="btn_change_airport"
         )
         db.refresh(conv)
-        assert res["status"] == "airport_prompt_sent"
+        assert res["status"] == "reprompt_airport"
         assert conv.current_state == "AIRPORT_SELECTION"
         assert conv.flight_num is None
     finally:

@@ -1056,7 +1056,13 @@ class AviationEdgeProvider(FlightProvider):
         # ── 1. Check Unified Cross-Provider Cache First (RAM -> Redis -> PostgreSQL DB) ─
         try:
             from app.flight.unified_cache import get_unified_flight, to_flight_status_data
-            unified_hit = get_unified_flight(flight_clean, date_clean)
+            unified_hit = get_unified_flight(
+                flight_clean,
+                date_clean,
+                direction=direction_clean,
+                origin=origin_iata,
+                dest=dest_iata,
+            )
             if unified_hit:
                 cached_status = to_flight_status_data(unified_hit, flight_clean)
                 if cached_status:
@@ -1216,6 +1222,9 @@ class AviationEdgeProvider(FlightProvider):
                 flight_status.model_dump(mode="json"),
                 provider="aviation_edge",
                 flight_date=date_clean,
+                direction=direction_clean,
+                origin=origin_iata,
+                dest=dest_iata,
             )
         except Exception:
             pass

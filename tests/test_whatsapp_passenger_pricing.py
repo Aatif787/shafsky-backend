@@ -1,10 +1,19 @@
 import pytest
 import uuid
+from datetime import datetime, timezone, timedelta
 from unittest.mock import patch, MagicMock
 from app.database import SessionLocal, Base, engine
 from app.models.whatsapp_models import WhatsAppConversation
 from app.models.schema import Booking
 from app.integrations.whatsapp.service import WhatsAppBookingStateMachine
+
+
+def _future_departure_iso():
+    return (datetime.now(timezone.utc) + timedelta(days=10)).isoformat()
+
+
+def _future_booking_date():
+    return (datetime.now(timezone.utc) + timedelta(days=10)).strftime("%d %B %Y")
 
 
 @pytest.fixture(autouse=True)
@@ -58,11 +67,11 @@ def test_whatsapp_multiple_passengers_scales_price(mock_notify, mock_text, mock_
         conv.selected_service_name = "Silver Meet & Greet"
         conv.total_amount = 3000.0
         conv.passenger_count = 1
-        conv.flight_details_json = {"unit_price": 3000.0, "base_price": 3000.0, "journey_type": "DEPARTURE", "travel_type": "DOMESTIC", "origin_iata": "DEL", "destination_iata": "BOM", "departure_scheduled": "2026-08-31T18:00:00+00:00", "verification_status": "verified", "verification_provider": "AVIATIONSTACK"}
+        conv.flight_details_json = {"unit_price": 3000.0, "base_price": 3000.0, "journey_type": "DEPARTURE", "travel_type": "DOMESTIC", "origin_iata": "DEL", "destination_iata": "BOM", "terminal": "T3", "departure_scheduled": _future_departure_iso(), "verification_status": "verified", "verification_provider": "AVIATIONSTACK"}
         conv.selected_airport_iata = "DEL"
         conv.selected_airport_name = "Indira Gandhi International Airport"
         conv.flight_num = "AI101"
-        conv.booking_date = "31 August 2026"
+        conv.booking_date = _future_booking_date()
         conv.current_state = "PASSENGER_COUNT"
         db.commit()
 
@@ -89,6 +98,10 @@ def test_whatsapp_multiple_passengers_scales_price(mock_notify, mock_text, mock_
         WhatsAppBookingStateMachine.process_incoming_event(db, phone, "Same")
         db.refresh(conv)
         assert conv.customer_phone == phone
+        assert conv.current_state == "COMPANION_NAMES"
+
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "Rahul Sharma, Priya Singh")
+        db.refresh(conv)
         assert conv.current_state == "ADDITIONAL_REQUIREMENTS"
 
         # 6. Enter Notes -> Triggers Booking Summary
@@ -137,11 +150,11 @@ def test_whatsapp_single_passenger_keeps_base_price(mock_notify, mock_text, mock
         conv.selected_service_name = "Silver Meet & Greet"
         conv.total_amount = 3000.0
         conv.passenger_count = 1
-        conv.flight_details_json = {"unit_price": 3000.0, "base_price": 3000.0, "journey_type": "DEPARTURE", "travel_type": "DOMESTIC", "origin_iata": "DEL", "destination_iata": "BOM", "departure_scheduled": "2026-08-31T18:00:00+00:00", "verification_status": "verified", "verification_provider": "AVIATIONSTACK"}
+        conv.flight_details_json = {"unit_price": 3000.0, "base_price": 3000.0, "journey_type": "DEPARTURE", "travel_type": "DOMESTIC", "origin_iata": "DEL", "destination_iata": "BOM", "terminal": "T3", "departure_scheduled": _future_departure_iso(), "verification_status": "verified", "verification_provider": "AVIATIONSTACK"}
         conv.selected_airport_iata = "DEL"
         conv.selected_airport_name = "Indira Gandhi International Airport"
         conv.flight_num = "AI101"
-        conv.booking_date = "31 August 2026"
+        conv.booking_date = _future_booking_date()
         conv.current_state = "PASSENGER_COUNT"
         db.commit()
 

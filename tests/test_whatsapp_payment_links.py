@@ -547,10 +547,11 @@ def test_invalid_webhook_signature_rejected():
 
 
 def test_payment_link_expired_webhook_keeps_booking_pending(monkeypatch):
+    plink_id = f"plink_exwh_{uuid.uuid4().hex[:10]}"
     monkeypatch.setattr(
         razorpay_provider,
         "create_payment_link",
-        lambda *a, **kw: _fake_link(kw.get("booking_ref"), "plink_exwh_1", "https://rzp.io/i/exwh1"),
+        lambda *a, **kw: _fake_link(kw.get("booking_ref"), plink_id, f"https://rzp.io/i/{plink_id}"),
     )
     monkeypatch.setattr(razorpay_provider, "list_payment_links_by_reference", lambda reference_id: {"success": True, "items": []})
 
@@ -566,7 +567,7 @@ def test_payment_link_expired_webhook_keeps_booking_pending(monkeypatch):
             "payload": {
                 "payment_link": {
                     "entity": {
-                        "id": "plink_exwh_1",
+                        "id": plink_id,
                         "status": "expired",
                         "reference_id": conv.booking_ref,
                         "notes": {"booking_ref": conv.booking_ref, "channel": "whatsapp"},

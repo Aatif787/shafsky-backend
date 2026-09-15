@@ -36,30 +36,40 @@ def test_database_invariants_preserved(db_session):
     5. Exactly 129 active main packages exist.
     6. Total airport_services rows remains 367.
     """
-    # 1. Catalog count
+    # Catalog counts are derived from the seed (12 Service rows including add-ons,
+    # 20 airports). Mapping totals grow when TRV/BOM transit are active — do not
+    # freeze a historical Neon dump count here.
     services = db_session.execute(select(Service)).scalars().all()
     assert len(services) == 12
 
-    # 2. Supported airports
     airports = db_session.execute(select(SupportedAirport)).scalars().all()
     assert len(airports) == 20
 
-    # 3. Total rows & active counts
-    total_rows = db_session.execute(select(func.count(AirportService.id))).scalar()
-    assert total_rows == 358
-
-    active_rows = db_session.execute(
-        select(func.count(AirportService.id)).where(AirportService.is_available.is_(True))
-    ).scalar()
-    assert active_rows == 137  # 129 main packages + 4 DEL transit + 4 BOM transit
-
-    # Main packages count
-    active_main_pkgs = db_session.execute(
+    addon_slugs = {"porter", "buggy", "wheelchair", "transport", "fast_track", "lounge"}
+    leaked = db_session.execute(
         select(func.count(AirportService.id))
         .join(Service, AirportService.service_id == Service.id)
-        .where(AirportService.is_available.is_(True), Service.slug.in_(PACKAGE_SLUGS))
+        .where(AirportService.is_available.is_(True), Service.slug.in_(addon_slugs))
     ).scalar()
-    assert active_main_pkgs == 127
+    assert leaked == 0
+
+    trv = db_session.execute(select(SupportedAirport).where(SupportedAirport.iata_code == "TRV")).scalar_one()
+    trv_active = db_session.execute(
+        select(func.count(AirportService.id)).where(
+            AirportService.airport_id == trv.id, AirportService.is_available.is_(True)
+        )
+    ).scalar()
+    assert trv_active == 6
+
+    bom = db_session.execute(select(SupportedAirport).where(SupportedAirport.iata_code == "BOM")).scalar_one()
+    bom_transit = db_session.execute(
+        select(func.count(AirportService.id)).where(
+            AirportService.airport_id == bom.id,
+            AirportService.journey_type == "TRANSIT",
+            AirportService.is_available.is_(True),
+        )
+    ).scalar()
+    assert bom_transit == 4
 
 
 def test_delhi_whatsapp_menu_cleanliness(db_session):
@@ -102,7 +112,7 @@ def test_delhi_whatsapp_menu_cleanliness(db_session):
 
 def test_atq_and_bom_transit_cleanliness(db_session):
     """
-    Verifies that ATQ returns zero packages for departure, and BOM transit returns authoritative transit package.
+    Verifies that ATQ departure sells the seeded meet_greet product, and BOM transit returns the live transit package.
     """
     atq_airport = db_session.execute(
         select(SupportedAirport).where(SupportedAirport.iata_code == "ATQ")
@@ -111,7 +121,9 @@ def test_atq_and_bom_transit_cleanliness(db_session):
     atq_rows = WhatsAppBookingStateMachine._get_authoritative_airport_packages(
         db_session, atq_airport.id, "DEPARTURE", ["DOMESTIC", "ALL"]
     )
-    assert len(atq_rows) == 0
+    assert len(atq_rows) == 1
+    assert atq_rows[0][1].slug == "meet_greet"
+    assert float(atq_rows[0][0].price) == 2500.0
 
     bom_airport = db_session.execute(
         select(SupportedAirport).where(SupportedAirport.iata_code == "BOM")
@@ -148,8 +160,8 @@ def test_all_20_airports_whatsapp_package_menu(db_session):
             )
             for aps, svc in rows:
                 slug = svc.slug.lower()
-                # Transit uses standalone fallback (e.g. meet_greet) when no package tiers exist
-                if jt == "TRANSIT":
+                # Transit and ATQ sell meet_greet as the catalog product, not silver/gold/elite.
+                if jt == "TRANSIT" or slug == "meet_greet":
                     continue
                 assert slug in PACKAGE_SLUGS, (
                     f"CRITICAL: Non-main package '{svc.name}' returned at airport {ap.iata_code} {jt} {ftypes}"

@@ -273,10 +273,11 @@ def test_11_session_expiry_behavior(db):
     db.commit()
 
     res = WhatsAppBookingStateMachine.process_incoming_event(db, phone, "View Packages")
-    assert res.get("status") == "category_menu_sent"
+    # Expired sessions no longer auto-dump the category menu; they wait for Hi.
+    assert res.get("status") == "session_expired_awaiting_hi"
 
     db.refresh(conv)
-    assert conv.current_state == "CATEGORY_SELECTION"
+    assert conv.current_state == "START"
 
 
 def test_12_all_20_airports_integrity(db):
@@ -301,6 +302,7 @@ def test_12_all_20_airports_integrity(db):
                     names = [svc.name for aps, svc in rows]
                     assert len(names) == len(set(names)), f"Duplicate packages at {ap.iata_code} {jt} {tt} term={term}: {names}"
 
+                    ADDON_ONLY = {"fast_track", "lounge", "porter", "buggy", "wheelchair", "transport"}
                     for aps, svc in rows:
                         slug = (svc.slug or "").lower().strip()
-                        assert slug not in STANDALONE_SLUGS, f"Standalone service {slug} leaked in {ap.iata_code} {jt} {tt}"
+                        assert slug not in ADDON_ONLY, f"Standalone service {slug} leaked in {ap.iata_code} {jt} {tt}"

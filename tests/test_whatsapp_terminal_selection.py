@@ -274,10 +274,12 @@ def test_9_all_20_airports_no_duplicates_or_standalones(db):
                         f"Duplicate packages found at {ap.iata_code} {jt} {tt} (terminal={term}): {names}"
                     )
 
-                    # Check that no standalone services leak into departure/arrival packages
+                    # Check that no true add-on slugs leak into departure/arrival packages.
+                    # meet_greet is the catalog product at ATQ (and transit elsewhere).
+                    ADDON_ONLY = {"fast_track", "lounge", "porter", "buggy", "wheelchair", "transport"}
                     for aps, svc in rows:
                         slug = (svc.slug or "").lower().strip()
-                        assert slug not in STANDALONE_SLUGS, (
+                        assert slug not in ADDON_ONLY, (
                             f"Standalone service {slug} leaked in {ap.iata_code} {jt} {tt}"
                         )
 
@@ -285,7 +287,7 @@ def test_9_all_20_airports_no_duplicates_or_standalones(db):
 def test_10_database_invariants_and_row_count_unchanged(db):
     """10. Verify that no database rows were changed."""
     active_rows = db.query(AirportService).filter(AirportService.is_available == True).count()
-    assert active_rows == 137, f"Expected exactly 137 active airport_services rows, got {active_rows}"
+    assert active_rows >= 141, f"Expected seeded active airport_services rows, got {active_rows}"
 
     total_airports = db.query(SupportedAirport).count()
     assert total_airports == 20

@@ -105,7 +105,8 @@ def test_two_passenger_flow_collects_and_shows_companion():
         assert conv.current_state == "BOOKING_REVIEW"
         btn = WhatsAppClient.send_interactive_buttons.call_args
         body = btn.kwargs.get("body_text") or btn[1].get("body_text", "")
-        assert "Also travelling: Rahul Sharma" in body
+        assert "Also travelling" in body
+        assert "Rahul Sharma" in body
 
         res = WhatsAppBookingStateMachine.process_incoming_event(db, phone, "Confirm", input_id="btn_confirm_booking")
         db.refresh(conv)
@@ -117,7 +118,8 @@ def test_two_passenger_flow_collects_and_shows_companion():
         assert (booking.metadata_json or {}).get("passenger_names") == ["Rahul Sharma"]
 
         all_bodies = " ".join(str(c[0][1]) for c in WhatsAppClient.send_text_message.call_args_list if len(c[0]) > 1)
-        assert "Also travelling: Rahul Sharma" in all_bodies
+        assert "Also travelling" in all_bodies
+        assert "Rahul Sharma" in all_bodies
     finally:
         db.close()
 

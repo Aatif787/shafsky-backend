@@ -12,7 +12,11 @@ from app.whatsapp.client import whatsapp_client
 client = TestClient(app)
 
 
-def test_whatsapp_webhook_verification_success():
+def test_whatsapp_webhook_verification_success(monkeypatch):
+    from app.integrations.whatsapp.client import whatsapp_client
+    monkeypatch.setenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "shafsky_wa_verify_token")
+    monkeypatch.setenv("WHATSAPP_VERIFY_TOKEN", "shafsky_wa_verify_token")
+    whatsapp_client.reload_config()
     res = client.get(
         "/api/whatsapp/webhook",
         params={

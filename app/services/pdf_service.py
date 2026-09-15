@@ -239,7 +239,7 @@ def generate_tax_invoice_pdf(data: Dict[str, Any]) -> bytes:
     c.setFillColor(Color(0.85, 0.95, 0.95))
     c.drawString(title_x, page_h - 60, "Private Aviation · Meet & Greet · Ground Services")
     c.setFont("Helvetica", 8)
-    c.drawString(title_x, page_h - 73, "ops@shafskyaviation.com · +91 9599087959")
+    c.drawString(title_x, page_h - 73, "www.shafskyaviation.com · +91 9599087959")
     c.setFillColor(white)
     c.setFont("Helvetica-Bold", 16)
     c.drawRightString(page_w - 40, page_h - 44, "TAX INVOICE")

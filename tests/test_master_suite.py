@@ -45,7 +45,11 @@ def test_01_authentication_and_hashed_tokens():
     assert res.status_code == 200, res.text
     body = res.json()["data"]
     access_token = body["accessToken"]
-    raw_refresh = body["refreshToken"]
+    raw_refresh = (
+        body.get("refreshToken")
+        or res.cookies.get("refreshToken")
+        or res.cookies.get("refresh_token")
+    )
     assert access_token is not None
     assert raw_refresh is not None
 
@@ -69,10 +73,19 @@ def test_02_health_and_observability():
     assert "timestamp" in data
     assert res_api_health.headers.get("access-control-allow-origin") == "http://localhost:5173"
 
-    # Health Check
+    # Deep /health is admin-gated; public probes are /api/health, /ready, /live.
     res_health = client.get("/health")
-    assert res_health.status_code == 200
-    assert res_health.json()["status"] in ["UP", "DEGRADED"]
+    assert res_health.status_code == 401
+
+    _ensure_admin_user()
+    login_res = client.post(
+        "/api/auth/login",
+        json={"email": "admin@shafskyaviation.com", "password": "ShafskyAdmin2026!"},
+    )
+    admin_token = login_res.json()["data"]["accessToken"]
+    res_health_admin = client.get("/health", headers={"Authorization": f"Bearer {admin_token}"})
+    assert res_health_admin.status_code == 200
+    assert res_health_admin.json()["status"] in ["UP", "DEGRADED"]
 
     # Readiness Check
     res_ready = client.get("/ready")
