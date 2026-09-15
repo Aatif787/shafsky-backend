@@ -12,14 +12,11 @@ def test_rate_limiter_redis_integration():
     """Starts against a local Redis instance (docker-compose.redis.yml) and
     verifies that the Redis-backed rate limiter enforces limits.
     """
-    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+    redis_url = os.getenv("REDIS_URL") or (
+        f"redis://{os.getenv('REDIS_HOST', 'localhost')}:{os.getenv('REDIS_PORT', '6379')}/0"
+    )
     r = redis.Redis.from_url(redis_url, decode_responses=True)
-
-    # Ensure Redis is reachable
-    try:
-        r.ping()
-    except Exception as exc:
-        pytest.skip(f"Redis not available at {redis_url}: {exc}")
+    r.ping()
 
     # Point the RateLimiter at the local Redis client
     RateLimiter._redis = r

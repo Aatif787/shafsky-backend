@@ -92,7 +92,10 @@ def test_05_hs256_legacy_token_rejected_when_fallback_disabled():
         "iat": now,
         "type": "access"
     }
-    legacy_secret = getattr(settings, "JWT_SECRET", "shafsky-dev-secret-key-change-in-prod")
+    # CI disables HS256 fallback and leaves JWT_SECRET empty on purpose.
+    # Mint the synthetic legacy token with a non-empty HMAC key; decode must
+    # still reject it when ALLOW_HS256_LEGACY_FALLBACK is false.
+    legacy_secret = getattr(settings, "JWT_SECRET", None) or "legacy-hs256-test-secret"
     legacy_token = jwt.encode(legacy_payload, legacy_secret, algorithm="HS256")
 
     # Inspect header
