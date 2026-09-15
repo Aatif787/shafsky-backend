@@ -11,6 +11,8 @@ from __future__ import annotations
 import os
 import sys
 
+import pytest
+
 from dotenv import load_dotenv
 
 PROD_HOST_MARKERS = (
@@ -57,3 +59,30 @@ def configure_test_database() -> None:
 
 
 configure_test_database()
+
+
+@pytest.fixture(autouse=True)
+def isolate_process_and_redis_state():
+    """Keep order-dependent request counters out of unrelated tests.
+
+    CI deliberately runs a real Redis service.  Without this boundary, rate
+    limits and idempotency entries from an earlier test are inherited by later
+    HTTP tests that share the TestClient IP address.
+    """
+    from app.security.rate_limit import RateLimiter
+    from app.services.idempotency_service import InMemoryLockStore, InMemoryResponseStore
+    from app.core.redis import get_redis_client
+
+    RateLimiter.clear()
+    InMemoryLockStore.clear()
+    InMemoryResponseStore.clear()
+    client = get_redis_client()
+    if client is not None:
+        client.flushdb()
+    yield
+    RateLimiter.clear()
+    InMemoryLockStore.clear()
+    InMemoryResponseStore.clear()
+    if client is not None:
+        client.flushdb()
+
