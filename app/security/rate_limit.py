@@ -62,6 +62,14 @@ class RateLimiter:
     def check_rate_limit(cls, key: str, max_requests: int = 100, window_seconds: int = 60):
         now = time.time()
 
+        # Purge expired fallback entries even when Redis is healthy.  A process
+        # can recover from a Redis outage and otherwise retain stale in-memory
+        # counters indefinitely because the Redis return path bypasses cleanup.
+        with cls._lock:
+            expired_keys = [name for name, (_, expiry) in cls._storage.items() if now > expiry]
+            for name in expired_keys:
+                cls._storage.pop(name, None)
+
         # Use the centralized reconnecting Redis client when available.
         redis_client = cls._get_redis()
         if redis_client:
@@ -150,3 +158,4 @@ class RateLimiter:
                     detail=f"Rate limit exceeded. Try again in {retry_after} seconds.",
                     headers={"Retry-After": str(retry_after)}
                 )
+
