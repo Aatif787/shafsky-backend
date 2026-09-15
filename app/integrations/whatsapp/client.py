@@ -60,6 +60,10 @@ class WhatsAppClient:
             or os.getenv("APP_SECRET")
             or ""
         ).strip().strip("'\"")
+        # Backwards-compatible aliases used by older webhook integrations.
+        # Keep one canonical secret while avoiding divergent verification paths.
+        self.meta_app_secret = self.app_secret
+        self.general_app_secret = self.app_secret
         self.api_version = (
             os.getenv("WHATSAPP_API_VERSION")
             or os.getenv("META_GRAPH_API_VERSION")
@@ -102,7 +106,8 @@ class WhatsAppClient:
         """
         Verifies Meta Webhook challenge token during webhook setup using constant-time comparison.
         """
-        self._load_config()
+        # Webhook credentials can be rotated without restarting the API.
+        self._load_config(force=True)
         if mode == "subscribe" and token and self.verify_token:
             if hmac.compare_digest(token, self.verify_token):
                 logger.info("[WhatsApp] Meta webhook challenge verified successfully.")
@@ -115,7 +120,7 @@ class WhatsAppClient:
         """
         Verifies Meta X-Hub-Signature-256 using WHATSAPP_APP_SECRET.
         """
-        self._load_config()
+        self._load_config(force=True)
         app_secret = self.app_secret
 
         if not app_secret:
@@ -557,3 +562,4 @@ def send_whatsapp_message(
         template_name=template_name,
         template_components=template_components
     )
+
