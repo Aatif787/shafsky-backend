@@ -99,4 +99,9 @@ def isolate_process_and_redis_state():
     ae_mod._IN_MEMORY_CACHE.clear()
     if client is not None:
         client.flushdb()
+    try:
+        from sqlalchemy.orm import close_all_sessions
+        close_all_sessions()
+    except Exception:
+        pass
 
