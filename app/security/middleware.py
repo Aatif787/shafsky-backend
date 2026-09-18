@@ -35,7 +35,13 @@ def get_rate_limit_policy(method: str, path: str) -> Optional[Dict[str, Any]]:
     p = normalize_request_path(path)
 
     # 1. Webhook endpoints (high ceiling for legitimate external event callbacks)
-    if p.startswith("/api/payments/webhook") or p.startswith("/api/whatsapp/webhook"):
+    if (
+        p.startswith("/api/payments/razorpay/webhook")
+        or p.startswith("/api/payments/webhook")
+        or p.startswith("/api/whatsapp/webhook")
+        or p.startswith("/api/integrations/whatsapp/webhook")
+        or p.startswith("/api/notifications/webhooks")
+    ):
         return {"category": "webhook", "key_prefix": "rate_limit_webhook", "max_requests": 1000, "window_seconds": 60}
 
     # 2. Payment Order Creation (strict transactional limits)
