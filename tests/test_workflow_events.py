@@ -151,7 +151,19 @@ def test_03_database_persistence_and_sequence():
 def test_04_duplicate_event_prevention():
     """Verify duplicate event prevention deduplication logic."""
     db = next(get_test_db())
-    inst_id = uuid.uuid4()
+    service_type = f"EVT_SVC_{uuid.uuid4().hex[:6]}"
+    wf_def = WorkflowDefinition(
+        service_type=service_type,
+        name="Dup Test",
+        version=1,
+        initial_state="START",
+        states_config={"START": {"terminal": True}},
+        is_active=True,
+    )
+    db.add(wf_def)
+    db.commit()
+    instance = WorkflowEngine.create_instance(db, service_type, "ENT-DUP-1")
+    inst_id = instance.id
     corr_id = f"corr_dup_{uuid.uuid4().hex[:6]}"
 
     evt1 = WorkflowEventService.publish_workflow_event(
@@ -256,14 +268,25 @@ def test_06_replay_events_ordering():
 def test_07_event_version_compatibility():
     """Verify event versioning field default and metadata compatibility."""
     db = next(get_test_db())
-    inst_id = uuid.uuid4()
+    service_type = f"VER_SVC_{uuid.uuid4().hex[:6]}"
+    wf_def = WorkflowDefinition(
+        service_type=service_type,
+        name="Version Test",
+        version=2,
+        initial_state="INITIAL",
+        states_config={"INITIAL": {"terminal": True}},
+        is_active=True,
+    )
+    db.add(wf_def)
+    db.commit()
+    instance = WorkflowEngine.create_instance(db, service_type, "ENT-VER-01")
 
     evt = WorkflowEventService.publish_workflow_event(
         db,
         event_type="WORKFLOW_CREATED",
-        workflow_instance_id=inst_id,
+        workflow_instance_id=instance.id,
         workflow_definition_version=2,
-        service_type="VER_SVC",
+        service_type=service_type,
         entity_id="ENT-VER-01",
         current_state="INITIAL"
     )

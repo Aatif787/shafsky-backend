@@ -18,7 +18,7 @@ import sys
 import os
 import uuid
 import pytest
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, close_all_sessions
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -26,6 +26,12 @@ from app.database import SessionLocal, engine, Base
 from app.models.schema import WorkflowDefinition, WorkflowInstance, WorkflowHistory, WorkflowAuditLog, SystemEvent
 from app.workflow.definitions import seed_default_workflows, DEFAULT_WORKFLOW_DEFINITIONS
 from app.workflow.engine import WorkflowEngine
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_workflow_sessions():
+    yield
+    close_all_sessions()
 
 
 def get_test_db():

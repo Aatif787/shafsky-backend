@@ -14,6 +14,20 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
+class _OfflineWhatsAppTransport(httpx.BaseTransport):
+    """Test/dev transport so Graph API is never reached with fake credentials."""
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "messaging_product": "whatsapp",
+                "contacts": [{"input": "test", "wa_id": "test"}],
+                "messages": [{"id": f"wamid.sim_{int(time.time() * 1000)}"}],
+            },
+        )
+
+
 class WhatsAppClient:
     """Official Meta WhatsApp Cloud API HTTP Client with High-Performance Connection Pooling."""
 
@@ -26,11 +40,18 @@ class WhatsAppClient:
 
     def _get_http_client(self) -> httpx.Client:
         """Maintains a persistent, warm HTTP keep-alive connection pool to Meta Graph API."""
+        from app.core.runtime import offline_third_party_calls
+
         if self._http_client is None or self._http_client.is_closed:
-            self._http_client = httpx.Client(
-                timeout=httpx.Timeout(connect=3.0, read=8.0, write=5.0, pool=5.0),
-                limits=httpx.Limits(max_keepalive_connections=20, max_connections=50, keepalive_expiry=120.0)
-            )
+            client_kwargs: Dict[str, Any] = {
+                "timeout": httpx.Timeout(connect=3.0, read=8.0, write=5.0, pool=5.0),
+                "limits": httpx.Limits(max_keepalive_connections=20, max_connections=50, keepalive_expiry=120.0),
+            }
+            if offline_third_party_calls():
+                # Never call live Meta from pytest/CI. Tests may still patch
+                # httpx.Client.post to assert error handling.
+                client_kwargs["transport"] = _OfflineWhatsAppTransport()
+            self._http_client = httpx.Client(**client_kwargs)
         return self._http_client
 
     def _load_config(self, force: bool = False):
@@ -60,6 +81,10 @@ class WhatsAppClient:
             or os.getenv("APP_SECRET")
             or ""
         ).strip().strip("'\"")
+        # Backwards-compatible aliases used by older webhook integrations.
+        # Keep one canonical secret while avoiding divergent verification paths.
+        self.meta_app_secret = self.app_secret
+        self.general_app_secret = self.app_secret
         self.api_version = (
             os.getenv("WHATSAPP_API_VERSION")
             or os.getenv("META_GRAPH_API_VERSION")
@@ -102,7 +127,8 @@ class WhatsAppClient:
         """
         Verifies Meta Webhook challenge token during webhook setup using constant-time comparison.
         """
-        self._load_config()
+        # Webhook credentials can be rotated without restarting the API.
+        self._load_config(force=True)
         if mode == "subscribe" and token and self.verify_token:
             if hmac.compare_digest(token, self.verify_token):
                 logger.info("[WhatsApp] Meta webhook challenge verified successfully.")
@@ -115,7 +141,7 @@ class WhatsAppClient:
         """
         Verifies Meta X-Hub-Signature-256 using WHATSAPP_APP_SECRET.
         """
-        self._load_config()
+        self._load_config(force=True)
         app_secret = self.app_secret
 
         if not app_secret:
@@ -396,9 +422,11 @@ class WhatsAppClient:
             logger.error("[WhatsApp] Invalid recipient phone for document: '%s'", to_phone)
             return {"success": False, "error": "invalid_recipient_phone", "status": "failed"}
 
-        if os.getenv("PYTEST_CURRENT_TEST") and os.getenv("WHATSAPP_INVOICE_ENABLED") != "1":
-            logger.info("[WhatsApp] Skipping live document send during pytest")
-            return {"success": False, "error": "pytest_skipped_live_send", "status": "failed"}
+        from app.core.runtime import offline_third_party_calls
+
+        if offline_third_party_calls() and os.getenv("WHATSAPP_INVOICE_ENABLED") != "1":
+            logger.info("[WhatsApp] Skipping live document send in offline/test runtime")
+            return {"success": False, "error": "offline_document_send", "status": "failed"}
 
         safe_name = (filename or "invoice.pdf").replace("\\", "_").replace("/", "_")[:180]
         document: Dict[str, Any] = {"filename": safe_name}
@@ -557,3 +585,4 @@ def send_whatsapp_message(
         template_name=template_name,
         template_components=template_components
     )
+

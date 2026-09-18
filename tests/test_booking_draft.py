@@ -29,7 +29,8 @@ def test_valid_passenger_draft_creation():
         assert res["status"] == "DRAFT"
         assert res["booking_reference"].startswith("SHK-")
         assert res["subtotal"] > 0
-        assert res["total"] > res["subtotal"]
+        # Catalog prices are GST-inclusive; drafts do not add a second tax line.
+        assert res["total"] == res["subtotal"]
     finally:
         db.close()
 
@@ -104,7 +105,7 @@ def test_update_existing_draft_no_duplicates():
             "flight_number": "AI302",
             "journey_type": "arrival",
             "airport_code": "BOM",
-            "selected_package_id": "essential",
+            "selected_package_id": "platinum",
             "service_date": "2026-08-20",
             "service_time": "14:00"
         }

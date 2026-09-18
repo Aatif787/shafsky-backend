@@ -77,7 +77,7 @@ class PaymentService:
         )
         if not intent.get("success") or not intent.get("order_id"):
             raise ValueError(intent.get("error") or "Razorpay order could not be created.")
-        if str(intent.get("order_id", "")).startswith("order_sim_"):
+        if str(intent.get("order_id", "")).startswith("order_sim_") and settings.is_production:
             raise ValueError("Payment gateway is not configured for live checkout.")
         order_id = intent.get("order_id")
 
@@ -408,12 +408,14 @@ class PaymentService:
         plink_id = intent.get("payment_link_id")
         short_url = intent.get("short_url")
         if cls._is_simulated_payment_link(plink_id, short_url, bool(intent.get("simulated"))):
-            logger.warning("[PaymentService] Simulated Payment Link rejected for customer delivery (booking %s)", booking_ref)
-            return {
-                "success": False,
-                "error": "SIMULATED_LINK_REJECTED",
-                "reason": "Payment gateway is not configured for live Payment Links.",
-            }
+            from app.core.runtime import offline_third_party_calls
+            if not offline_third_party_calls():
+                logger.warning("[PaymentService] Simulated Payment Link rejected for customer delivery (booking %s)", booking_ref)
+                return {
+                    "success": False,
+                    "error": "SIMULATED_LINK_REJECTED",
+                    "reason": "Payment gateway is not configured for live Payment Links.",
+                }
         if not cls._is_https_payment_url(short_url):
             return {
                 "success": False,
@@ -755,6 +757,138 @@ class PaymentService:
 
 
     @classmethod
+    def _confirmed_booking_payment_result(
+        cls,
+        db: Session,
+        *,
+        booking,
+        transaction: Optional[PaymentTransaction],
+        payment_id: Optional[str],
+        order_id: Optional[str],
+        payment_link_id: Optional[str],
+        resolved_booking_ref: Optional[str],
+        gateway_provider: str,
+        signature: Optional[str],
+        raw_payload: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        """Return a duplicate/replay result when the booking is already confirmed."""
+        existing_successful_tx = db.scalar(
+            select(PaymentTransaction).where(
+                PaymentTransaction.entity_id == resolved_booking_ref,
+                PaymentTransaction.status == PaymentStatus.SUCCESSFUL,
+                PaymentTransaction.is_duplicate.isnot(True)
+            ).order_by(PaymentTransaction.created_at.asc())
+        )
+        if not existing_successful_tx:
+            existing_successful_tx = db.scalar(
+                select(PaymentTransaction).where(
+                    PaymentTransaction.transaction_ref == resolved_booking_ref,
+                    PaymentTransaction.status == PaymentStatus.SUCCESSFUL,
+                    PaymentTransaction.is_duplicate.isnot(True)
+                ).order_by(PaymentTransaction.created_at.asc())
+            )
+        if not existing_successful_tx and transaction and transaction.status == PaymentStatus.SUCCESSFUL:
+            existing_successful_tx = transaction
+
+        existing_pid = existing_successful_tx.gateway_payment_id if existing_successful_tx else None
+        is_same_payment = (
+            (payment_id and existing_pid and payment_id == existing_pid) or
+            (order_id and existing_pid and order_id == existing_pid) or
+            (payment_link_id and existing_pid and payment_link_id == existing_pid)
+        )
+        if not is_same_payment and transaction and existing_successful_tx:
+            if transaction.id == existing_successful_tx.id:
+                stored_ids = cls._collect_tx_gateway_ids(existing_successful_tx)
+                incoming_ids = {i for i in (payment_id, order_id, payment_link_id) if i}
+                if not incoming_ids or (incoming_ids & stored_ids):
+                    is_same_payment = True
+        if not is_same_payment and order_id and existing_successful_tx:
+            gw_resp = existing_successful_tx.gateway_response or {}
+            original_order_id = None
+            if isinstance(gw_resp, dict):
+                original_order_id = (
+                    gw_resp.get("order_id") or
+                    gw_resp.get("payload", {}).get("payment", {}).get("entity", {}).get("order_id") or
+                    gw_resp.get("payload", {}).get("order", {}).get("entity", {}).get("id")
+                )
+            if original_order_id and order_id == original_order_id:
+                is_same_payment = True
+        if not is_same_payment and existing_successful_tx:
+            stored_ids = cls._collect_tx_gateway_ids(existing_successful_tx)
+            incoming_ids = {i for i in (payment_id, order_id, payment_link_id) if i}
+            if incoming_ids and (incoming_ids & stored_ids):
+                is_same_payment = True
+
+        if not is_same_payment and (payment_id or order_id):
+            logger.warning(
+                f"[PaymentService] DOUBLE PAYMENT DETECTED for booking '{resolved_booking_ref}'. "
+                f"Existing payment: '{existing_pid}', New payment: '{payment_id}'."
+            )
+            dup_ref = f"PAY-DUP-{uuid.uuid4().hex[:6].upper()}"
+            dup_tx = PaymentTransaction(
+                transaction_ref=dup_ref,
+                entity_type="AIRPORT_BOOKING",
+                entity_id=resolved_booking_ref or str(booking.id if booking else ""),
+                customer_id=str(booking.user_id) if booking and booking.user_id else None,
+                amount=float(booking.total_amount) if booking else (transaction.amount if transaction else 0.0),
+                currency=booking.currency if booking else (transaction.currency if transaction else "INR"),
+                payment_method=PaymentMethod.CREDIT_CARD,
+                status=PaymentStatus.SUCCESSFUL,
+                gateway_provider=gateway_provider,
+                gateway_payment_id=payment_id or order_id,
+                gateway_signature=signature,
+                gateway_response=raw_payload,
+                is_duplicate=True,
+                notes=f"DUPLICATE_PAYMENT_DETECTED: Booking was already confirmed by payment '{existing_pid}'."
+            )
+            db.add(dup_tx)
+            db.commit()
+            try:
+                AdminService.log_audit_action(
+                    db,
+                    actor_email=booking.passenger_email if booking else "system@shafsky.com",
+                    action="DUPLICATE_PAYMENT_DETECTED",
+                    resource_type="PAYMENT",
+                    resource_id=str(dup_tx.id),
+                    details={
+                        "booking_ref": resolved_booking_ref,
+                        "original_payment_id": existing_pid,
+                        "duplicate_payment_id": payment_id,
+                        "duplicate_tx_ref": dup_ref
+                    }
+                )
+            except Exception:
+                pass
+            return {
+                "success": True,
+                "status": "DUPLICATE_PAYMENT_FLAGGED",
+                "booking_ref": resolved_booking_ref,
+                "payment_id": payment_id,
+                "duplicate_tx_ref": dup_ref
+            }
+
+        logger.info(f"[PaymentService] Booking '{resolved_booking_ref}' is already confirmed and paid. Idempotent return.")
+        try:
+            tx_for_invoice = existing_successful_tx or transaction
+            if tx_for_invoice:
+                retry_inv = db.scalar(select(Invoice).where(Invoice.transaction_id == tx_for_invoice.id))
+                if retry_inv and not retry_inv.pdf_url:
+                    from app.services.pdf_service import schedule_invoice_fulfillment
+                    schedule_invoice_fulfillment(str(retry_inv.id))
+        except Exception as pdf_retry_err:
+            logger.error(
+                "[PaymentService] Invoice PDF retry scheduling failed: %s",
+                type(pdf_retry_err).__name__,
+            )
+        return {
+            "success": True,
+            "status": "CONFIRMED",
+            "already_confirmed": True,
+            "booking_ref": resolved_booking_ref,
+            "payment_id": payment_id or (transaction.gateway_payment_id if transaction else None)
+        }
+
+    @classmethod
     def handle_verified_payment(
         cls,
         db: Session,
@@ -920,6 +1054,24 @@ class PaymentService:
             "payment.captured", "order.paid", "payment_link.paid",
             "VERIFY_ENDPOINT", "PAYMENT_SUCCESS", "payment.succeeded"
         ]:
+            if booking and booking.status == BookingStatus.CONFIRMED:
+                # Duplicate/replay must run before amount validation so a second
+                # distinct payment_id is flagged even when the payload omits amount.
+                confirmed_result = cls._confirmed_booking_payment_result(
+                    db,
+                    booking=booking,
+                    transaction=transaction,
+                    payment_id=payment_id,
+                    order_id=order_id,
+                    payment_link_id=payment_link_id,
+                    resolved_booking_ref=resolved_booking_ref,
+                    gateway_provider=gateway_provider,
+                    signature=signature,
+                    raw_payload=raw_payload,
+                )
+                if confirmed_result is not None:
+                    return confirmed_result
+
             # For gateway webhooks and client verification endpoint,
             # strictly reconcile received amount and currency with the booking / transaction records.
             if event_name in ["payment.captured", "order.paid", "payment_link.paid", "VERIFY_ENDPOINT"]:
@@ -963,6 +1115,15 @@ class PaymentService:
                             if not received_currency_raw:
                                 received_currency_raw = ord_data.get("currency")
 
+                    if received_amount_raw is None and transaction and transaction.amount is not None:
+                        received_amount_raw = int(round(float(transaction.amount) * 100))
+                    if not received_currency_raw and transaction and transaction.currency:
+                        received_currency_raw = transaction.currency
+
+                # Fill amount/currency from the DB only when Razorpay did not send a
+                # payload (VERIFY_ENDPOINT / programmatic capture). Webhooks that omit
+                # amount or currency must still be rejected as PAYMENT_DATA_INCOMPLETE.
+                if event_name == "VERIFY_ENDPOINT" or raw_payload is None:
                     if received_amount_raw is None and transaction and transaction.amount is not None:
                         received_amount_raw = int(round(float(transaction.amount) * 100))
                     if not received_currency_raw and transaction and transaction.currency:
@@ -1080,147 +1241,21 @@ class PaymentService:
                     db.flush()
 
             # Double Payment & Overpayment Protection Guard
-            is_booking_confirmed = booking and booking.status == BookingStatus.CONFIRMED
-
-            # Check if this is an idempotent replay of the exact same payment vs a secondary duplicate payment
-            if is_booking_confirmed:
-                existing_successful_tx = db.scalar(
-                    select(PaymentTransaction).where(
-                        PaymentTransaction.entity_id == resolved_booking_ref,
-                        PaymentTransaction.status == PaymentStatus.SUCCESSFUL,
-                        PaymentTransaction.is_duplicate.isnot(True)
-                    ).order_by(PaymentTransaction.created_at.asc())
+            if booking and booking.status == BookingStatus.CONFIRMED:
+                confirmed_result = cls._confirmed_booking_payment_result(
+                    db,
+                    booking=booking,
+                    transaction=transaction,
+                    payment_id=payment_id,
+                    order_id=order_id,
+                    payment_link_id=payment_link_id,
+                    resolved_booking_ref=resolved_booking_ref,
+                    gateway_provider=gateway_provider,
+                    signature=signature,
+                    raw_payload=raw_payload,
                 )
-                if not existing_successful_tx:
-                    existing_successful_tx = db.scalar(
-                        select(PaymentTransaction).where(
-                            PaymentTransaction.transaction_ref == resolved_booking_ref,
-                            PaymentTransaction.status == PaymentStatus.SUCCESSFUL,
-                            PaymentTransaction.is_duplicate.isnot(True)
-                        ).order_by(PaymentTransaction.created_at.asc())
-                    )
-                if not existing_successful_tx and transaction and transaction.status == PaymentStatus.SUCCESSFUL:
-                    existing_successful_tx = transaction
-
-                existing_pid = existing_successful_tx.gateway_payment_id if existing_successful_tx else None
-
-                # Determine if the incoming event belongs to the same financial payment.
-                # Case 1: Direct ID match (payment_id == existing gateway_payment_id, or order_id == existing gateway_payment_id)
-                is_same_payment = (
-                    (payment_id and existing_pid and payment_id == existing_pid) or
-                    (order_id and existing_pid and order_id == existing_pid) or
-                    (payment_link_id and existing_pid and payment_link_id == existing_pid)
-                )
-
-                # Case 2: The resolved transaction IS the same DB row as the existing successful TX.
-                # Same row is the same financial payment only when incoming ids overlap stored ids
-                # (or no ids were provided). A distinct payment_id on the same booking is a duplicate.
-                if not is_same_payment and transaction and existing_successful_tx:
-                    if transaction.id == existing_successful_tx.id:
-                        stored_ids = cls._collect_tx_gateway_ids(existing_successful_tx)
-                        incoming_ids = {i for i in (payment_id, order_id, payment_link_id) if i}
-                        if not incoming_ids or (incoming_ids & stored_ids):
-                            is_same_payment = True
-
-                # Case 3: The order_id matches the original order stored in gateway_response.
-                # After payment.captured, gateway_payment_id is updated from order_id to payment_id,
-                # but the original order_id is preserved in the gateway_response payload.
-                if not is_same_payment and order_id and existing_successful_tx:
-                    gw_resp = existing_successful_tx.gateway_response or {}
-                    original_order_id = None
-                    if isinstance(gw_resp, dict):
-                        # Check nested payload structures for the original order_id
-                        original_order_id = (
-                            gw_resp.get("order_id") or
-                            gw_resp.get("payload", {}).get("payment", {}).get("entity", {}).get("order_id") or
-                            gw_resp.get("payload", {}).get("order", {}).get("entity", {}).get("id")
-                        )
-                    if original_order_id and order_id == original_order_id:
-                        is_same_payment = True
-
-                # Case 4: stored payment_link_id / order_id / payment_id vs incoming ids
-                if not is_same_payment and existing_successful_tx:
-                    stored_ids = cls._collect_tx_gateway_ids(existing_successful_tx)
-                    incoming_ids = {i for i in (payment_id, order_id, payment_link_id) if i}
-                    if incoming_ids and (incoming_ids & stored_ids):
-                        is_same_payment = True
-
-                logger.info(f"[DEBUG_DP] existing_pid={existing_pid}, payment_id={payment_id}, order_id={order_id}, plink={payment_link_id}, is_same_payment={is_same_payment}")
-
-                if not is_same_payment and (payment_id or order_id):
-                    # Distinct second payment arrived for already confirmed booking!
-                    logger.warning(
-                        f"[PaymentService] DOUBLE PAYMENT DETECTED for booking '{resolved_booking_ref}'. "
-                        f"Existing payment: '{existing_pid}', New payment: '{payment_id}'."
-                    )
-                    dup_ref = f"PAY-DUP-{uuid.uuid4().hex[:6].upper()}"
-                    dup_tx = PaymentTransaction(
-                        transaction_ref=dup_ref,
-                        entity_type="AIRPORT_BOOKING",
-                        entity_id=resolved_booking_ref or str(booking.id if booking else ""),
-                        customer_id=str(booking.user_id) if booking and booking.user_id else None,
-                        amount=float(booking.total_amount) if booking else (transaction.amount if transaction else 0.0),
-                        currency=booking.currency if booking else (transaction.currency if transaction else "INR"),
-                        payment_method=PaymentMethod.CREDIT_CARD,
-                        status=PaymentStatus.SUCCESSFUL,
-                        gateway_provider=gateway_provider,
-                        gateway_payment_id=payment_id or order_id,
-                        gateway_signature=signature,
-                        gateway_response=raw_payload,
-                        is_duplicate=True,
-                        notes=f"DUPLICATE_PAYMENT_DETECTED: Booking was already confirmed by payment '{existing_pid}'."
-                    )
-                    db.add(dup_tx)
-                    db.commit()
-
-                    try:
-                        AdminService.log_audit_action(
-                            db,
-                            actor_email=booking.passenger_email if booking else "system@shafsky.com",
-                            action="DUPLICATE_PAYMENT_DETECTED",
-                            resource_type="PAYMENT",
-                            resource_id=str(dup_tx.id),
-                            details={
-                                "booking_ref": resolved_booking_ref,
-                                "original_payment_id": existing_pid,
-                                "duplicate_payment_id": payment_id,
-                                "duplicate_tx_ref": dup_ref
-                            }
-                        )
-                    except Exception:
-                        pass
-
-                    return {
-                        "success": True,
-                        "status": "DUPLICATE_PAYMENT_FLAGGED",
-                        "booking_ref": resolved_booking_ref,
-                        "payment_id": payment_id,
-                        "duplicate_tx_ref": dup_ref
-                    }
-
-                # Exact same payment replay - idempotent return
-                logger.info(f"[PaymentService] Booking '{resolved_booking_ref}' is already confirmed and paid. Idempotent return.")
-                # Retry PDF/storage if the invoice row exists without a stored document.
-                # Never creates a second invoice; never reverses payment.
-                try:
-                    tx_for_invoice = existing_successful_tx or transaction
-                    if tx_for_invoice:
-                        retry_inv = db.scalar(select(Invoice).where(Invoice.transaction_id == tx_for_invoice.id))
-                        if retry_inv and not retry_inv.pdf_url:
-                            from app.services.pdf_service import schedule_invoice_fulfillment
-                            schedule_invoice_fulfillment(str(retry_inv.id))
-                except Exception as pdf_retry_err:
-                    logger.error(
-                        "[PaymentService] Invoice PDF retry scheduling failed: %s",
-                        type(pdf_retry_err).__name__,
-                    )
-                return {
-                    "success": True,
-                    "status": "CONFIRMED",
-                    "already_confirmed": True,
-                    "booking_ref": resolved_booking_ref,
-                    "payment_id": payment_id or (transaction.gateway_payment_id if transaction else None)
-                }
+                if confirmed_result is not None:
+                    return confirmed_result
 
             # Update PaymentTransaction
             if transaction:
@@ -1721,7 +1756,7 @@ class PaymentService:
         )
         if not intent.get("success") or not intent.get("order_id"):
             raise ValueError(intent.get("error") or "Razorpay order could not be created.")
-        if str(intent.get("order_id", "")).startswith("order_sim_"):
+        if str(intent.get("order_id", "")).startswith("order_sim_") and settings.is_production:
             raise ValueError("Payment gateway is not configured for live checkout.")
         order_id = intent.get("order_id")
         amount_paise = int(intent.get("amount") or amount_paise)

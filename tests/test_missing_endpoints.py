@@ -9,9 +9,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.main import app
-from app.database import get_db, Base, engine
+from app.database import get_db, Base, engine, SessionLocal
 from app.models.schema import UserAuth, Profile, FeatureFlag, AirportManagement, Coupon, UserNotification, Role
 from app.services.auth_service import AuthService
+from sqlalchemy import select
 
 client = TestClient(app)
 
@@ -22,8 +23,32 @@ def setup_db():
     yield
 
 
+def _ensure_user(email: str, role: Role = Role.CUSTOMER) -> UserAuth:
+    db = SessionLocal()
+    try:
+        user = db.scalar(select(UserAuth).where(UserAuth.email == email.lower()))
+        if not user:
+            user = UserAuth(
+                email=email.lower(),
+                password_hash=AuthService.hash_password("TestPass2026!"),
+                role=role,
+                is_verified=True,
+                is_active=True,
+            )
+            db.add(user)
+            db.flush()
+            db.add(Profile(auth_id=user.id, email=email.lower(), role=role, full_name=email.split("@")[0]))
+            db.commit()
+            db.refresh(user)
+        return user
+    finally:
+        db.close()
+
+
 def get_auth_token(email: str = "testuser@shafsky.com", role: str = "SUPER_ADMIN") -> str:
-    user_data = {"sub": email, "user_id": str(uuid.uuid4()), "role": role}
+    role_enum = Role[role] if role in Role.__members__ else Role.CUSTOMER
+    user = _ensure_user(email, role_enum)
+    user_data = {"sub": email, "user_id": str(user.id), "role": role}
     return AuthService.create_access_token(user_data)
 
 
@@ -68,11 +93,11 @@ def test_notifications_endpoints():
 
     # 3. Read Single Notification
     fake_id = str(uuid.uuid4())
-    res_read = client.post(f"/api/notifications/{fake_id}/read")
+    res_read = client.post(f"/api/notifications/{fake_id}/read", headers=headers)
     assert res_read.status_code == 200
 
     # 4. Delete Notification
-    res_del = client.delete(f"/api/notifications/{fake_id}")
+    res_del = client.delete(f"/api/notifications/{fake_id}", headers=headers)
     assert res_del.status_code == 200
 
 

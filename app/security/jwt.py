@@ -133,7 +133,8 @@ class SecurityJWT:
         # This fallback is intentionally opt-in via configuration or non-production default.
         if payload is None:
             allow_legacy = getattr(settings, "ALLOW_HS256_LEGACY_FALLBACK", not getattr(settings, "is_production", False))
-            legacy_secret = getattr(settings, "JWT_SECRET", None) or "shafsky-dev-secret-key-change-in-prod"
+            # An empty JWT_SECRET must never authenticate, even when fallback is enabled.
+            legacy_secret = str(getattr(settings, "JWT_SECRET", "") or "").strip()
             if allow_legacy and legacy_secret:
                 logger = logging.getLogger("shafsky.security.jwt")
                 logger.warning("Using legacy HS256 fallback to decode JWT - this should be disabled in production.")

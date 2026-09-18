@@ -92,7 +92,10 @@ def test_05_hs256_legacy_token_rejected_when_fallback_disabled():
         "iat": now,
         "type": "access"
     }
-    legacy_secret = getattr(settings, "JWT_SECRET", "shafsky-dev-secret-key-change-in-prod")
+    # CI disables HS256 fallback and leaves JWT_SECRET empty on purpose.
+    # Mint the synthetic legacy token with a non-empty HMAC key; decode must
+    # still reject it when ALLOW_HS256_LEGACY_FALLBACK is false.
+    legacy_secret = getattr(settings, "JWT_SECRET", None) or "legacy-hs256-test-secret"
     legacy_token = jwt.encode(legacy_payload, legacy_secret, algorithm="HS256")
 
     # Inspect header
@@ -107,6 +110,33 @@ def test_05_hs256_legacy_token_rejected_when_fallback_disabled():
         assert exc_info.value.status_code == 401
     finally:
         settings.ALLOW_HS256_LEGACY_FALLBACK = previous
+
+
+def test_05b_empty_jwt_secret_cannot_authenticate_even_with_fallback():
+    """Empty HMAC secrets must never verify, including when HS256 fallback is on."""
+    now = datetime.now(timezone.utc)
+    token = jwt.encode(
+        {
+            "sub": "legacy_user@shafskyaviation.com",
+            "role": "CUSTOMER",
+            "exp": now + timedelta(minutes=15),
+            "iat": now,
+            "type": "access",
+        },
+        "any-nonempty-hmac-key-min-32-bytes",
+        algorithm="HS256",
+    )
+    previous_flag = settings.ALLOW_HS256_LEGACY_FALLBACK
+    previous_secret = settings.JWT_SECRET
+    settings.ALLOW_HS256_LEGACY_FALLBACK = True
+    settings.JWT_SECRET = ""
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            SecurityJWT.decode_token(token)
+        assert exc_info.value.status_code == 401
+    finally:
+        settings.ALLOW_HS256_LEGACY_FALLBACK = previous_flag
+        settings.JWT_SECRET = previous_secret
 
 
 def test_06_startup_secrets_validation():

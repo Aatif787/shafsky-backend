@@ -75,10 +75,12 @@ class RazorpayProvider:
         safe_notes["booking_ref"] = canonical_ref[:256]
         safe_notes["channel"] = str(channel or "whatsapp")[:256]
 
-        if not self.is_configured():
+        from app.core.runtime import offline_third_party_calls
+
+        if not self.is_configured() or offline_third_party_calls():
             logger.warning("[Razorpay] Provider not configured. Simulated payment link must not be sent to customers.")
             fake_link_id = f"plink_sim_{razorpay_reference.replace('-', '')}"
-            fake_url = f"https://rzp.io/i/simulated_{fake_link_id}"
+            fake_url = f"https://rzp.io/i/{fake_link_id}"
             return {
                 "success": True,
                 "payment_link_id": fake_link_id,
@@ -181,7 +183,9 @@ class RazorpayProvider:
                 continue
             safe_notes[str(k)[:256]] = str(v)[:256]
 
-        if not self.is_configured():
+        from app.core.runtime import offline_third_party_calls
+
+        if not self.is_configured() or offline_third_party_calls():
             logger.warning("[Razorpay] Provider not configured in environment. Using simulated order fallback.")
             fake_order_id = f"order_sim_{receipt_ref.replace('-', '')}"
             return {
@@ -244,7 +248,8 @@ class RazorpayProvider:
         if not order_id:
             return {"success": False, "error": "Order ID is required."}
 
-        if not self.is_configured() or order_id.startswith(("order_sim_", "order_mock_", "order_test_")):
+        from app.core.runtime import offline_third_party_calls
+        if not self.is_configured() or offline_third_party_calls() or order_id.startswith(("order_sim_", "order_mock_", "order_test_")):
             return {"success": False, "error": "Simulated or unconfigured order lookup."}
 
         url = f"https://api.razorpay.com/v1/orders/{order_id}"
@@ -271,7 +276,8 @@ class RazorpayProvider:
         if not order_id:
             return {"success": False, "error": "Order ID is required."}
 
-        if not self.is_configured() or order_id.startswith(("order_sim_", "order_mock_", "order_test_")):
+        from app.core.runtime import offline_third_party_calls
+        if not self.is_configured() or offline_third_party_calls() or order_id.startswith(("order_sim_", "order_mock_", "order_test_")):
             return {"success": False, "error": "Simulated or unconfigured order lookup."}
 
         url = f"https://api.razorpay.com/v1/orders/{order_id}/payments"
@@ -392,14 +398,18 @@ class RazorpayProvider:
         self._load_config()
         amount_paise = int(round(amount * 100))
         from app.config import settings as _settings
+        from app.core.runtime import in_automated_test_runtime, offline_third_party_calls
 
-        if not self.is_configured():
-            if _settings.is_production:
-                logger.error("[Razorpay] Refund failed: Razorpay credentials not configured in production.")
+        # Production never simulates refunds. Pytest may patch is_production while
+        # TESTING=1; refuse both simulation and live HTTP in that case.
+        if _settings.is_production:
+            if in_automated_test_runtime() or not self.is_configured():
+                logger.error("[Razorpay] Refund refused: production cannot use a simulated gateway.")
                 return {
                     "success": False,
                     "error": "Payment gateway credentials are not configured for refunds in production."
                 }
+        elif not self.is_configured() or offline_third_party_calls():
             logger.warning(f"[Razorpay] Using simulated refund fallback for payment: {payment_id}")
             fake_refund_id = f"rfnd_sim_{payment_id.replace('-', '')[:12]}"
             return {
@@ -471,7 +481,12 @@ class RazorpayProvider:
     def fetch_payment(self, payment_id: str) -> Dict[str, Any]:
         """Fetches Razorpay payment details for status reconciliation."""
         self._load_config()
-        if not self.is_configured() or payment_id.startswith(("pay_sim_", "pay_test_", "pay_phase4_", "pay_first", "pay_second", "pay_ref", "pay_retry")):
+        from app.core.runtime import offline_third_party_calls
+        if (
+            not self.is_configured()
+            or offline_third_party_calls()
+            or payment_id.startswith(("pay_sim_", "pay_test_", "pay_phase4_", "pay_first", "pay_second", "pay_ref", "pay_retry"))
+        ):
             return {"success": True, "payment_id": payment_id, "status": "captured", "simulated": True}
 
         url = f"https://api.razorpay.com/v1/payments/{payment_id}"
@@ -491,7 +506,8 @@ class RazorpayProvider:
         link_id = str(payment_link_id or "").strip()
         if not link_id:
             return {"success": False, "error": "missing_payment_link_id"}
-        if not self.is_configured() or link_id.startswith("plink_sim_"):
+        from app.core.runtime import offline_third_party_calls
+        if not self.is_configured() or offline_third_party_calls() or link_id.startswith("plink_sim_"):
             return {
                 "success": False,
                 "error": "Payment link status unavailable (gateway not configured or simulated id).",
@@ -533,7 +549,8 @@ class RazorpayProvider:
         ref = str(reference_id or "").strip()[:40]
         if not ref:
             return {"success": False, "error": "missing_reference_id", "items": []}
-        if not self.is_configured():
+        from app.core.runtime import offline_third_party_calls
+        if not self.is_configured() or offline_third_party_calls():
             return {"success": False, "error": "gateway_not_configured", "items": [], "simulated": True}
 
         url = "https://api.razorpay.com/v1/payment_links"

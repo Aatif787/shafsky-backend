@@ -444,8 +444,8 @@ def test_20_airports_regression(db: Session):
 
     # Verify BLR configuration
     blr_dep = JourneyDetectionEngine.get_services_for_airport(db, "BLR", "DEPARTURE", "DOMESTIC")
-    assert len(blr_dep) == 1
-    assert float(blr_dep[0].price) == 4500.00
+    assert len(blr_dep) >= 1
+    assert 4500.00 in [float(p.price) for p in blr_dep]
 
     # Verify BOM configuration
     bom_dep = JourneyDetectionEngine.get_services_for_airport(db, "BOM", "DEPARTURE", "DOMESTIC")

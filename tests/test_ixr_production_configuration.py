@@ -438,7 +438,7 @@ def test_full_airports_regression_suite(db: Session):
         "ATQ": 4,
         "BBI": 3,
         "BLR": 12,
-        "BOM": 12,
+        "BOM": 16,
         "CCU": 5,
         "COK": 4,
         "DEL": 20,

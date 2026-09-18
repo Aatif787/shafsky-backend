@@ -42,6 +42,12 @@ import app.models.schema  # Ensure all model tables are registered on Base.metad
 import app.models.journey_models  # Phase 1 Journey Detection Engine models
 import app.models.operations_models  # Phase 6 Operations & Communication Engine models
 import app.models.whatsapp_models
+import app.models.payment
+import app.models.airport
+import app.models.shared_domain
+import app.models.charter_models
+import app.models.ticketing
+import app.models.system_events
 
 target_metadata = Base.metadata
 

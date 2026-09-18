@@ -45,21 +45,47 @@ def normalize_flight_code(code: Optional[str]) -> str:
     return re.sub(r"[^A-Za-z0-9]", "", str(code)).upper().strip()
 
 
-def build_cache_keys(flight_iata: str, flight_date: Optional[str] = None) -> List[str]:
-    """Generate canonical cache keys for flight lookup."""
+def build_cache_keys(
+    flight_iata: str,
+    flight_date: Optional[str] = None,
+    *,
+    direction: Optional[str] = None,
+    origin: Optional[str] = None,
+    dest: Optional[str] = None,
+    include_latest: bool = True,
+) -> List[str]:
+    """Generate canonical cache keys for flight lookup.
+
+    Directional lookups (validate_flight) must not share a LATEST key, otherwise
+    an arrival pollute a later departure for the same flight number.
+    """
     clean_flight = normalize_flight_code(flight_iata)
     clean_date = str(flight_date)[:10].strip() if flight_date else None
-    
+    sector = ""
+    dir_part = (direction or "").strip().lower()
+    origin_part = (origin or "").strip().upper()
+    dest_part = (dest or "").strip().upper()
+    if dir_part or origin_part or dest_part:
+        sector = f":{dir_part or '-'}:{origin_part or '-'}:{dest_part or '-'}"
+        include_latest = False
+
     keys = []
     if clean_date and clean_date not in ("ANY", "unknown", "None", ""):
-        keys.append(f"shafsky:flight:{clean_flight}:{clean_date}")
-    keys.append(f"shafsky:flight:{clean_flight}:LATEST")
+        keys.append(f"shafsky:flight:{clean_flight}:{clean_date}{sector}")
+    if include_latest:
+        keys.append(f"shafsky:flight:{clean_flight}:LATEST")
+    elif not keys:
+        keys.append(f"shafsky:flight:{clean_flight}{sector}")
     return keys
 
 
 def get_unified_flight(
     flight_iata: str,
-    flight_date: Optional[str] = None
+    flight_date: Optional[str] = None,
+    *,
+    direction: Optional[str] = None,
+    origin: Optional[str] = None,
+    dest: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Retrieve flight from Tier 1 (RAM) -> Tier 2 (Redis) -> Tier 3 (PostgreSQL DB).
@@ -69,7 +95,14 @@ def get_unified_flight(
     if not clean_flight:
         return None
 
-    keys = build_cache_keys(clean_flight, flight_date)
+    keys = build_cache_keys(
+        clean_flight,
+        flight_date,
+        direction=direction,
+        origin=origin,
+        dest=dest,
+        include_latest=not (direction or origin or dest),
+    )
     now_ts = time.time()
 
     # ── Tier 1: In-Memory RAM Cache (< 1ms) ──────────────────────────────────
@@ -114,7 +147,7 @@ def get_unified_flight(
             else:
                 record = query.order_by(FlightAPICache.created_at.desc()).first()
 
-            if record and isinstance(record.response_data, dict):
+            if record and isinstance(record.response_data, dict) and not (direction or origin or dest):
                 data = record.response_data
                 logger.info("Unified Flight Cache [DB HIT] | Flight: %s | Provider: %s", clean_flight, record.provider)
                 
@@ -140,6 +173,10 @@ def store_unified_flight(
     flight_date: Optional[str] = None,
     ttl: int = DEFAULT_DB_TTL,
     skip_db: bool = False,
+    *,
+    direction: Optional[str] = None,
+    origin: Optional[str] = None,
+    dest: Optional[str] = None,
 ) -> None:
     """
     Store flight record across Tier 1 (RAM), Tier 2 (Redis), and Tier 3 (PostgreSQL DB).
@@ -159,8 +196,19 @@ def store_unified_flight(
             clean_date = data.get("flight_date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     now_ts = time.time()
-    keys = build_cache_keys(clean_flight, clean_date)
+    keys = build_cache_keys(
+        clean_flight,
+        clean_date,
+        direction=direction,
+        origin=origin,
+        dest=dest,
+        include_latest=not (direction or origin or dest),
+    )
     serialized = json.dumps(data)
+
+    # Directional validate_flight entries stay in RAM/Redis to avoid sector collisions in DB.
+    if direction or origin or dest:
+        skip_db = True
 
     # 1. Store in RAM
     with _RAM_LOCK:
@@ -350,3 +398,15 @@ def to_aviationstack_record(cached: Dict[str, Any], requested_flight: str) -> Di
         "flight_date": ((dep_obj.get("scheduled") or "")[:10]) or cached.get("flight_date"),
         "provider": cached.get("provider") or "shared",
     }
+
+
+def clear_unified_cache() -> None:
+    """Drop RAM + PostgreSQL flight cache (tests). Redis keys are flushed by conftest."""
+    with _RAM_LOCK:
+        _RAM_CACHE.clear()
+    try:
+        with SessionLocal() as session:
+            session.query(FlightAPICache).delete()
+            session.commit()
+    except Exception as err:
+        logger.debug("DB flight cache clear error: %s", err)
