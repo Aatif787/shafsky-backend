@@ -90,6 +90,11 @@ def test_rate_limit_policy_classification():
     assert p_charter["category"] == "booking_create"
 
     # 8. Webhooks
+    p_webhook_rzp = get_rate_limit_policy("POST", "/api/payments/razorpay/webhook")
+    assert p_webhook_rzp is not None
+    assert p_webhook_rzp["category"] == "webhook"
+    assert p_webhook_rzp["max_requests"] == 1000
+
     p_webhook_pay = get_rate_limit_policy("POST", "/api/payments/webhook")
     assert p_webhook_pay is not None
     assert p_webhook_pay["category"] == "webhook"
@@ -98,6 +103,14 @@ def test_rate_limit_policy_classification():
     p_webhook_wa = get_rate_limit_policy("POST", "/api/whatsapp/webhook")
     assert p_webhook_wa is not None
     assert p_webhook_wa["category"] == "webhook"
+
+    p_webhook_wa_int = get_rate_limit_policy("POST", "/api/integrations/whatsapp/webhook")
+    assert p_webhook_wa_int is not None
+    assert p_webhook_wa_int["category"] == "webhook"
+
+    p_webhook_notif = get_rate_limit_policy("POST", "/api/notifications/webhooks/resend")
+    assert p_webhook_notif is not None
+    assert p_webhook_notif["category"] == "webhook"
 
     # 9. General API fallback
     p_gen = get_rate_limit_policy("GET", "/api/some-resource")
