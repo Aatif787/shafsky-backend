@@ -125,7 +125,7 @@ def test_flight_not_confirmed_path_end_to_end():
 
 
 def test_flight_later_same_day_domestic_blocked():
-    """Flight-later + tomorrow (domestic 12h notice) must be rejected with guidance."""
+    """Flight-later + a date whose midnight is inside the 12h window must be rejected."""
     db = SessionLocal()
     try:
         phone = f"91{uuid.uuid4().int % 10**10:010d}"
@@ -143,8 +143,12 @@ def test_flight_later_same_day_domestic_blocked():
         res = WhatsAppBookingStateMachine.process_incoming_event(db, phone, "", input_id="btn_flight_not_confirmed")
         assert res["status"] == "flight_later_selected"
 
-        tomorrow = (datetime.now(timezone.utc) + timedelta(hours=24)).strftime("%d/%m/%Y")
-        res = WhatsAppBookingStateMachine.process_incoming_event(db, phone, tomorrow)
+        # Flight-later cutoff uses midnight of the chosen date in the airport TZ (IST for
+        # Delhi). "Today" is always inside the domestic 12h window; "UTC+24h calendar
+        # tomorrow" is not (fails when CI runs early UTC / morning IST).
+        from app.services.booking_cutoff import IST
+        today_ist = datetime.now(IST).strftime("%d/%m/%Y")
+        res = WhatsAppBookingStateMachine.process_incoming_event(db, phone, today_ist)
         db.refresh(conv)
         assert res["status"] == "cutoff_violation"
         assert conv.current_state == "DATE_SELECTION"

@@ -109,7 +109,7 @@ app.add_middleware(IdempotencyMiddleware)
 # This lets CORSMiddleware handle browser OPTIONS preflight requests before
 # they reach route/security/idempotency middleware.
 _CORS_DEV_ORIGIN_REGEX = (
-    r"^https?://(localhost|127\\.0\\.0\\.1|.*\\.ngrok-free\\.(dev|app)|.*\\.ngrok\\.io|.*\\.vercel\\.app)(:\\d+)?$"
+    r"^https?://(localhost|127\.0\.0\.1|.*\.ngrok-free\.(dev|app)|.*\.ngrok\.io|.*\.vercel\.app)(:\d+)?$"
 )
 _cors_kwargs = {
     "allow_origins": getattr(settings, "ALLOWED_ORIGINS", []),
