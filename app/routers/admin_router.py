@@ -157,9 +157,16 @@ async def list_airports(
 async def get_audit_logs(
     limit: int = Query(100, le=500),
     db: Session = Depends(get_db),
-    _admin_context: Dict[str, Any] = Depends(get_required_admin)
+    admin_context: Dict[str, Any] = Depends(get_required_admin)
 ):
-    logs = AdminService.get_audit_logs(db, limit=limit)
+    # Non–SUPER_ADMIN staff must not see break-glass SUPER_ADMIN actions
+    # on the day-to-day Admin Portal audit trail.
+    viewer_role = str(admin_context.get("role") or "").upper()
+    logs = AdminService.get_audit_logs(
+        db,
+        limit=limit,
+        exclude_super_admin_actors=(viewer_role != "SUPER_ADMIN"),
+    )
     return AdminApiResponse(success=True, data=logs)
 
 # Super Admin Role Management

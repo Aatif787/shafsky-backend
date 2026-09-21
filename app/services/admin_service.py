@@ -452,20 +452,68 @@ class AdminService:
         ]
 
     @classmethod
-    def get_audit_logs(cls, db: Session, limit: int = 100) -> List[Dict[str, Any]]:
-        logs = list(db.scalars(select(AuditLog).order_by(desc(AuditLog.created_at)).limit(limit)).all())
-        return [
-            {
-                "id": str(l.id),
-                "actorEmail": l.actor_email,
-                "action": l.action,
-                "resourceType": l.resource_type,
-                "resourceId": l.resource_id,
-                "details": l.details,
-                "timestamp": l.created_at.isoformat()
-            }
-            for l in logs
-        ]
+    def get_audit_logs(
+        cls,
+        db: Session,
+        limit: int = 100,
+        *,
+        exclude_super_admin_actors: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Return recent audit log rows for the admin portal.
+
+        When exclude_super_admin_actors is True (non–SUPER_ADMIN viewers),
+        actions performed by SUPER_ADMIN accounts are omitted so break-glass
+        activity is not visible on the day-to-day Admin dashboard.
+        """
+        fetch_limit = min(max(limit * 5, limit), 500) if exclude_super_admin_actors else limit
+        logs = list(
+            db.scalars(select(AuditLog).order_by(desc(AuditLog.created_at)).limit(fetch_limit)).all()
+        )
+
+        # Resolve actor roles in one query (by id and email).
+        actor_ids = {l.actor_id for l in logs if l.actor_id}
+        actor_emails = {(l.actor_email or "").lower().strip() for l in logs if l.actor_email}
+        role_by_id: Dict[Any, str] = {}
+        role_by_email: Dict[str, str] = {}
+        clauses = []
+        if actor_ids:
+            clauses.append(UserAuth.id.in_(list(actor_ids)))
+        if actor_emails:
+            clauses.append(func.lower(UserAuth.email).in_(list(actor_emails)))
+        if clauses:
+            users = list(db.scalars(select(UserAuth).where(or_(*clauses))).all())
+            for u in users:
+                role_name = u.role.value if hasattr(u.role, "value") else str(u.role)
+                role_by_id[u.id] = role_name
+                role_by_email[(u.email or "").lower().strip()] = role_name
+
+        result: List[Dict[str, Any]] = []
+        for l in logs:
+            email_key = (l.actor_email or "").lower().strip()
+            actor_role = None
+            if l.actor_id and l.actor_id in role_by_id:
+                actor_role = role_by_id[l.actor_id]
+            elif email_key in role_by_email:
+                actor_role = role_by_email[email_key]
+
+            if exclude_super_admin_actors and (actor_role or "").upper() == "SUPER_ADMIN":
+                continue
+
+            result.append(
+                {
+                    "id": str(l.id),
+                    "actorEmail": l.actor_email,
+                    "actorRole": actor_role,
+                    "action": l.action,
+                    "resourceType": l.resource_type,
+                    "resourceId": l.resource_id,
+                    "details": l.details,
+                    "timestamp": l.created_at.isoformat(),
+                }
+            )
+            if len(result) >= limit:
+                break
+        return result
 
     # ─── Airport Services & Pricing Matrix Management ───
     @classmethod
