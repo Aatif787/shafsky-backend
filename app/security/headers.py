@@ -6,7 +6,8 @@ def get_security_headers() -> dict:
         "X-XSS-Protection": "1; mode=block",
         "X-Permitted-Cross-Domain-Policies": "none",
         "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
-        "Cross-Origin-Resource-Policy": "same-origin",
+        # cross-origin: API is called from Vercel/admin portal on another origin
+        "Cross-Origin-Resource-Policy": "cross-origin",
         "Referrer-Policy": "strict-origin-when-cross-origin",
         "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
         "Content-Security-Policy": (

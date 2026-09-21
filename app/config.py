@@ -118,7 +118,10 @@ class Settings(BaseSettings):
 
     ALLOWED_ORIGINS_STR: str = os.getenv(
         "ALLOWED_ORIGINS",
-        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,http://localhost:3000,http://127.0.0.1:3000",
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,"
+        "http://localhost:3000,http://127.0.0.1:3000,"
+        "https://shafsky-admin-portal.vercel.app,"
+        "https://shafsky-frontend.vercel.app",
     )
     CORS_ALLOW_CREDENTIALS: bool = os.getenv("CORS_ALLOW_CREDENTIALS", "true").lower() in ("1", "true", "yes")
     # Behind ALB/CloudFront/Cloudflare set TRUST_PROXY=true so rate limits use X-Forwarded-For.

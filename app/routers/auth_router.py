@@ -64,14 +64,24 @@ def _clear_refresh_cookie(response: Response) -> None:
 
 def _validate_cookie_request_origin(request: Request) -> None:
     """Reject cross-site browser requests to cookie-authenticated endpoints."""
+    import re
+
     origin = (request.headers.get("origin") or "").rstrip("/")
     if not origin:
         # Non-browser clients generally do not send Origin.
         return
     allowed = {str(item).rstrip("/") for item in settings.ALLOWED_ORIGINS}
     request_origin = str(request.base_url).rstrip("/")
-    if origin != request_origin and origin not in allowed:
-        raise HTTPException(status_code=403, detail="Untrusted request origin.")
+    if origin == request_origin or origin in allowed:
+        return
+    # Match production CORS regex so Vercel preview deploys can refresh sessions.
+    vercel_ok = re.match(
+        r"^https?://(localhost|127\.0\.0\.1|.*\.ngrok-free\.(dev|app)|.*\.ngrok\.io|.*\.vercel\.app)(:\d+)?$",
+        origin,
+    )
+    if vercel_ok:
+        return
+    raise HTTPException(status_code=403, detail="Untrusted request origin.")
 
 
 def _parse_user_uuid(user_id_str: str | None) -> uuid.UUID | None:

@@ -108,7 +108,10 @@ app.add_middleware(IdempotencyMiddleware)
 # CORS Middleware MUST be added last so Starlette places it outermost.
 # This lets CORSMiddleware handle browser OPTIONS preflight requests before
 # they reach route/security/idempotency middleware.
-_CORS_DEV_ORIGIN_REGEX = (
+#
+# Production still allows *.vercel.app (admin portal + preview deploys) via regex;
+# explicit ALLOWED_ORIGINS remain required for non-Vercel frontends.
+_CORS_ORIGIN_REGEX = (
     r"^https?://(localhost|127\.0\.0\.1|.*\.ngrok-free\.(dev|app)|.*\.ngrok\.io|.*\.vercel\.app)(:\d+)?$"
 )
 _cors_kwargs = {
@@ -119,17 +122,20 @@ _cors_kwargs = {
         "Authorization",
         "Content-Type",
         "Accept",
+        "Accept-Language",
+        "Content-Language",
         "Origin",
         "X-Device-ID",
         "Idempotency-Key",
         "X-Idempotency-Key",
         "X-Correlation-ID",
-        # ngrok free-tier interstitial bypass; sent by admin portal when API host is ngrok
+        # ngrok free-tier interstitial bypass; portal may still send on older builds
         "ngrok-skip-browser-warning",
     ],
+    "expose_headers": ["X-Correlation-ID", "X-Request-ID"],
+    "max_age": 600,
+    "allow_origin_regex": _CORS_ORIGIN_REGEX,
 }
-if not _prod:
-    _cors_kwargs["allow_origin_regex"] = _CORS_DEV_ORIGIN_REGEX
 app.add_middleware(CORSMiddleware, **_cors_kwargs)
 
 @app.exception_handler(SQLAlchemyError)

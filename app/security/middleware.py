@@ -110,6 +110,10 @@ def get_rate_limit_policy(method: str, path: str) -> Optional[Dict[str, Any]]:
 
 class SecurityMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        # Never rate-limit or delay CORS preflight; CORSMiddleware answers OPTIONS.
+        if request.method.upper() == "OPTIONS":
+            return await call_next(request)
+
         client_ip = get_client_ip(request)
         policy = get_rate_limit_policy(request.method, request.url.path)
 
