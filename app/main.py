@@ -105,12 +105,11 @@ app.add_middleware(ObservabilityMiddleware)
 app.add_middleware(SecurityMiddleware)
 app.add_middleware(IdempotencyMiddleware)
 
-# CORS Middleware
-# The permissive tunnel/localhost origin regex is a DEVELOPMENT convenience and is
-# omitted entirely in production, so only explicit ALLOWED_ORIGINS are honoured and
-# credentialed cross-origin requests cannot come from arbitrary ngrok/vercel origins.
+# CORS Middleware MUST be added last so Starlette places it outermost.
+# This lets CORSMiddleware handle browser OPTIONS preflight requests before
+# they reach route/security/idempotency middleware.
 _CORS_DEV_ORIGIN_REGEX = (
-    r"^https?://(localhost|127\.0\.0\.1|.*\.ngrok-free\.(dev|app)|.*\.ngrok\.io|.*\.vercel\.app)(:\d+)?$"
+    r"^https?://(localhost|127\\.0\\.0\\.1|.*\\.ngrok-free\\.(dev|app)|.*\\.ngrok\\.io|.*\\.vercel\\.app)(:\\d+)?$"
 )
 _cors_kwargs = {
     "allow_origins": getattr(settings, "ALLOWED_ORIGINS", []),
