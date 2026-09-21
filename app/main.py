@@ -124,6 +124,8 @@ _cors_kwargs = {
         "Idempotency-Key",
         "X-Idempotency-Key",
         "X-Correlation-ID",
+        # ngrok free-tier interstitial bypass; sent by admin portal when API host is ngrok
+        "ngrok-skip-browser-warning",
     ],
 }
 if not _prod:
