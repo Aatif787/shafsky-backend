@@ -176,9 +176,13 @@ def test_04_http_only_cookie_security_flags():
     assert res.status_code == 200
     set_cookie_header = res.headers.get("set-cookie", "")
     assert "httponly" in set_cookie_header.lower()
-    # Production uses Strict+Secure; local/dev uses Lax without Secure for HTTP localhost.
-    assert "samesite=lax" in set_cookie_header.lower() or "samesite=strict" in set_cookie_header.lower()
-
+    # Local/dev: Lax. Production / cross-site Vercel: None (+ Secure).
+    low = set_cookie_header.lower()
+    assert (
+        "samesite=lax" in low
+        or "samesite=strict" in low
+        or "samesite=none" in low
+    )
 
 def test_05_expired_refresh_token_rejection():
     """Verify that expired refresh tokens are rejected with HTTP 401."""

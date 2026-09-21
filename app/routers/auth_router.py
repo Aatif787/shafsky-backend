@@ -9,7 +9,7 @@ from typing import Dict, Any
 
 from fastapi import APIRouter, HTTPException, Depends, Request, Response
 from sqlalchemy.orm import Session
-from sqlalchemy import select, update
+from sqlalchemy import select, update, func
 
 from app.database import get_db
 from app.models.schema import UserAuth, Profile, RefreshToken, Role
@@ -30,10 +30,15 @@ router = APIRouter(prefix="/api/auth", tags=["Authentication & Session Security"
 
 
 def _refresh_cookie_kwargs(max_age_seconds: int | None = None) -> dict:
-    """Shared cookie attributes so set/clear stay in sync for browsers."""
-    samesite = getattr(settings, "COOKIE_SAMESITE", None) or ("strict" if settings.is_production else "lax")
-    if samesite not in ("lax", "strict", "none"):
-        samesite = "lax"
+    """Shared cookie attributes so set/clear stay in sync for browsers.
+
+    Production cross-site (Vercel admin → Render API) requires SameSite=None + Secure.
+    Prefer settings.COOKIE_SAMESITE (defaults to none in production via config).
+    """
+    raw = (getattr(settings, "COOKIE_SAMESITE", None) or "").strip().lower()
+    samesite = raw if raw in ("lax", "strict", "none") else (
+        "none" if settings.is_production else "lax"
+    )
     # SameSite=None requires Secure; force Secure whenever none is used.
     secure = settings.is_production or (samesite == "none")
     kwargs = dict(
@@ -45,6 +50,16 @@ def _refresh_cookie_kwargs(max_age_seconds: int | None = None) -> dict:
     if max_age_seconds is not None:
         kwargs["max_age"] = max_age_seconds
     return kwargs
+
+
+def _find_user_by_email(db: Session, email: str) -> UserAuth | None:
+    """Case-insensitive email lookup (login normalizes to lowercase)."""
+    email_clean = (email or "").lower().strip()
+    if not email_clean:
+        return None
+    return db.scalar(
+        select(UserAuth).where(func.lower(UserAuth.email) == email_clean)
+    )
 
 
 def _set_refresh_cookie(response: Response, raw_token: str) -> None:
@@ -116,7 +131,7 @@ def _resolve_user(db: Session, decoded: Dict[str, Any], *, require_active: bool 
     if u_uuid:
         user = db.scalar(select(UserAuth).where(UserAuth.id == u_uuid))
     if not user and email:
-        user = db.scalar(select(UserAuth).where(UserAuth.email == email))
+        user = _find_user_by_email(db, email)
 
     if not user:
         raise HTTPException(status_code=404, detail="User account not found.")
@@ -193,7 +208,7 @@ async def login(
             existing_super = db.scalar(
                 select(UserAuth).where(UserAuth.role == Role.SUPER_ADMIN).limit(1)
             )
-            user = db.scalar(select(UserAuth).where(UserAuth.email == email))
+            user = _find_user_by_email(db, email)
             if not existing_super and not user:
                 user = UserAuth(
                     email=email,
@@ -205,7 +220,7 @@ async def login(
                 db.commit()
                 db.refresh(user)
 
-    user = db.scalar(select(UserAuth).where(UserAuth.email == email))
+    user = _find_user_by_email(db, email)
     if not user or not AuthService.verify_password(password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password credentials.")
 
