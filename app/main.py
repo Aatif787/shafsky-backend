@@ -100,14 +100,16 @@ async def startup_checks():
 
 from app.middleware.idempotency import IdempotencyMiddleware
 
-# CORS Middleware
-# Keep CORS as the outermost user middleware so browser OPTIONS preflight requests
-# are handled before rate limiting, security, or idempotency middleware.
-# The permissive tunnel/localhost origin regex is a DEVELOPMENT convenience and is
-# omitted entirely in production, so only explicit ALLOWED_ORIGINS are honoured and
-# credentialed cross-origin requests cannot come from arbitrary ngrok/vercel origins.
+# Observability, Security & Idempotency Middlewares
+app.add_middleware(ObservabilityMiddleware)
+app.add_middleware(SecurityMiddleware)
+app.add_middleware(IdempotencyMiddleware)
+
+# CORS Middleware MUST be added last so Starlette places it outermost.
+# This lets CORSMiddleware handle browser OPTIONS preflight requests before
+# they reach route/security/idempotency middleware.
 _CORS_DEV_ORIGIN_REGEX = (
-    r"^https?://(localhost|127\\.0\\.1|.*\\.ngrok-free\\.(dev|app)|.*\\.ngrok\\.io|.*\\.vercel\\.app)(:\\d+)?$"
+    r"^https?://(localhost|127\\.0\\.0\\.1|.*\\.ngrok-free\\.(dev|app)|.*\\.ngrok\\.io|.*\\.vercel\\.app)(:\\d+)?$"
 )
 _cors_kwargs = {
     "allow_origins": getattr(settings, "ALLOWED_ORIGINS", []),
@@ -127,13 +129,6 @@ _cors_kwargs = {
 if not _prod:
     _cors_kwargs["allow_origin_regex"] = _CORS_DEV_ORIGIN_REGEX
 app.add_middleware(CORSMiddleware, **_cors_kwargs)
-
-# Observability, Security & Idempotency Middlewares
-# These are added after CORS so CORS remains the outermost middleware and can
-# terminate OPTIONS preflight requests before they reach these layers.
-app.add_middleware(ObservabilityMiddleware)
-app.add_middleware(SecurityMiddleware)
-app.add_middleware(IdempotencyMiddleware)
 
 @app.exception_handler(SQLAlchemyError)
 async def sqlalchemy_exception_handler(_request, _exc: SQLAlchemyError):
