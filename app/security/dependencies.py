@@ -8,7 +8,7 @@ ADMIN_ROLES = [
 
 STAFF_OR_ADMIN_ROLES = [
     "SUPER_ADMIN", "ADMIN", "OPERATIONS_MANAGER", "DUTY_OFFICER",
-    "MEET_AND_ASSIST_STAFF", "CONCIERGE_TEAM", "CUSTOMER_SUPPORT"
+    "DISPATCHER", "MEET_AND_ASSIST_STAFF", "CONCIERGE_TEAM", "CUSTOMER_SUPPORT"
 ]
 
 def get_optional_user(authorization: Optional[str] = Header(None)) -> Optional[Dict[str, Any]]:

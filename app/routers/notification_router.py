@@ -41,6 +41,22 @@ async def get_notification_queue(
     queue = NotificationService.get_notification_queue(db, limit=limit)
     return NotificationApiResponse(success=True, data=queue)
 
+
+@router.get("/admin/booking/{booking_ref}", response_model=NotificationApiResponse)
+async def list_notifications_for_booking(
+    booking_ref: str,
+    limit: int = Query(100, le=500),
+    db: Session = Depends(get_db),
+    _admin_context: Dict[str, Any] = Depends(get_required_admin),
+):
+    """Communication history for a booking (email / WhatsApp delivery audit)."""
+    ref = (booking_ref or "").strip()
+    if not ref:
+        raise HTTPException(status_code=400, detail="booking_ref is required.")
+    items = NotificationService.get_notifications_for_booking(db, ref, limit=limit)
+    return NotificationApiResponse(success=True, data=items)
+
+
 @router.post("/{notification_id}/retry", response_model=NotificationApiResponse)
 async def retry_failed_notification(
     notification_id: str,
@@ -71,7 +87,7 @@ async def provider_webhook_listener(
     # Delivery receipt signatures are provider-specific. Do not acknowledge
     # unverified payloads until a verifier is implemented for that provider.
     raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        status_code=501,
         detail=f"Verified {provider} delivery webhooks are not implemented.",
     )
 

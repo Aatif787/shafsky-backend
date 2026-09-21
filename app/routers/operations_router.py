@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.operations_models import OperationsQueue
 from app.models.shared_domain import Note
-from app.services.operations_engine import OperationsEngine
+from app.services.operations_engine import OperationsEngine, DUTY_OFFICERS_BY_AIRPORT
 from app.services.timeline_service import TimelineService
 from app.security.dependencies import get_required_staff_or_admin
 from app.schemas.operations_schemas import (
@@ -30,6 +30,48 @@ from app.schemas.operations_schemas import (
 )
 
 router = APIRouter(prefix="/api/operations", tags=["Operations & Communication Engine"])
+
+
+@router.get(
+    "/duty-officers",
+    status_code=status.HTTP_200_OK,
+    summary="List Duty Officers",
+    description="Returns the duty-officer roster used by auto-assign, optionally filtered by airport.",
+)
+def list_duty_officers(
+    airport: Optional[str] = Query(None, description="3-letter IATA code"),
+    _staff=Depends(get_required_staff_or_admin),
+):
+    code = (airport or "").strip().upper()
+    if code:
+        officers = DUTY_OFFICERS_BY_AIRPORT.get(code, DUTY_OFFICERS_BY_AIRPORT.get("DEL", []))
+        return {
+            "success": True,
+            "airport": code,
+            "data": [
+                {"id": str(o["id"]), "name": o["name"], "shift": o.get("shift", "ALL")}
+                for o in officers
+            ],
+        }
+
+    # Flatten unique officers across hubs
+    seen = set()
+    flattened = []
+    for hub, officers in DUTY_OFFICERS_BY_AIRPORT.items():
+        for o in officers:
+            oid = str(o["id"])
+            if oid in seen:
+                continue
+            seen.add(oid)
+            flattened.append(
+                {
+                    "id": oid,
+                    "name": o["name"],
+                    "shift": o.get("shift", "ALL"),
+                    "airport": hub,
+                }
+            )
+    return {"success": True, "airport": None, "data": flattened}
 
 
 @router.get(
@@ -163,11 +205,31 @@ def assign_duty_officer(
             staff_name=payload.staff_name,
             assigned_by=actor_id,
         )
-    else:
+    elif payload.staff_name and not payload.staff_id:
+        # Name-only manual assign: stable synthetic UUID so we never silently auto-assign.
+        import uuid as _uuid
+
+        synthetic_id = _uuid.uuid5(
+            _uuid.NAMESPACE_DNS,
+            f"shafsky.duty-officer.{payload.staff_name.strip().lower()}",
+        )
+        updated = OperationsEngine.assign_officer_manual(
+            db=db,
+            booking_reference=booking_reference,
+            staff_id=synthetic_id,
+            staff_name=payload.staff_name.strip(),
+            assigned_by=actor_id,
+        )
+    elif not payload.staff_id and not payload.staff_name:
         OperationsEngine.auto_assign_officer(db, item)
         db.commit()
         db.refresh(item)
         updated = item
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Manual assign requires staff_name (and optionally staff_id). Omit both for auto-assign.",
+        )
 
     return OperationsQueueItemResponse.model_validate(updated)
 

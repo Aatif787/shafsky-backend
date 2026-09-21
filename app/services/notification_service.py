@@ -242,23 +242,64 @@ class NotificationService:
     @classmethod
     def get_notification_queue(cls, db: Session, limit: int = 100) -> List[Dict[str, Any]]:
         records = list(db.scalars(select(NotificationRecord).order_by(desc(NotificationRecord.created_at)).limit(limit)).all())
-        return [
-            {
-                "id": str(r.id),
-                "recipientEmail": r.recipient_email,
-                "recipientPhone": r.recipient_phone,
-                "templateType": r.template_type,
-                "channel": r.channel,
-                "status": r.status.value if isinstance(r.status, NotificationStatus) else str(r.status),
-                "attempts": r.attempts,
-                "maxAttempts": r.max_attempts,
-                "messageId": r.message_id,
-                "errorLog": r.error_log,
-                "deliveredAt": r.delivered_at.isoformat() if r.delivered_at else None,
-                "createdAt": r.created_at.isoformat()
-            }
-            for r in records
-        ]
+        return [cls._serialize_notification_record(r) for r in records]
+
+    @classmethod
+    def _serialize_notification_record(cls, r: NotificationRecord) -> Dict[str, Any]:
+        payload = r.payload if isinstance(r.payload, dict) else {}
+        return {
+            "id": str(r.id),
+            "recipientEmail": r.recipient_email,
+            "recipientPhone": r.recipient_phone,
+            "templateType": r.template_type,
+            "channel": r.channel,
+            "status": r.status.value if isinstance(r.status, NotificationStatus) else str(r.status),
+            "attempts": r.attempts,
+            "maxAttempts": r.max_attempts,
+            "messageId": r.message_id,
+            "errorLog": r.error_log,
+            "deliveredAt": r.delivered_at.isoformat() if r.delivered_at else None,
+            "createdAt": r.created_at.isoformat() if r.created_at else None,
+            "updatedAt": r.updated_at.isoformat() if r.updated_at else None,
+            "bookingRef": payload.get("booking_ref") or payload.get("bookingRef"),
+            "payload": payload,
+        }
+
+    @classmethod
+    def get_notifications_for_booking(
+        cls,
+        db: Session,
+        booking_ref: str,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """Return notification_records whose payload references this booking_ref."""
+        ref = (booking_ref or "").strip()
+        if not ref:
+            return []
+
+        ref_lower = ref.lower()
+        scan_limit = max(limit * 25, 500)
+        records = list(
+            db.scalars(
+                select(NotificationRecord)
+                .order_by(desc(NotificationRecord.created_at))
+                .limit(scan_limit)
+            ).all()
+        )
+        matched: List[NotificationRecord] = []
+        for r in records:
+            payload = r.payload if isinstance(r.payload, dict) else {}
+            candidate = str(
+                payload.get("booking_ref")
+                or payload.get("bookingRef")
+                or payload.get("request_reference")
+                or ""
+            ).strip()
+            if candidate.lower() == ref_lower:
+                matched.append(r)
+            if len(matched) >= limit:
+                break
+        return [cls._serialize_notification_record(r) for r in matched]
 
     @classmethod
     def _acquire_notification_claim(
@@ -488,11 +529,175 @@ class NotificationService:
         return result
 
     @classmethod
+    def _dispatch_ground_transport_enquiry_whatsapp(cls, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Dispatches an outbound WhatsApp notification to WHATSAPP_OFFICER_NOTIFY_PHONE
+        for a newly created Ground Transport enquiry.
+        Never raises: all network and Meta API failures are caught and logged safely.
+        """
+        import os
+        booking_ref = str(context.get("booking_ref") or context.get("bookingRef") or "N/A")
+        details = context.get("details") or {}
+        options = context.get("service_options") or {}
+
+        officer_phone = (
+            getattr(settings, "WHATSAPP_OFFICER_NOTIFY_PHONE", None)
+            or os.getenv("WHATSAPP_OFFICER_NOTIFY_PHONE", "")
+            or "919599087959"
+        ).strip()
+
+        if not officer_phone:
+            logger.warning(
+                "Ground Transport enquiry WhatsApp skipped: WHATSAPP_OFFICER_NOTIFY_PHONE is not configured",
+                extra={"booking_ref": booking_ref},
+            )
+            return {"status": "BYPASSED", "reason": "officer_phone_not_configured"}
+
+        customer_name = str(context.get("passenger_name") or context.get("passengerName") or "N/A").strip()
+        customer_phone = str(context.get("passenger_phone") or context.get("passengerPhone") or "N/A").strip()
+        customer_email = str(context.get("passenger_email") or context.get("passengerEmail") or "N/A").strip()
+
+        vehicle_name = (
+            details.get("vehicle_name")
+            or details.get("vehicleName")
+            or options.get("vehicle_name")
+            or context.get("service_type")
+            or context.get("service_name")
+        )
+        vehicle_id = (
+            details.get("vehicle_id")
+            or details.get("vehicleId")
+            or options.get("vehicle_id")
+        )
+        vehicle_category = (
+            details.get("vehicle_category")
+            or details.get("vehicleCategory")
+            or options.get("vehicle_category")
+            or (context.get("service_type") if context.get("service_type") != vehicle_name else None)
+        )
+        provider = (
+            details.get("provider")
+            or details.get("selected_provider")
+            or options.get("provider")
+            or options.get("selected_provider")
+        )
+        pickup_loc = (
+            context.get("origin_code")
+            or details.get("pickup_location")
+            or details.get("pickup")
+            or options.get("pickup_location")
+            or options.get("pickup")
+            or "N/A"
+        )
+        dropoff_loc = (
+            context.get("dest_code")
+            or details.get("dropoff_location")
+            or details.get("dropoff")
+            or options.get("dropoff_location")
+            or options.get("dropoff")
+            or "N/A"
+        )
+        service_date = (
+            context.get("departure_time")
+            or details.get("service_date")
+            or details.get("serviceDate")
+            or options.get("service_date")
+        )
+        passenger_count = (
+            details.get("passenger_count")
+            or details.get("passengerCount")
+            or details.get("passengers")
+            or options.get("passenger_count")
+            or context.get("passenger_count")
+        )
+        reference_price = (
+            details.get("reference_price")
+            or details.get("referencePrice")
+            or details.get("estimated_price")
+            or details.get("estimatedPrice")
+            or options.get("reference_price")
+            or options.get("estimated_price")
+        )
+        notes = (
+            context.get("notes")
+            or details.get("additional_requirements")
+            or details.get("notes")
+        )
+
+        lines = [
+            "🚗 *NEW TRANSPORT ENQUIRY*",
+            "",
+            f"• *Reference*: {booking_ref}",
+            f"• *Customer*: {customer_name}",
+            f"• *Phone*: {customer_phone}",
+            f"• *Email*: {customer_email}",
+        ]
+
+        if vehicle_name:
+            lines.append(f"• *Vehicle*: {vehicle_name}")
+        if vehicle_id:
+            lines.append(f"• *Vehicle ID*: {vehicle_id}")
+        if vehicle_category:
+            lines.append(f"• *Category*: {vehicle_category}")
+        if provider:
+            lines.append(f"• *Provider*: {provider}")
+
+        lines.append(f"• *Pickup*: {pickup_loc}")
+        lines.append(f"• *Drop*: {dropoff_loc}")
+
+        if service_date:
+            lines.append(f"• *Date*: {service_date}")
+        if passenger_count is not None and str(passenger_count).strip() and str(passenger_count) != "0":
+            lines.append(f"• *Passengers*: {passenger_count}")
+
+        if reference_price is not None and str(reference_price).strip() and str(reference_price) != "0":
+            try:
+                num_val = float(reference_price)
+                price_str = f"₹{num_val:,.2f}" if num_val > 0 else str(reference_price)
+            except (ValueError, TypeError):
+                price_str = str(reference_price)
+            lines.append(f"• *Reference Rate*: {price_str} (REFERENCE PRICING — NOT FINAL QUOTE)")
+
+        if notes and str(notes).strip():
+            lines.append(f"• *Additional Requirements*: {str(notes).strip()}")
+
+        lines.append("")
+        lines.append("⚡ *Action*: Team to contact customer manually for availability & quotation.")
+
+        message_body = "\n".join(lines)
+
+        try:
+            from app.integrations.whatsapp.client import whatsapp_client
+            logger.info("Dispatching Ground Transport enquiry WhatsApp notification for %s", booking_ref)
+            result = whatsapp_client.send_text_message(officer_phone, message_body)
+            if result.get("success"):
+                logger.info(
+                    "Ground Transport WhatsApp notification successfully dispatched for %s (msg id: %s)",
+                    booking_ref,
+                    result.get("message_id"),
+                )
+                return {"status": "DELIVERED", "message_id": result.get("message_id")}
+            else:
+                logger.warning(
+                    "Ground Transport WhatsApp notification dispatch failed for %s: %s",
+                    booking_ref,
+                    result.get("error"),
+                )
+                return {"status": "FAILED", "error": result.get("error")}
+        except Exception as exc:
+            logger.warning(
+                "Ground Transport WhatsApp notification encountered exception for %s: %s",
+                booking_ref,
+                type(exc).__name__,
+            )
+            return {"status": "FAILED", "error": type(exc).__name__}
+
+    @classmethod
     def notify_booking_created(cls, db: Session, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        After a booking is persisted, suppresses email notifications while payment is pending.
-        Official customer confirmation and operational alerts are sent upon successful payment
-        via `notify_booking_confirmed`.
+        After a booking is persisted:
+        - For Ground Transport enquiries: dispatches WhatsApp notification to the Shafsky operations team.
+        - For pending payments (airport assistance): suppresses customer email until payment confirmation.
         """
         booking_ref = str(context.get("booking_ref") or context.get("bookingRef") or "")
         summary: Dict[str, Any] = {
@@ -500,6 +705,28 @@ class NotificationService:
             "customer": {"status": "SKIPPED", "reason": "pending_payment_suppressed"},
             "admin": [],
         }
+
+        service_category = str(
+            context.get("service_category") or context.get("serviceCategory") or ""
+        ).strip()
+
+        # Scoped specifically to Ground Transport enquiries
+        if service_category.lower() == "ground transport":
+            try:
+                wa_res = cls._dispatch_ground_transport_enquiry_whatsapp(context)
+                summary["admin"].append({
+                    "channel": "WHATSAPP",
+                    "status": wa_res.get("status", "DISPATCHED"),
+                    "details": wa_res,
+                })
+            except Exception as err:
+                logger.warning(
+                    "Ground transport WhatsApp notification failed for %s: %s",
+                    booking_ref,
+                    type(err).__name__,
+                )
+                summary["admin"].append({"channel": "WHATSAPP", "status": "FAILED"})
+
         logger.info(
             "Booking created with pending payment. Customer email suppressed until payment confirmation.",
             extra={"booking_ref": booking_ref},

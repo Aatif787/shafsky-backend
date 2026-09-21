@@ -368,7 +368,12 @@ async def cancel_booking(
     user_context: Dict[str, Any] = Depends(get_required_user)
 ):
     email = user_context.get("sub") or user_context.get("email") or ""
-    is_admin = user_context.get("role") in ["ADMIN", "SUPER_ADMIN", "DISPATCHER"]
+    is_admin = user_context.get("role") in [
+        "SUPER_ADMIN",
+        "ADMIN",
+        "OPERATIONS_MANAGER",
+        "DISPATCHER",
+    ]
     
     updated_booking = BookingService.cancel_booking(
         db,

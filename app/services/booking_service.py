@@ -624,20 +624,41 @@ class BookingService:
 
         # Lightweight payload for category-specific validators (free-text routes, not IATA).
         options: Dict[str, Any] = dict(details or {})
-        if origin:
-            options.setdefault("origin", origin)
-            options.setdefault("pickup_location", origin)
-            options.setdefault("pickup", origin)
-        if destination:
-            options.setdefault("destination", destination)
-            options.setdefault("dropoff_location", destination)
-            options.setdefault("dropoff", destination)
+        resolved_origin = (origin or options.get("pickup_location") or options.get("pickup") or "").strip() or None
+        resolved_dest = (destination or options.get("dropoff_location") or options.get("dropoff") or "").strip() or None
+        resolved_date = (service_date or options.get("service_date") or "").strip() or None
+
+        if resolved_origin:
+            options.setdefault("origin", resolved_origin)
+            options.setdefault("pickup_location", resolved_origin)
+            options.setdefault("pickup", resolved_origin)
+        if resolved_dest:
+            options.setdefault("destination", resolved_dest)
+            options.setdefault("dropoff_location", resolved_dest)
+            options.setdefault("dropoff", resolved_dest)
+        if resolved_date:
+            options.setdefault("service_date", resolved_date)
         if notes:
             options.setdefault("medical_notes", notes)
             options.setdefault("patient_condition", notes)
 
         class _EnquiryPayload:
-            pass
+            passenger_name: str = ""
+            passenger_email: str = ""
+            passenger_phone: str = ""
+            service_category: str = ""
+            service_type: str = ""
+            origin_code: Optional[str] = None
+            dest_code: Optional[str] = None
+            flight_num: Optional[str] = None
+            departure_time: Optional[datetime] = None
+            arrival_time: Optional[datetime] = None
+            notes: Optional[str] = None
+            service_options: Dict[str, Any] = {}
+            options: Dict[str, Any] = {}
+            selected_services: Dict[str, Any] = {}
+            metadata_json: Dict[str, Any] = {}
+            metadata: Dict[str, Any] = {}
 
         payload = _EnquiryPayload()
         payload.passenger_name = passenger_name.strip()
@@ -645,8 +666,8 @@ class BookingService:
         payload.passenger_phone = passenger_phone.strip()
         payload.service_category = service_category
         payload.service_type = service_type
-        payload.origin_code = None
-        payload.dest_code = None
+        payload.origin_code = resolved_origin
+        payload.dest_code = resolved_dest
         payload.flight_num = None
         payload.departure_time = None
         payload.arrival_time = None
@@ -668,9 +689,9 @@ class BookingService:
             "enquiry": True,
             "quote_only": True,
             "source": "web_solutions",
-            "origin_label": (origin or "").strip() or None,
-            "destination_label": (destination or "").strip() or None,
-            "service_date": (service_date or "").strip() or None,
+            "origin_label": (resolved_origin or "").strip() or None,
+            "destination_label": (resolved_dest or "").strip() or None,
+            "service_date": (resolved_date or "").strip() or None,
             "details": details or {},
         }
 
@@ -689,8 +710,8 @@ class BookingService:
                 passenger_phone=payload.passenger_phone,
                 service_category=resolved_category,
                 flight_num=None,
-                origin_code=None,
-                dest_code=None,
+                origin_code=resolved_origin,
+                dest_code=resolved_dest,
                 departure_time=None,
                 arrival_time=None,
                 service_type=service_type.strip(),
@@ -712,24 +733,34 @@ class BookingService:
                 db.refresh(new_booking)
                 try:
                     from app.services.notification_service import NotificationService
+                    passenger_count = (
+                        (details or {}).get("passenger_count")
+                        or (details or {}).get("passengerCount")
+                        or options.get("passenger_count")
+                        or 1
+                    )
                     NotificationService.notify_booking_created(db, {
                         "booking_ref": new_booking.booking_ref,
                         "passenger_name": new_booking.passenger_name,
                         "passenger_email": new_booking.passenger_email,
                         "passenger_phone": new_booking.passenger_phone,
-                        "passenger_count": 1,
+                        "passenger_count": passenger_count,
                         "flight_num": None,
-                        "origin_code": origin,
-                        "dest_code": destination,
+                        "origin_code": resolved_origin,
+                        "dest_code": resolved_dest,
                         "airport_code": None,
                         "journey_type": "ENQUIRY",
+                        "service_category": resolved_category,
                         "service_type": new_booking.service_type,
                         "service_name": new_booking.service_type,
-                        "departure_time": service_date,
+                        "departure_time": resolved_date,
                         "terminal": None,
                         "total_amount": 0.0,
                         "currency": "INR",
                         "status": "PENDING",
+                        "notes": notes,
+                        "details": details or {},
+                        "service_options": options,
                     })
                 except Exception:
                     logger.exception(
@@ -847,7 +878,35 @@ class BookingService:
                 pass
 
         if service_category and service_category.strip() and service_category.upper() != "ALL":
-            stmt = stmt.where(Booking.service_category.ilike(service_category.strip()))
+            # Canonical filters expand to WhatsApp / legacy category aliases so
+            # operators can find desk work regardless of channel taxonomy.
+            CATEGORY_FILTER_ALIASES: Dict[str, List[str]] = {
+                "Airport Assistance": [
+                    "Airport Assistance",
+                    "Airport Services",
+                    "Meet & Greet",
+                ],
+                "Ground Transport": [
+                    "Ground Transport",
+                    "Hotel & Transportation",
+                    "Transportation Services",
+                ],
+                "Travel Support": [
+                    "Travel Support",
+                    "Travel Services",
+                    "Hotel Services",
+                    "Hotel Booking",
+                ],
+                "Medical Assistance": ["Medical Assistance", "Medical Services"],
+                "Cargo & Logistics": ["Cargo & Logistics", "Cargo"],
+                "Private Charter": ["Private Charter", "Charter"],
+                "Meet & Greet": ["Meet & Greet", "Airport Assistance", "Airport Services"],
+            }
+            raw_cat = service_category.strip()
+            aliases = CATEGORY_FILTER_ALIASES.get(raw_cat, [raw_cat])
+            stmt = stmt.where(
+                or_(*[Booking.service_category.ilike(alias) for alias in aliases])
+            )
 
         if date_from:
             try:
