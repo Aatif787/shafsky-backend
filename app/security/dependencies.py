@@ -6,6 +6,10 @@ ADMIN_ROLES = [
     "SUPER_ADMIN", "ADMIN", "OPERATIONS_MANAGER",
 ]
 
+FINANCE_REFUND_ROLES = [
+    "SUPER_ADMIN", "ADMIN",
+]
+
 STAFF_OR_ADMIN_ROLES = [
     "SUPER_ADMIN", "ADMIN", "OPERATIONS_MANAGER", "DUTY_OFFICER",
     "DISPATCHER", "MEET_AND_ASSIST_STAFF", "CONCIERGE_TEAM", "CUSTOMER_SUPPORT"
@@ -59,6 +63,59 @@ def get_required_staff_or_admin(authorization: Optional[str] = Header(None)) -> 
     if user.get("role") not in STAFF_OR_ADMIN_ROLES:
         raise HTTPException(status_code=403, detail="Access denied. Staff or administrative privileges required.")
     return user
+
+
+def get_required_finance_admin(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    """Refunds: ADMIN / SUPER_ADMIN only."""
+    user = get_required_user(authorization)
+    if user.get("role") not in FINANCE_REFUND_ROLES:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied. Only Admin or Super Admin may issue refunds.",
+        )
+    return user
+
+
+def user_owns_booking(user: Optional[Dict[str, Any]], booking) -> bool:
+    """True if authenticated user is staff or matches booking owner/email."""
+    if not user or not booking:
+        return False
+    role = user.get("role")
+    if role in STAFF_OR_ADMIN_ROLES:
+        return True
+    user_id = str(user.get("user_id") or user.get("sub") or "").strip()
+    email = (user.get("email") or user.get("sub") or "").strip().lower()
+    booking_user_id = str(getattr(booking, "user_id", "") or "").strip()
+    booking_email = (getattr(booking, "passenger_email", None) or "").strip().lower()
+    if user_id and booking_user_id and user_id == booking_user_id:
+        return True
+    if email and booking_email and email == booking_email:
+        return True
+    return False
+
+
+def assert_payment_access(
+    *,
+    booking,
+    payment_token: Optional[str] = None,
+    current_user: Optional[Dict[str, Any]] = None,
+) -> None:
+    """
+    Allow payment initiate/retry/create-order when:
+    - caller owns the booking (or is staff), OR
+    - a valid signed payment_token for this booking_ref is presented.
+    """
+    from app.security.payment_token import verify_payment_token
+
+    if user_owns_booking(current_user, booking):
+        return
+    ref = getattr(booking, "booking_ref", None) or ""
+    if verify_payment_token(payment_token, booking_ref=ref):
+        return
+    raise HTTPException(
+        status_code=401,
+        detail="Payment session required. Provide a valid payment_token or sign in as the booking owner.",
+    )
 
 # Aliases and Helpers for Workflow and Endpoint Authorization
 get_current_user_auth = get_optional_user

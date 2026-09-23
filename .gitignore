@@ -34,3 +34,6 @@ audit_p3.txt
 scratch_mapping.txt
 .coverage
 htmlcov/
+
+# ICICI vendor kits may contain UAT credentials — never commit
+docs/icici/

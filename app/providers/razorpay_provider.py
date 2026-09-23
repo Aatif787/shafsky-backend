@@ -184,8 +184,14 @@ class RazorpayProvider:
             safe_notes[str(k)[:256]] = str(v)[:256]
 
         from app.core.runtime import offline_third_party_calls
+        from app.security.payment_token import allow_payment_simulation
 
         if not self.is_configured() or offline_third_party_calls():
+            if not allow_payment_simulation():
+                return {
+                    "success": False,
+                    "error": "Razorpay is not configured. Set ALLOW_PAYMENT_SIMULATION=true only for explicit local tests.",
+                }
             logger.warning("[Razorpay] Provider not configured in environment. Using simulated order fallback.")
             fake_order_id = f"order_sim_{receipt_ref.replace('-', '')}"
             return {
@@ -324,13 +330,6 @@ class RazorpayProvider:
             return False
 
         if not self.webhook_secret:
-            # Never accept unsigned or simulated webhooks when secret is missing in production.
-            from app.config import settings as _settings
-            if _settings.is_production:
-                return False
-            # Dev/test simulation only
-            if not self.is_configured() and signature_header in ("simulated_webhook_signature", "test_signature", "simulated_sig"):
-                return True
             return False
 
         computed_signature = hmac.new(
@@ -355,9 +354,13 @@ class RazorpayProvider:
         if not razorpay_order_id or not razorpay_payment_id or not razorpay_signature:
             return False
 
+        from app.security.payment_token import allow_payment_simulation
+
         if not self.key_secret:
-            # Fallback for dev / test simulation environments
-            if not self.is_configured() and razorpay_signature in ("simulated_signature", "test_signature", "simulated_sig"):
+            # Explicit opt-in only — never fail-open on missing secrets
+            if allow_payment_simulation() and razorpay_signature in (
+                "simulated_signature", "test_signature", "simulated_sig",
+            ):
                 return True
             return False
 

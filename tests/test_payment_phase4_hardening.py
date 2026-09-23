@@ -257,6 +257,8 @@ def test_double_payment_protection():
 
 def test_payment_retry_on_pending_booking():
     """Verify customer can retry payment on pending booking without duplicating booking."""
+    from app.security.payment_token import mint_payment_token
+
     db = TestingSessionLocal()
     booking_ref = f"SHF-RTRY-{uuid.uuid4().hex[:6].upper()}"
     booking = Booking(
@@ -274,13 +276,18 @@ def test_payment_retry_on_pending_booking():
     db.add(booking)
     db.commit()
 
-    # Call Retry Endpoint
-    res = client.post("/api/payments/retry", json={"booking_ref": booking_ref})
+    # Call Retry Endpoint with signed payment session
+    res = client.post(
+        "/api/payments/retry",
+        json={"booking_ref": booking_ref, "payment_token": mint_payment_token(booking_ref)},
+    )
     assert res.status_code == 200
     data = res.json()["data"]
     assert data["bookingRef"] == booking_ref
     assert data["totalAmount"] == 3200.0
     assert data["razorpay_order_id"].startswith("order_")
+    assert "passengerEmail" not in data
+    assert data.get("payment_token")
 
     # Complete payment on the retried order
     v_res = client.post("/api/payments/verify", json={
@@ -300,6 +307,8 @@ def test_payment_retry_on_pending_booking():
 
 def test_payment_retry_rejected_on_confirmed_booking():
     """Verify attempting to retry payment on already confirmed booking is rejected."""
+    from app.security.payment_token import mint_payment_token
+
     db = TestingSessionLocal()
     booking_ref = f"SHF-CONF-{uuid.uuid4().hex[:6].upper()}"
     booking = Booking(
@@ -317,7 +326,10 @@ def test_payment_retry_rejected_on_confirmed_booking():
     db.add(booking)
     db.commit()
 
-    res = client.post("/api/payments/retry", json={"booking_ref": booking_ref})
+    res = client.post(
+        "/api/payments/retry",
+        json={"booking_ref": booking_ref, "payment_token": mint_payment_token(booking_ref)},
+    )
     assert res.status_code == 400
     assert "already confirmed" in res.json()["detail"]
     db.close()

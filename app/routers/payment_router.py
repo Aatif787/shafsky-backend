@@ -30,7 +30,14 @@ from app.schemas.payment import (
     RazorpayCreateOrderResponse,
 )
 from app.services.payment_service import PaymentService
-from app.security.dependencies import get_required_user, get_required_staff_or_admin, get_required_admin
+from app.security.dependencies import (
+    get_required_user,
+    get_required_staff_or_admin,
+    get_required_admin,
+    get_required_finance_admin,
+    get_optional_user,
+    assert_payment_access,
+)
 
 router = APIRouter(prefix="/api/payments", tags=["Payment & Invoicing"])
 
@@ -50,16 +57,24 @@ router = APIRouter(prefix="/api/payments", tags=["Payment & Invoicing"])
 )
 async def create_order_endpoint(
     payload: RazorpayCreateOrderRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user=Depends(get_optional_user),
 ):
     """
     Creates an official Razorpay Order for Standard Checkout.
     Resolves authoritative amount from the persisted Booking and validates amounts.
+    Requires booking ownership or a signed payment_token.
     """
     from app.providers.razorpay_provider import razorpay_provider
     from app.models.schema import Booking, BookingStatus
     from app.models.airport import AirportBooking
     from app.models.payment import PaymentTransaction, PaymentStatus, PaymentMethod
+
+    if PaymentService.active_payment_gateway() == "ICICI":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Active payment gateway is ICICI. Use /api/payments/retry or /api/payments/icici/initiate.",
+        )
 
     booking_ref = (payload.receipt or (payload.notes.get("booking_ref") if payload.notes else None) or "").strip()
 
@@ -82,6 +97,15 @@ async def create_order_endpoint(
     customer_id = None
 
     if booking:
+        assert_payment_access(
+            booking=booking,
+            payment_token=payload.payment_token,
+            current_user=current_user,
+        )
+        try:
+            PaymentService.assert_gateway_exclusive(db, booking, "RAZORPAY")
+        except ValueError as err:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(err)) from err
         if booking.status == BookingStatus.CONFIRMED:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -100,6 +124,14 @@ async def create_order_endpoint(
     else:
         apt_booking = db.scalar(select(AirportBooking).where(AirportBooking.booking_reference == booking_ref))
         if apt_booking:
+            from app.security.payment_token import verify_payment_token
+            from app.security.dependencies import STAFF_OR_ADMIN_ROLES
+            is_staff = bool(current_user and current_user.get("role") in STAFF_OR_ADMIN_ROLES)
+            if not is_staff and not verify_payment_token(payload.payment_token, booking_ref=booking_ref):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Payment session required. Provide a valid payment_token or sign in as staff.",
+                )
             if str(apt_booking.status or "").upper() in {
                 "CONFIRMED",
                 "CANCELLED",
@@ -198,7 +230,11 @@ async def create_order_endpoint(
             status=PaymentStatus.PENDING,
             gateway_provider="RAZORPAY",
             gateway_payment_id=order_id,
-            gateway_response=res
+            gateway_response=PaymentService.sanitize_gateway_response(res) or {
+                "order_id": order_id,
+                "amount": authoritative_paise,
+                "currency": authoritative_currency,
+            },
         )
         db.add(tx)
     else:
@@ -246,7 +282,8 @@ def initiate_payment_endpoint(
                 "currency": tx.currency,
                 "status": tx.status.value if hasattr(tx.status, "value") else str(tx.status),
                 "gateway_payment_id": tx.gateway_payment_id,
-                "gateway_response": tx.gateway_response
+                "gateway_provider": tx.gateway_provider,
+                "gateway_response": PaymentService.sanitize_gateway_response(tx.gateway_response),
             }
         )
     except ValueError as err:
@@ -366,10 +403,16 @@ def payment_webhook_endpoint(
 def process_refund_endpoint(
     payload: RefundRequest,
     db: Session = Depends(get_db),
-    current_user = Depends(get_required_staff_or_admin)
+    current_user = Depends(get_required_finance_admin)
 ):
     try:
-        ref = PaymentService.process_refund(db, payload)
+        actor = (
+            current_user.get("email")
+            or current_user.get("sub")
+            or current_user.get("user_id")
+            or "unknown@shafsky.com"
+        )
+        ref = PaymentService.process_refund(db, payload, actor_email=str(actor))
         return PaymentApiResponse(
             success=True,
             data={
@@ -619,6 +662,131 @@ async def razorpay_webhook_endpoint(
     )
 
 
+@router.api_route(
+    "/icici/callback",
+    methods=["GET", "POST"],
+    include_in_schema=True,
+    summary="ICICI Bank payment return/callback",
+)
+@router.api_route(
+    "/icici/return",
+    methods=["GET", "POST"],
+    include_in_schema=False,
+)
+async def icici_payment_callback(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """
+    Merchant returnURL for ICICI hosted checkout.
+
+    - GET: ICICI page Back/Cancel (browser navigation). Never confirms payment;
+      redirects to the frontend payment-result page as cancelled.
+    - POST: Actual payment response (form-urlencoded). Verifies secureHash + STATUS
+      then confirms via handle_verified_payment.
+    """
+    from fastapi.responses import RedirectResponse, HTMLResponse
+    from app.providers.icici_provider import icici_provider
+
+    # --- Back / Cancel (GET) — never confirm ---
+    if request.method == "GET":
+        try:
+            outcome = PaymentService.handle_icici_browser_back(
+                db,
+                {k: v for k, v in request.query_params.multi_items()},
+            )
+        except Exception:
+            logger.exception("[ICICI] browser Back/Cancel handler error")
+            outcome = {
+                "redirect_url": icici_provider.resolve_customer_return_url(
+                    "unknown", success=False, cancelled=True
+                )
+            }
+        redirect_url = outcome.get("redirect_url")
+        if redirect_url:
+            return RedirectResponse(url=redirect_url, status_code=303)
+        return HTMLResponse(
+            content="<html><body><h1>Payment cancelled. You may close this window.</h1></body></html>",
+            status_code=200,
+        )
+
+    # --- Payment response (POST) — confirm path unchanged ---
+    params: dict = {}
+    try:
+        content_type = (request.headers.get("content-type") or "").lower()
+        if "application/json" in content_type:
+            body = await request.json()
+            if isinstance(body, dict):
+                params.update(body)
+        else:
+            form = await request.form()
+            params.update({k: form.get(k) for k in form.keys()})
+        params.update({k: v for k, v in request.query_params.multi_items()})
+    except Exception:
+        logger.exception("[ICICI] Failed to parse callback payload")
+        return HTMLResponse(
+            content="<html><body><h1>Payment response could not be processed.</h1></body></html>",
+            status_code=400,
+        )
+
+    try:
+        outcome = PaymentService.process_icici_callback(db, params)
+    except Exception:
+        logger.exception("[ICICI] callback processing error")
+        return HTMLResponse(
+            content="<html><body><h1>Payment verification failed. Please contact support.</h1></body></html>",
+            status_code=500,
+        )
+
+    redirect_url = outcome.get("redirect_url")
+    if redirect_url:
+        return RedirectResponse(url=redirect_url, status_code=303)
+    return HTMLResponse(
+        content="<html><body><h1>Payment processing complete. You may close this window.</h1></body></html>",
+        status_code=200,
+    )
+
+
+@router.post(
+    "/icici/initiate",
+    response_model=PaymentApiResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Initiate ICICI payment for an existing pending booking",
+)
+def icici_initiate_endpoint(
+    payload: PaymentRetryRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_optional_user),
+):
+    """Creates/reuses an ICICI initiateSale session for a PENDING booking."""
+    from app.models.schema import Booking
+    from app.providers.icici_provider import icici_provider
+
+    if not icici_provider.is_configured():
+        raise HTTPException(status_code=503, detail="ICICI payment gateway is not configured.")
+
+    booking = db.scalar(select(Booking).where(Booking.booking_ref == payload.booking_ref))
+    if not booking:
+        raise HTTPException(status_code=404, detail=f"Booking with reference '{payload.booking_ref}' not found.")
+    assert_payment_access(
+        booking=booking,
+        payment_token=payload.payment_token,
+        current_user=current_user,
+    )
+    try:
+        data = PaymentService._retry_icici_payment(
+            db,
+            booking,
+            user_id=str(current_user.get("user_id")) if current_user and current_user.get("user_id") else None,
+        )
+        return PaymentApiResponse(success=True, data=data)
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+    except Exception as exc:
+        logger.exception("[ICICI] initiate endpoint failed")
+        raise HTTPException(status_code=500, detail="ICICI payment initiation failed.") from exc
+
+
 @router.post(
     "/retry",
     response_model=PaymentApiResponse,
@@ -627,11 +795,27 @@ async def razorpay_webhook_endpoint(
 )
 def retry_payment_endpoint(
     payload: PaymentRetryRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user=Depends(get_optional_user),
 ):
-    """Generates a fresh Razorpay order for an existing PENDING booking without duplicating the booking."""
+    """Generates a fresh payment session for an existing PENDING booking without duplicating the booking."""
+    from app.models.schema import Booking
+
+    booking = db.scalar(select(Booking).where(Booking.booking_ref == payload.booking_ref))
+    if not booking:
+        raise HTTPException(status_code=404, detail=f"Booking with reference '{payload.booking_ref}' not found.")
+    assert_payment_access(
+        booking=booking,
+        payment_token=payload.payment_token,
+        current_user=current_user,
+    )
     try:
-        data = PaymentService.retry_booking_payment(db, booking_ref=payload.booking_ref)
+        data = PaymentService.retry_booking_payment(
+            db,
+            booking_ref=payload.booking_ref,
+            customer_email=(current_user.get("email") if current_user else None),
+            user_id=str(current_user.get("user_id")) if current_user and current_user.get("user_id") else None,
+        )
         return PaymentApiResponse(success=True, data=data)
     except ValueError as err:
         message = str(err)
@@ -642,6 +826,9 @@ def retry_payment_endpoint(
             else status.HTTP_400_BAD_REQUEST
         )
         raise HTTPException(status_code=status_code, detail=message) from err
+    except Exception as exc:
+        logger.exception("Payment retry failed")
+        raise HTTPException(status_code=500, detail="Payment retry failed.") from exc
 
 
 @router.get(

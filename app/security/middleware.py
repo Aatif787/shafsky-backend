@@ -38,6 +38,8 @@ def get_rate_limit_policy(method: str, path: str) -> Optional[Dict[str, Any]]:
     if (
         p.startswith("/api/payments/razorpay/webhook")
         or p.startswith("/api/payments/webhook")
+        or p.startswith("/api/payments/icici/callback")
+        or p.startswith("/api/payments/icici/return")
         or p.startswith("/api/whatsapp/webhook")
         or p.startswith("/api/integrations/whatsapp/webhook")
         or p.startswith("/api/notifications/webhooks")
@@ -46,10 +48,19 @@ def get_rate_limit_policy(method: str, path: str) -> Optional[Dict[str, Any]]:
 
     # 2. Payment Order Creation (strict transactional limits)
     if m == "POST" and (
-        p in ("/api/create-order", "/api/payments/create-order", "/api/payments/orders", "/api/payments/initiate")
+        p in (
+            "/api/create-order",
+            "/api/payments/create-order",
+            "/api/payments/orders",
+            "/api/payments/initiate",
+            "/api/payments/icici/initiate",
+        )
         or p.startswith("/api/payments/create-order")
         or p.startswith("/api/payments/orders")
         or p.startswith("/api/payments/initiate")
+        or p.startswith("/api/payments/icici/initiate")
+        or p.startswith("/api/payments/retry")
+        or p == "/api/payments/retry"
     ):
         return {"category": "payment_order", "key_prefix": "rate_limit_payment_order", "max_requests": 15, "window_seconds": 60}
 
@@ -79,6 +90,10 @@ def get_rate_limit_policy(method: str, path: str) -> Optional[Dict[str, Any]]:
     # 5. Authentication (Login / Register)
     if m == "POST" and (p.startswith("/api/auth/login") or p.startswith("/api/auth/register")):
         return {"category": "auth", "key_prefix": "rate_limit_auth", "max_requests": 10, "window_seconds": 60}
+
+    # 5b. Clerk token exchange uses its own bucket so password login limits stay unchanged.
+    if m == "POST" and p.startswith("/api/auth/clerk-exchange"):
+        return {"category": "clerk_exchange", "key_prefix": "rate_limit_clerk_exchange", "max_requests": 10, "window_seconds": 60}
 
     # 6. Flight Validation
     if p.startswith("/api/flight/validate") or p.startswith("/api/flights/validate") or p.startswith("/api/airport/flow/flight-info"):

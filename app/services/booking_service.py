@@ -956,7 +956,10 @@ class BookingService:
         db: Session,
         identifier: str,
         new_status_str: str,
-        expected_version: Optional[int] = None
+        expected_version: Optional[int] = None,
+        force_confirm: bool = False,
+        reason: Optional[str] = None,
+        actor_email: Optional[str] = None,
     ) -> Booking:
         booking = cls.get_booking_by_ref_or_id(db, identifier)
         if not booking:
@@ -970,6 +973,43 @@ class BookingService:
                 status_code=400,
                 detail=f"Invalid status '{new_status_str}'. Must be one of: {valid_statuses}"
             )
+
+        if new_status == BookingStatus.CONFIRMED:
+            from app.models.payment import PaymentStatus, PaymentTransaction
+
+            has_successful_payment = db.scalar(
+                select(PaymentTransaction.id).where(
+                    PaymentTransaction.entity_id == booking.booking_ref,
+                    PaymentTransaction.status == PaymentStatus.SUCCESSFUL,
+                    PaymentTransaction.is_duplicate.isnot(True),
+                ).limit(1)
+            )
+            if not has_successful_payment:
+                if not force_confirm:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "Cannot confirm unpaid booking without payment proof. "
+                            "Pass force_confirm=true with a reason to override."
+                        ),
+                    )
+                if not (reason or "").strip():
+                    raise HTTPException(
+                        status_code=400,
+                        detail="force_confirm requires a non-empty reason for audit.",
+                    )
+                try:
+                    from app.services.admin_service import AdminService
+                    AdminService.log_audit_action(
+                        db,
+                        actor_email=actor_email or "admin@shafsky.com",
+                        action="BOOKING_FORCE_CONFIRMED",
+                        resource_type="BOOKING",
+                        resource_id=booking.booking_ref,
+                        details={"reason": reason, "prior_status": str(booking.status)},
+                    )
+                except Exception:
+                    logger.exception("Failed to audit force_confirm for %s", booking.booking_ref)
 
         if new_status == BookingStatus.CANCELLED:
             from app.models.payment import PaymentStatus, PaymentTransaction

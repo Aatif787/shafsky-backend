@@ -91,6 +91,10 @@ class PaymentVerifyRequest(BaseModel):
 
 class PaymentRetryRequest(BaseModel):
     booking_ref: str = Field(..., description="Booking reference to retry payment for")
+    payment_token: Optional[str] = Field(
+        None,
+        description="Signed payment session token issued at booking create (required for guests)",
+    )
 
 
 class PaymentLedgerFilterRequest(BaseModel):
@@ -114,7 +118,10 @@ class RazorpayCreateOrderRequest(BaseModel):
     currency: str = Field("INR", description="Currency code (e.g. INR)")
     receipt: Optional[str] = Field(None, description="Receipt identifier")
     notes: Optional[Dict[str, Any]] = None
-
+    payment_token: Optional[str] = Field(
+        None,
+        description="Signed payment session token (required for guests)",
+    )
 
 class RazorpayCreateOrderResponse(BaseModel):
     order_id: str

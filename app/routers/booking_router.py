@@ -115,26 +115,41 @@ async def create_booking(
     except Exception as e:
         db.rollback()
         logger.exception("Payment initiation failed after booking %s was created", booking.booking_ref)
-        from app.providers.razorpay_provider import razorpay_provider
+        from app.security.payment_token import mint_payment_token
         booking_dict = BookingService.format_booking_dict(booking)
+        booking_dict["payment_gateway"] = None
         booking_dict["razorpay_order_id"] = None
-        booking_dict["razorpay_key_id"] = razorpay_provider.key_id
+        booking_dict["razorpay_key_id"] = None
         booking_dict["razorpay_amount_paise"] = int(round(float(booking.total_amount or 0) * 100))
+        booking_dict["icici_redirect_url"] = None
         booking_dict["payment_init_failed"] = True
+        booking_dict["payment_token"] = mint_payment_token(booking.booking_ref)
         return BookingApiResponse(
             success=True,
             data=booking_dict,
             error=f"Booking created but payment could not be started. Please retry payment. ({str(e)})",
         )
-    
-    from app.providers.razorpay_provider import razorpay_provider
+
+    from app.security.payment_token import mint_payment_token
     booking_dict = BookingService.format_booking_dict(booking)
-    booking_dict["razorpay_order_id"] = transaction.gateway_payment_id
-    booking_dict["razorpay_key_id"] = razorpay_provider.key_id
-    raw_intent = transaction.gateway_response if isinstance(transaction.gateway_response, dict) else {}
-    booking_dict["razorpay_amount_paise"] = int(
-        raw_intent.get("amount") or round(float(booking.total_amount or 0) * 100)
-    )
+    booking_dict["payment_gateway"] = transaction.gateway_provider
+    booking_dict["payment_token"] = mint_payment_token(booking.booking_ref)
+    if transaction.gateway_provider == "ICICI":
+        gw = transaction.gateway_response if isinstance(transaction.gateway_response, dict) else {}
+        booking_dict["icici_redirect_url"] = gw.get("payment_url")
+        booking_dict["icici_merchant_txn_no"] = transaction.gateway_payment_id
+        booking_dict["razorpay_order_id"] = None
+        booking_dict["razorpay_key_id"] = None
+        booking_dict["razorpay_amount_paise"] = None
+    else:
+        from app.providers.razorpay_provider import razorpay_provider
+        booking_dict["razorpay_order_id"] = transaction.gateway_payment_id
+        booking_dict["razorpay_key_id"] = razorpay_provider.key_id
+        raw_intent = transaction.gateway_response if isinstance(transaction.gateway_response, dict) else {}
+        booking_dict["razorpay_amount_paise"] = int(
+            raw_intent.get("amount") or round(float(booking.total_amount or 0) * 100)
+        )
+        booking_dict["icici_redirect_url"] = None
 
     return BookingApiResponse(
         success=True,
@@ -392,13 +407,16 @@ async def admin_update_booking_status(
     identifier: str,
     payload: BookingStatusUpdate,
     db: Session = Depends(get_db),
-    _admin_context: Dict[str, Any] = Depends(get_required_admin)
+    admin_context: Dict[str, Any] = Depends(get_required_admin)
 ):
     updated_booking = BookingService.admin_update_status(
         db,
         identifier,
         new_status_str=payload.status,
-        expected_version=payload.version
+        expected_version=payload.version,
+        force_confirm=bool(payload.force_confirm),
+        reason=payload.reason,
+        actor_email=str(admin_context.get("email") or admin_context.get("sub") or "admin"),
     )
     return BookingApiResponse(
         success=True,

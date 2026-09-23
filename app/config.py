@@ -75,6 +75,15 @@ class Settings(BaseSettings):
     JWT_PREVIOUS_PUBLIC_KEYS: str = os.getenv("JWT_PREVIOUS_PUBLIC_KEYS", "")
     JWT_ISSUER: str = os.getenv("JWT_ISSUER", "shafsky-backend")
     JWT_AUDIENCE: str = os.getenv("JWT_AUDIENCE", "shafsky-api")
+    # Clerk session-token verification for POST /api/auth/clerk-exchange only.
+    # CLERK_ISSUER must equal the token iss (Clerk Frontend API URL). JWKS defaults
+    # to {issuer}/.well-known/jwks.json. Audience and azp are checked only when set.
+    # CLERK_SECRET_KEY is used only when a verified token has no email claim.
+    CLERK_ISSUER: str = os.getenv("CLERK_ISSUER", "")
+    CLERK_JWKS_URL: str = os.getenv("CLERK_JWKS_URL", "")
+    CLERK_AUDIENCE: str = os.getenv("CLERK_AUDIENCE", "")
+    CLERK_AUTHORIZED_PARTIES: str = os.getenv("CLERK_AUTHORIZED_PARTIES", "")
+    CLERK_SECRET_KEY: str = os.getenv("CLERK_SECRET_KEY", "")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "15"))
     REFRESH_TOKEN_EXPIRE_DAYS: int = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
     # Allow legacy HS256 fallback for JWT verification. Defaults to true in non-production, false in production.
@@ -109,6 +118,38 @@ class Settings(BaseSettings):
     # Razorpay Payment Gateway
     RAZORPAY_KEY_ID: str = os.getenv("RAZORPAY_KEY_ID", "")
     RAZORPAY_KEY_SECRET: str = os.getenv("RAZORPAY_KEY_SECRET", "")
+
+    # Active web checkout gateway for paid airport bookings: RAZORPAY | ICICI
+    PAYMENT_GATEWAY: str = (os.getenv("PAYMENT_GATEWAY") or "RAZORPAY").strip().upper()
+
+    # Signed guest payment-session tokens (retry / create-order / ICICI initiate)
+    PAYMENT_SESSION_SECRET: str = os.getenv("PAYMENT_SESSION_SECRET", "") or os.getenv("JWT_SECRET", "")
+    PAYMENT_SESSION_TTL_MINUTES: int = int(os.getenv("PAYMENT_SESSION_TTL_MINUTES", "120"))
+    # Explicit opt-in for simulated Razorpay signatures/orders (never in production)
+    ALLOW_PAYMENT_SIMULATION: bool = os.getenv("ALLOW_PAYMENT_SIMULATION", "").lower() in (
+        "1", "true", "yes", "on",
+    )
+
+    # Public HTTPS origins (never localhost) for gateway return URLs
+    PUBLIC_BACKEND_URL: str = os.getenv("PUBLIC_BACKEND_URL", "")
+    PUBLIC_FRONTEND_URL: str = os.getenv("PUBLIC_FRONTEND_URL", "")
+
+    # ICICI Bank TSP (backend-only secrets — never expose to frontend / VITE_*)
+    ICICI_MID: str = os.getenv("ICICI_MID", "")
+    ICICI_KEY: str = os.getenv("ICICI_KEY", "")
+    ICICI_AGG_ID: str = os.getenv("ICICI_AGG_ID", "")
+    ICICI_SALE_URL: str = os.getenv(
+        "ICICI_SALE_URL",
+        "https://pgpayuat.icicibank.com/tsp/pg/api/v2/initiateSale",
+    )
+    ICICI_COMMAND_URL: str = os.getenv(
+        "ICICI_COMMAND_URL",
+        "https://pgpayuat.icicibank.com/tsp/pg/api/command",
+    )
+    ICICI_ENV: str = (os.getenv("ICICI_ENV") or "UAT").strip().upper()
+    ICICI_RETURN_URL: str = os.getenv("ICICI_RETURN_URL", "")
+    ICICI_CUSTOMER_RETURN_URL: str = os.getenv("ICICI_CUSTOMER_RETURN_URL", "")
+    ICICI_HTTP_TIMEOUT: float = float(os.getenv("ICICI_HTTP_TIMEOUT", "30"))
 
     RESEND_API_KEY: str = os.getenv("RESEND_API_KEY", "")
     EMAIL_FROM: str = os.getenv("EMAIL_FROM", os.getenv("RESEND_FROM_EMAIL", ""))

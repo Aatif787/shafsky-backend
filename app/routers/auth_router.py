@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Dict, Any
 
-from fastapi import APIRouter, HTTPException, Depends, Request, Response
+from fastapi import APIRouter, Body, HTTPException, Depends, Request, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import select, update, func
 
@@ -15,6 +15,7 @@ from app.database import get_db
 from app.models.schema import UserAuth, Profile, RefreshToken, Role
 from app.schemas.auth import (
     LoginRequest,
+    ClerkExchangeRequest,
     ApiResponse,
     AuthDataResponse,
     UserResponse,
@@ -22,6 +23,8 @@ from app.schemas.auth import (
     ChangePasswordRequest,
 )
 from app.services.auth_service import AuthService
+from app.services.clerk_exchange_service import access_token_claims, resolve_clerk_user
+from app.security.clerk_jwt import verify_clerk_token
 from app.security.device_tracking import DeviceTracking
 from app.security.dependencies import get_required_user
 from app.config import settings
@@ -321,6 +324,60 @@ async def logout(
 
     _clear_refresh_cookie(response)
     return ApiResponse(success=True, data={"message": "Successfully logged out and session revoked."})
+
+
+def _clerk_token_from_request(request: Request, payload: ClerkExchangeRequest | None) -> str:
+    """Identity is the verified Clerk JWT, never a client-supplied user id or role."""
+    authorization = request.headers.get("authorization") or ""
+    if authorization.lower().startswith("bearer "):
+        token = authorization.split(" ", 1)[1].strip()
+        if token:
+            return token
+    if payload and payload.token and payload.token.strip():
+        return payload.token.strip()
+    raise HTTPException(status_code=401, detail="Invalid or expired Clerk token.")
+
+
+def _issue_existing_session(db: Session, request: Request, response: Response, user: UserAuth) -> ApiResponse:
+    """Issue the same FastAPI access JWT and refresh cookie the password login uses."""
+    user_data = access_token_claims(user)
+    access_token = AuthService.create_access_token(user_data)
+    raw_refresh = AuthService.create_refresh_token(user_data)
+    device_info = DeviceTracking.get_client_device(request)
+    try:
+        _revoke_device_tokens(db, user.id, device_info.get("device_id"))
+        db.commit()
+    except Exception:
+        db.rollback()
+    AuthService.register_refresh_token(
+        db,
+        user_id=user.id,
+        raw_token=raw_refresh,
+        device_info=device_info,
+    )
+    _set_refresh_cookie(response, raw_refresh)
+    profile = db.scalar(select(Profile).where(Profile.auth_id == user.id))
+    full_name = profile.full_name if profile and profile.full_name else None
+    return ApiResponse(
+        success=True,
+        data=AuthDataResponse(
+            accessToken=access_token,
+            refreshToken=None,
+            user=_user_response(user, full_name),
+        ),
+    )
+
+
+@router.post("/clerk-exchange", response_model=ApiResponse)
+async def clerk_exchange(
+    request: Request,
+    response: Response,
+    payload: ClerkExchangeRequest | None = Body(default=None),
+    db: Session = Depends(get_db),
+):
+    identity = verify_clerk_token(_clerk_token_from_request(request, payload))
+    user = resolve_clerk_user(db, identity)
+    return _issue_existing_session(db, request, response, user)
 
 
 @router.get("/me", response_model=ApiResponse)

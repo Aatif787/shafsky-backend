@@ -39,8 +39,18 @@ def configure_test_database() -> None:
 
     os.environ["TESTING"] = "1"
     os.environ.setdefault("ENVIRONMENT", "test")
-    os.environ.setdefault("RAZORPAY_KEY_ID", "rzp_test_ci_key")
-    os.environ.setdefault("RAZORPAY_KEY_SECRET", "rzp_test_ci_secret_not_live")
+    os.environ.setdefault("ALLOW_PAYMENT_SIMULATION", "true")
+    os.environ.setdefault("PAYMENT_SESSION_SECRET", "test-payment-session-secret")
+    os.environ.setdefault("PAYMENT_WEBHOOK_SECRET", "test-payment-webhook-secret")
+    # CI has no Razorpay key, so the placeholders below apply. A local .env may
+    # already contain a live key; load_dotenv() will not override an rzp_test_
+    # key exported by the shell. Pytest must not keep a non-test key.
+    loaded_razorpay_key = (os.getenv("RAZORPAY_KEY_ID") or "").strip()
+    if not loaded_razorpay_key.startswith("rzp_test_"):
+        os.environ["RAZORPAY_KEY_ID"] = "rzp_test_ci_key"
+        os.environ["RAZORPAY_KEY_SECRET"] = "rzp_test_ci_secret_not_live"
+    else:
+        os.environ.setdefault("RAZORPAY_KEY_SECRET", "rzp_test_ci_secret_not_live")
     os.environ.setdefault("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "shafsky_wa_verify_token")
     os.environ.setdefault("WHATSAPP_VERIFY_TOKEN", "shafsky_wa_verify_token")
     os.environ.setdefault("WHATSAPP_ACCESS_TOKEN", "test_wa_access_token")

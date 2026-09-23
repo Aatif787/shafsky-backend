@@ -32,38 +32,172 @@ class PaymentService:
     """Core payment domain service."""
 
     @classmethod
+    def active_payment_gateway(cls) -> str:
+        """RAZORPAY (default) or ICICI when configured and selected."""
+        from app.providers.icici_provider import icici_provider
+
+        requested = (getattr(settings, "PAYMENT_GATEWAY", None) or "RAZORPAY").strip().upper()
+        if requested == "ICICI":
+            icici_provider.reload()
+            if icici_provider.is_configured():
+                return "ICICI"
+            raise ValueError(
+                "PAYMENT_GATEWAY=ICICI but ICICI_MID / ICICI_KEY / ICICI_AGG_ID are not configured."
+            )
+        return "RAZORPAY"
+
+    @classmethod
+    def _public_checkout_payload(
+        cls,
+        *,
+        booking_ref: str,
+        gateway: str,
+        transaction_ref: Optional[str] = None,
+        total_amount: Optional[float] = None,
+        currency: str = "INR",
+        razorpay_order_id: Optional[str] = None,
+        razorpay_key_id: Optional[str] = None,
+        razorpay_amount_paise: Optional[int] = None,
+        icici_redirect_url: Optional[str] = None,
+        icici_merchant_txn_no: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Checkout fields only — never passenger PII or raw gateway payloads."""
+        from app.security.payment_token import mint_payment_token
+
+        data: Dict[str, Any] = {
+            "bookingRef": booking_ref,
+            "gateway": gateway,
+            "payment_gateway": gateway,
+            "payment_token": mint_payment_token(booking_ref),
+            "totalAmount": total_amount,
+            "currency": currency or "INR",
+        }
+        if transaction_ref:
+            data["transactionRef"] = transaction_ref
+        if gateway == "RAZORPAY":
+            data["razorpay_order_id"] = razorpay_order_id
+            data["razorpay_key_id"] = razorpay_key_id
+            data["razorpay_amount_paise"] = razorpay_amount_paise
+        elif gateway == "ICICI":
+            data["icici_redirect_url"] = icici_redirect_url
+            data["icici_merchant_txn_no"] = icici_merchant_txn_no
+        return data
+
+    @classmethod
+    def frozen_gateway_for_booking(cls, db: Session, booking) -> Optional[str]:
+        """Return gateway already bound to an open/paid session for this booking, if any."""
+        refs = [booking.booking_ref]
+        if getattr(booking, "id", None):
+            refs.append(str(booking.id))
+        tx = db.scalar(
+            select(PaymentTransaction)
+            .where(
+                PaymentTransaction.entity_id.in_(refs),
+                PaymentTransaction.is_duplicate.isnot(True),
+                PaymentTransaction.status.in_(
+                    [
+                        PaymentStatus.PENDING,
+                        PaymentStatus.PROCESSING,
+                        PaymentStatus.SUCCESSFUL,
+                        PaymentStatus.PARTIALLY_REFUNDED,
+                    ]
+                ),
+            )
+            .order_by(desc(PaymentTransaction.created_at))
+        )
+        if not tx:
+            return None
+        return str(tx.gateway_provider or "").strip().upper() or None
+
+    @classmethod
+    def assert_gateway_exclusive(cls, db: Session, booking, requested_gateway: str) -> None:
+        """Reject dual Razorpay+ICICI sessions and env/gateway mismatches for new initiates."""
+        requested = str(requested_gateway or "").strip().upper()
+        frozen = cls.frozen_gateway_for_booking(db, booking)
+        active = cls.active_payment_gateway()
+        if frozen and frozen != requested:
+            raise ValueError(
+                f"Booking already has an active {frozen} payment session. "
+                f"Cannot start a {requested} checkout for the same booking."
+            )
+        if not frozen and requested != active:
+            raise ValueError(
+                f"Active payment gateway is {active}. Cannot initiate {requested} checkout."
+            )
+
+    @classmethod
+    def sanitize_gateway_response(cls, gateway_response: Any) -> Optional[Dict[str, Any]]:
+        """Strip secrets and bulky raw payloads before returning to API clients."""
+        if not isinstance(gateway_response, dict):
+            return None
+        blocked = {
+            "securehash", "key", "icici_key", "raw", "raw_response", "request",
+            "headers", "authorization", "password", "secret",
+        }
+        safe: Dict[str, Any] = {}
+        for key, value in gateway_response.items():
+            if str(key).lower() in blocked:
+                continue
+            if isinstance(value, dict):
+                nested = cls.sanitize_gateway_response(value)
+                if nested:
+                    safe[key] = nested
+            elif isinstance(value, (str, int, float, bool)) or value is None:
+                safe[key] = value
+        return safe or None
+
+    @classmethod
     def initiate_payment(
         cls,
         db: Session,
         payload: PaymentInitiateRequest,
         provider: Optional[PaymentProvider] = None
     ) -> PaymentTransaction:
-        """Initiates a payment transaction and registers intent with Razorpay."""
+        """Initiates a payment transaction with the active gateway (Razorpay or ICICI)."""
+        from app.models.schema import Booking
+
+        gateway = cls.active_payment_gateway()
+        booking = db.scalar(select(Booking).where(Booking.booking_ref == str(payload.entity_id)))
+        if booking:
+            cls.assert_gateway_exclusive(db, booking, gateway)
+        if gateway == "ICICI":
+            return cls._initiate_icici_payment(db, payload)
+        return cls._initiate_razorpay_payment(db, payload)
+
+    @classmethod
+    def _resolve_booking_amount(cls, db: Session, payload: PaymentInitiateRequest):
+        """Server-controlled amount. Never trust client-provided amount for bookings."""
+        entity_type = str(payload.entity_type).upper()
+        if entity_type not in ("BOOKING", "AIRPORT_BOOKING", "TICKET_BOOKING") or not payload.entity_id:
+            raise ValueError("Payment amount must be resolved from a persisted booking.")
+
+        from app.models.schema import Booking
+
+        try:
+            entity_uuid = uuid.UUID(str(payload.entity_id))
+            booking = db.scalar(
+                select(Booking).where(
+                    or_(Booking.id == entity_uuid, Booking.booking_ref == str(payload.entity_id))
+                )
+            )
+        except ValueError:
+            booking = db.scalar(select(Booking).where(Booking.booking_ref == str(payload.entity_id)))
+
+        if not booking or booking.total_amount is None:
+            raise ValueError("Booking not found or has no authoritative amount.")
+        return booking, float(booking.total_amount), booking.booking_ref
+
+    @classmethod
+    def _initiate_razorpay_payment(
+        cls,
+        db: Session,
+        payload: PaymentInitiateRequest,
+    ) -> PaymentTransaction:
         from app.providers.razorpay_provider import razorpay_provider
 
         ref = f"PAY-{uuid.uuid4().hex[:8].upper()}"
+        booking, authoritative_amount, booking_ref_for_order = cls._resolve_booking_amount(db, payload)
 
-        # Server-controlled amount. Never trust client-provided amount for bookings.
-        authoritative_amount = None
-        booking_ref_for_order = None
-        entity_type = str(payload.entity_type).upper()
-        if entity_type in ("BOOKING", "AIRPORT_BOOKING", "TICKET_BOOKING") and payload.entity_id:
-            from app.models.schema import Booking
-            from sqlalchemy import or_
-            try:
-                entity_uuid = uuid.UUID(str(payload.entity_id))
-                booking = db.scalar(select(Booking).where(or_(Booking.id == entity_uuid, Booking.booking_ref == str(payload.entity_id))))
-            except ValueError:
-                booking = db.scalar(select(Booking).where(Booking.booking_ref == str(payload.entity_id)))
-
-            if not booking or booking.total_amount is None:
-                raise ValueError("Booking not found or has no authoritative amount.")
-            authoritative_amount = float(booking.total_amount)
-            booking_ref_for_order = booking.booking_ref
-        else:
-            raise ValueError("Payment amount must be resolved from a persisted booking.")
-
-        # Create Razorpay Order
         intent = razorpay_provider.create_order(
             amount=authoritative_amount,
             currency=payload.currency,
@@ -84,7 +218,7 @@ class PaymentService:
         transaction = PaymentTransaction(
             transaction_ref=ref,
             entity_type=payload.entity_type.strip().upper(),
-            entity_id=str(payload.entity_id),
+            entity_id=str(booking_ref_for_order or payload.entity_id),
             customer_id=payload.customer_id,
             amount=authoritative_amount,
             currency=payload.currency,
@@ -97,29 +231,121 @@ class PaymentService:
         db.add(transaction)
         db.flush()
 
-        # Log timeline event
         TimelineService.add_entry(
             db,
             entity_type=payload.entity_type,
-            entity_id=payload.entity_id,
+            entity_id=str(booking_ref_for_order or payload.entity_id),
             event_type="PAYMENT_INITIATED",
             title=f"Payment Initiated ({ref})",
             details={
                 "amount": authoritative_amount,
                 "currency": payload.currency,
                 "transactionRef": ref,
-                "gatewayOrderId": order_id
+                "gatewayOrderId": order_id,
+                "gateway": "RAZORPAY",
             }
         )
 
-        # Audit log
         AdminService.log_audit_action(
             db,
             actor_email=payload.customer_email,
             action="PAYMENT_INITIATED",
             resource_type="PAYMENT",
             resource_id=str(transaction.id),
-            details={"transactionRef": ref, "amount": authoritative_amount}
+            details={"transactionRef": ref, "amount": authoritative_amount, "gateway": "RAZORPAY"}
+        )
+
+        db.commit()
+        db.refresh(transaction)
+        return transaction
+
+    @classmethod
+    def _initiate_icici_payment(
+        cls,
+        db: Session,
+        payload: PaymentInitiateRequest,
+    ) -> PaymentTransaction:
+        from app.providers.icici_provider import (
+            generate_merchant_txn_no,
+            icici_provider,
+        )
+
+        ref = f"PAY-{uuid.uuid4().hex[:8].upper()}"
+        booking, authoritative_amount, booking_ref_for_order = cls._resolve_booking_amount(db, payload)
+        merchant_txn_no = generate_merchant_txn_no("SF")
+
+        request_body = icici_provider.build_initiate_sale_request(
+            merchant_txn_no=merchant_txn_no,
+            amount=authoritative_amount,
+            customer_email=payload.customer_email,
+            customer_mobile=getattr(booking, "passenger_phone", None) or "",
+            customer_name=payload.customer_name,
+            addl_param1=booking_ref_for_order or "",
+            addl_param2=ref,
+        )
+        # Never persist ICICI_KEY; strip secureHash from stored request copy
+        stored_request = {k: v for k, v in request_body.items() if str(k).lower() != "securehash"}
+
+        intent = icici_provider.initiate_sale(request_body)
+        if not intent.get("success") or not intent.get("payment_url"):
+            raise ValueError(intent.get("error") or "ICICI initiateSale could not be completed.")
+
+        gateway_response = {
+            "gateway": "ICICI",
+            "environment": getattr(settings, "ICICI_ENV", "UAT"),
+            "merchantTxnNo": merchant_txn_no,
+            "request": stored_request,
+            "responseCode": intent.get("responseCode"),
+            "redirectURI": intent.get("redirectURI"),
+            "tranCtx": intent.get("tranCtx"),
+            "payment_url": intent.get("payment_url"),
+            "amount": stored_request.get("amount"),
+            "sanitized_response": intent.get("raw"),
+        }
+
+        transaction = PaymentTransaction(
+            transaction_ref=ref,
+            entity_type=payload.entity_type.strip().upper(),
+            entity_id=str(booking_ref_for_order or payload.entity_id),
+            customer_id=payload.customer_id,
+            amount=authoritative_amount,
+            currency=payload.currency,
+            payment_method=payload.payment_method,
+            status=PaymentStatus.PENDING,
+            gateway_provider="ICICI",
+            gateway_payment_id=merchant_txn_no,
+            gateway_response=gateway_response,
+        )
+        db.add(transaction)
+        db.flush()
+
+        TimelineService.add_entry(
+            db,
+            entity_type=payload.entity_type,
+            entity_id=str(booking_ref_for_order or payload.entity_id),
+            event_type="PAYMENT_INITIATED",
+            title=f"Payment Initiated ({ref})",
+            details={
+                "amount": authoritative_amount,
+                "currency": payload.currency,
+                "transactionRef": ref,
+                "merchantTxnNo": merchant_txn_no,
+                "gateway": "ICICI",
+            }
+        )
+
+        AdminService.log_audit_action(
+            db,
+            actor_email=payload.customer_email,
+            action="PAYMENT_INITIATED",
+            resource_type="PAYMENT",
+            resource_id=str(transaction.id),
+            details={
+                "transactionRef": ref,
+                "amount": authoritative_amount,
+                "gateway": "ICICI",
+                "merchantTxnNo": merchant_txn_no,
+            }
         )
 
         db.commit()
@@ -747,10 +973,8 @@ class PaymentService:
     @classmethod
     def verify_internal_webhook_signature(cls, payload: WebhookPayload, signature: Optional[str]) -> bool:
         secret = (os.getenv("PAYMENT_WEBHOOK_SECRET") or os.getenv("RAZORPAY_WEBHOOK_SECRET") or "").strip()
-        if not secret:
-            return not settings.is_production
-        if not signature:
-            return not settings.is_production
+        if not secret or not signature:
+            return False
         canonical = f"{payload.transaction_ref}:{payload.event_type}:{payload.gateway_payment_id}"
         computed = hmac.new(secret.encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256).hexdigest()
         return hmac.compare_digest(computed, signature)
@@ -1052,7 +1276,8 @@ class PaymentService:
         # 3. Handle Successful Payment Events
         if event_name in [
             "payment.captured", "order.paid", "payment_link.paid",
-            "VERIFY_ENDPOINT", "PAYMENT_SUCCESS", "payment.succeeded"
+            "VERIFY_ENDPOINT", "PAYMENT_SUCCESS", "payment.succeeded",
+            "ICICI_STATUS_SUC",
         ]:
             if booking and booking.status == BookingStatus.CONFIRMED:
                 # Duplicate/replay must run before amount validation so a second
@@ -1074,143 +1299,200 @@ class PaymentService:
 
             # For gateway webhooks and client verification endpoint,
             # strictly reconcile received amount and currency with the booking / transaction records.
-            if event_name in ["payment.captured", "order.paid", "payment_link.paid", "VERIFY_ENDPOINT"]:
+            if event_name in [
+                "payment.captured", "order.paid", "payment_link.paid", "VERIFY_ENDPOINT", "ICICI_STATUS_SUC",
+            ]:
                 received_amount_raw = amount
                 received_currency_raw = currency
 
-                if raw_payload and isinstance(raw_payload, dict):
-                    pl = raw_payload.get("payload", {})
-                    pay_ent = pl.get("payment", {}).get("entity", {}) if isinstance(pl.get("payment"), dict) else {}
-                    ord_ent = pl.get("order", {}).get("entity", {}) if isinstance(pl.get("order"), dict) else {}
-                    plink_ent = pl.get("payment_link", {}).get("entity", {}) if isinstance(pl.get("payment_link"), dict) else {}
+                if event_name == "ICICI_STATUS_SUC":
+                    # ICICI amounts are rupees (2dp), not paise
+                    expected_amt_val = (
+                        float(booking.total_amount) if booking
+                        else (float(airport_booking.total_price) if airport_booking
+                              else (float(transaction.amount) if transaction else None))
+                    )
+                    expected_curr_val = (
+                        booking.currency if booking
+                        else (airport_booking.currency if airport_booking
+                              else (transaction.currency if transaction else "INR"))
+                    ) or "INR"
+                    if received_amount_raw is None or received_currency_raw is None:
+                        return {
+                            "success": False,
+                            "status": "PAYMENT_DATA_INCOMPLETE",
+                            "reason": "ICICI STATUS missing amount or currency.",
+                            "booking_ref": resolved_booking_ref,
+                        }
+                    try:
+                        rec_rupees = Decimal(str(received_amount_raw))
+                        exp_rupees = Decimal(str(expected_amt_val))
+                    except Exception:
+                        return {
+                            "success": False,
+                            "status": "PAYMENT_DATA_INCOMPLETE",
+                            "reason": "Invalid ICICI amount format.",
+                            "booking_ref": resolved_booking_ref,
+                        }
+                    if str(received_currency_raw).strip().upper() != str(expected_curr_val).strip().upper():
+                        return {
+                            "success": False,
+                            "status": "CURRENCY_MISMATCH",
+                            "reason": "ICICI currency does not match booking.",
+                            "booking_ref": resolved_booking_ref,
+                        }
+                    if abs(rec_rupees - exp_rupees) > Decimal("0.001"):
+                        return {
+                            "success": False,
+                            "status": "AMOUNT_MISMATCH",
+                            "reason": (
+                                f"ICICI amount {rec_rupees} does not match expected "
+                                f"booking amount {exp_rupees}."
+                            ),
+                            "booking_ref": resolved_booking_ref,
+                            "expected_amount": float(exp_rupees),
+                            "received_amount": float(rec_rupees),
+                        }
+                    logger.info(
+                        f"[PaymentService] PAYMENT_AMOUNT_CHECK (ICICI): "
+                        f"expected_amount={float(exp_rupees)}, received_amount={float(rec_rupees)}, "
+                        f"result=EXACT_MATCH"
+                    )
+                else:
+                    # Razorpay path (amounts in paise)
+                    if raw_payload and isinstance(raw_payload, dict):
+                        pl = raw_payload.get("payload", {})
+                        pay_ent = pl.get("payment", {}).get("entity", {}) if isinstance(pl.get("payment"), dict) else {}
+                        ord_ent = pl.get("order", {}).get("entity", {}) if isinstance(pl.get("order"), dict) else {}
+                        plink_ent = pl.get("payment_link", {}).get("entity", {}) if isinstance(pl.get("payment_link"), dict) else {}
 
-                    if received_amount_raw is None:
-                        if pay_ent.get("amount") is not None:
-                            received_amount_raw = pay_ent.get("amount")
-                        elif ord_ent.get("amount_paid") is not None:
-                            received_amount_raw = ord_ent.get("amount_paid")
-                        elif ord_ent.get("amount") is not None:
-                            received_amount_raw = ord_ent.get("amount")
-                        elif plink_ent.get("amount_paid") is not None:
-                            received_amount_raw = plink_ent.get("amount_paid")
-                        elif plink_ent.get("amount") is not None:
-                            received_amount_raw = plink_ent.get("amount")
+                        if received_amount_raw is None:
+                            if pay_ent.get("amount") is not None:
+                                received_amount_raw = pay_ent.get("amount")
+                            elif ord_ent.get("amount_paid") is not None:
+                                received_amount_raw = ord_ent.get("amount_paid")
+                            elif ord_ent.get("amount") is not None:
+                                received_amount_raw = ord_ent.get("amount")
+                            elif plink_ent.get("amount_paid") is not None:
+                                received_amount_raw = plink_ent.get("amount_paid")
+                            elif plink_ent.get("amount") is not None:
+                                received_amount_raw = plink_ent.get("amount")
 
-                    if not received_currency_raw:
-                        received_currency_raw = (
-                            pay_ent.get("currency") or
-                            ord_ent.get("currency") or
-                            plink_ent.get("currency")
+                        if not received_currency_raw:
+                            received_currency_raw = (
+                                pay_ent.get("currency") or
+                                ord_ent.get("currency") or
+                                plink_ent.get("currency")
+                            )
+
+                    # For VERIFY_ENDPOINT, if amount or currency is not in payload, fetch from Razorpay API or transaction
+                    if event_name == "VERIFY_ENDPOINT" and (received_amount_raw is None or not received_currency_raw):
+                        from app.providers.razorpay_provider import razorpay_provider
+                        if order_id and razorpay_provider.is_configured():
+                            ord_res = razorpay_provider.fetch_order(order_id)
+                            if ord_res.get("success") and ord_res.get("order"):
+                                ord_data = ord_res["order"]
+                                if received_amount_raw is None:
+                                    received_amount_raw = ord_data.get("amount_paid") or ord_data.get("amount")
+                                if not received_currency_raw:
+                                    received_currency_raw = ord_data.get("currency")
+
+                        if received_amount_raw is None and transaction and transaction.amount is not None:
+                            received_amount_raw = int(round(float(transaction.amount) * 100))
+                        if not received_currency_raw and transaction and transaction.currency:
+                            received_currency_raw = transaction.currency
+
+                    # Fill amount/currency from the DB only when Razorpay did not send a
+                    # payload (VERIFY_ENDPOINT / programmatic capture). Webhooks that omit
+                    # amount or currency must still be rejected as PAYMENT_DATA_INCOMPLETE.
+                    if event_name == "VERIFY_ENDPOINT" or raw_payload is None:
+                        if received_amount_raw is None and transaction and transaction.amount is not None:
+                            received_amount_raw = int(round(float(transaction.amount) * 100))
+                        if not received_currency_raw and transaction and transaction.currency:
+                            received_currency_raw = transaction.currency
+
+                    expected_amt_val = (
+                        float(booking.total_amount) if booking
+                        else (float(airport_booking.total_price) if airport_booking
+                              else (float(transaction.amount) if transaction else None))
+                    )
+                    expected_curr_val = (
+                        booking.currency if booking
+                        else (airport_booking.currency if airport_booking
+                              else (transaction.currency if transaction else "INR"))
+                    ) or "INR"
+
+                    # Check for missing amount or currency
+                    if received_amount_raw is None or received_currency_raw is None or str(received_currency_raw).strip() == "":
+                        logger.warning(
+                            f"[PaymentService] PAYMENT_AMOUNT_CHECK: Incomplete payment data for event '{event_name}' (booking '{resolved_booking_ref}'). "
+                            f"expected_amount={expected_amt_val}, received_amount={received_amount_raw}, "
+                            f"expected_currency={expected_curr_val}, received_currency={received_currency_raw}, "
+                            f"result=PAYMENT_DATA_INCOMPLETE"
                         )
+                        return {
+                            "success": False,
+                            "status": "PAYMENT_DATA_INCOMPLETE",
+                            "reason": "Payment data missing required amount or currency data.",
+                            "booking_ref": resolved_booking_ref
+                        }
 
-                # For VERIFY_ENDPOINT, if amount or currency is not in payload, fetch from Razorpay API or transaction
-                if event_name == "VERIFY_ENDPOINT" and (received_amount_raw is None or not received_currency_raw):
-                    from app.providers.razorpay_provider import razorpay_provider
-                    if order_id and razorpay_provider.is_configured():
-                        ord_res = razorpay_provider.fetch_order(order_id)
-                        if ord_res.get("success") and ord_res.get("order"):
-                            ord_data = ord_res["order"]
-                            if received_amount_raw is None:
-                                received_amount_raw = ord_data.get("amount_paid") or ord_data.get("amount")
-                            if not received_currency_raw:
-                                received_currency_raw = ord_data.get("currency")
+                    # Currency validation (case-insensitive)
+                    exp_curr_norm = str(expected_curr_val).strip().upper()
+                    rec_curr_norm = str(received_currency_raw).strip().upper()
 
-                    if received_amount_raw is None and transaction and transaction.amount is not None:
-                        received_amount_raw = int(round(float(transaction.amount) * 100))
-                    if not received_currency_raw and transaction and transaction.currency:
-                        received_currency_raw = transaction.currency
+                    if exp_curr_norm != rec_curr_norm:
+                        logger.error(
+                            f"[PaymentService] PAYMENT_AMOUNT_CHECK: "
+                            f"expected_amount={expected_amt_val}, received_amount={received_amount_raw}, "
+                            f"expected_currency={exp_curr_norm}, received_currency={rec_curr_norm}, "
+                            f"result=CURRENCY_MISMATCH"
+                        )
+                        return {
+                            "success": False,
+                            "status": "CURRENCY_MISMATCH",
+                            "reason": f"Payment currency '{rec_curr_norm}' does not match expected booking currency '{exp_curr_norm}'.",
+                            "booking_ref": resolved_booking_ref,
+                            "expected_currency": exp_curr_norm,
+                            "received_currency": rec_curr_norm
+                        }
 
-                # Fill amount/currency from the DB only when Razorpay did not send a
-                # payload (VERIFY_ENDPOINT / programmatic capture). Webhooks that omit
-                # amount or currency must still be rejected as PAYMENT_DATA_INCOMPLETE.
-                if event_name == "VERIFY_ENDPOINT" or raw_payload is None:
-                    if received_amount_raw is None and transaction and transaction.amount is not None:
-                        received_amount_raw = int(round(float(transaction.amount) * 100))
-                    if not received_currency_raw and transaction and transaction.currency:
-                        received_currency_raw = transaction.currency
+                    # Amount validation with Decimal precision (Razorpay paise / 100 -> rupees)
+                    try:
+                        rec_paise = Decimal(str(received_amount_raw))
+                        rec_rupees = rec_paise / Decimal("100")
+                        exp_rupees = Decimal(str(expected_amt_val))
+                    except Exception as num_err:
+                        logger.error(f"[PaymentService] PAYMENT_AMOUNT_CHECK: Numeric parsing error: {num_err}")
+                        return {
+                            "success": False,
+                            "status": "PAYMENT_DATA_INCOMPLETE",
+                            "reason": "Invalid numeric format in payment amount.",
+                            "booking_ref": resolved_booking_ref
+                        }
 
-                expected_amt_val = (
-                    float(booking.total_amount) if booking
-                    else (float(airport_booking.total_price) if airport_booking
-                          else (float(transaction.amount) if transaction else None))
-                )
-                expected_curr_val = (
-                    booking.currency if booking
-                    else (airport_booking.currency if airport_booking
-                          else (transaction.currency if transaction else "INR"))
-                ) or "INR"
+                    if abs(rec_rupees - exp_rupees) > Decimal("0.001"):
+                        logger.error(
+                            f"[PaymentService] PAYMENT_AMOUNT_CHECK: "
+                            f"expected_amount={float(exp_rupees)}, received_amount={float(rec_rupees)}, "
+                            f"expected_currency={exp_curr_norm}, received_currency={rec_curr_norm}, "
+                            f"result=AMOUNT_MISMATCH"
+                        )
+                        return {
+                            "success": False,
+                            "status": "AMOUNT_MISMATCH",
+                            "reason": f"Payment amount {rec_rupees} {rec_curr_norm} does not match expected booking amount {exp_rupees} {exp_curr_norm}.",
+                            "booking_ref": resolved_booking_ref,
+                            "expected_amount": float(exp_rupees),
+                            "received_amount": float(rec_rupees)
+                        }
 
-                # Check for missing amount or currency
-                if received_amount_raw is None or received_currency_raw is None or str(received_currency_raw).strip() == "":
-                    logger.warning(
-                        f"[PaymentService] PAYMENT_AMOUNT_CHECK: Incomplete payment data for event '{event_name}' (booking '{resolved_booking_ref}'). "
-                        f"expected_amount={expected_amt_val}, received_amount={received_amount_raw}, "
-                        f"expected_currency={expected_curr_val}, received_currency={received_currency_raw}, "
-                        f"result=PAYMENT_DATA_INCOMPLETE"
-                    )
-                    return {
-                        "success": False,
-                        "status": "PAYMENT_DATA_INCOMPLETE",
-                        "reason": "Payment data missing required amount or currency data.",
-                        "booking_ref": resolved_booking_ref
-                    }
-
-                # Currency validation (case-insensitive)
-                exp_curr_norm = str(expected_curr_val).strip().upper()
-                rec_curr_norm = str(received_currency_raw).strip().upper()
-
-                if exp_curr_norm != rec_curr_norm:
-                    logger.error(
-                        f"[PaymentService] PAYMENT_AMOUNT_CHECK: "
-                        f"expected_amount={expected_amt_val}, received_amount={received_amount_raw}, "
-                        f"expected_currency={exp_curr_norm}, received_currency={rec_curr_norm}, "
-                        f"result=CURRENCY_MISMATCH"
-                    )
-                    return {
-                        "success": False,
-                        "status": "CURRENCY_MISMATCH",
-                        "reason": f"Payment currency '{rec_curr_norm}' does not match expected booking currency '{exp_curr_norm}'.",
-                        "booking_ref": resolved_booking_ref,
-                        "expected_currency": exp_curr_norm,
-                        "received_currency": rec_curr_norm
-                    }
-
-                # Amount validation with Decimal precision (Razorpay paise / 100 -> rupees)
-                try:
-                    rec_paise = Decimal(str(received_amount_raw))
-                    rec_rupees = rec_paise / Decimal("100")
-                    exp_rupees = Decimal(str(expected_amt_val))
-                except Exception as num_err:
-                    logger.error(f"[PaymentService] PAYMENT_AMOUNT_CHECK: Numeric parsing error: {num_err}")
-                    return {
-                        "success": False,
-                        "status": "PAYMENT_DATA_INCOMPLETE",
-                        "reason": "Invalid numeric format in payment amount.",
-                        "booking_ref": resolved_booking_ref
-                    }
-
-                if abs(rec_rupees - exp_rupees) > Decimal("0.001"):
-                    logger.error(
+                    logger.info(
                         f"[PaymentService] PAYMENT_AMOUNT_CHECK: "
                         f"expected_amount={float(exp_rupees)}, received_amount={float(rec_rupees)}, "
                         f"expected_currency={exp_curr_norm}, received_currency={rec_curr_norm}, "
-                        f"result=AMOUNT_MISMATCH"
+                        f"result=EXACT_MATCH"
                     )
-                    return {
-                        "success": False,
-                        "status": "AMOUNT_MISMATCH",
-                        "reason": f"Payment amount {rec_rupees} {rec_curr_norm} does not match expected booking amount {exp_rupees} {exp_curr_norm}.",
-                        "booking_ref": resolved_booking_ref,
-                        "expected_amount": float(exp_rupees),
-                        "received_amount": float(rec_rupees)
-                    }
-
-                logger.info(
-                    f"[PaymentService] PAYMENT_AMOUNT_CHECK: "
-                    f"expected_amount={float(exp_rupees)}, received_amount={float(rec_rupees)}, "
-                    f"expected_currency={exp_curr_norm}, received_currency={rec_curr_norm}, "
-                    f"result=EXACT_MATCH"
-                )
 
                 # A valid gateway event may arrive before the local transaction
                 # commit becomes visible. Preserve the financial event instead
@@ -1259,6 +1541,7 @@ class PaymentService:
 
             # Update PaymentTransaction
             if transaction:
+                PaymentStateMachine.validate_transition(transaction.status, PaymentStatus.SUCCESSFUL)
                 transaction.status = PaymentStatus.SUCCESSFUL
                 if payment_id:
                     transaction.gateway_payment_id = payment_id
@@ -1714,6 +1997,11 @@ class PaymentService:
         if booking.status in (BookingStatus.CANCELLED, BookingStatus.REJECTED):
             raise ValueError(f"Booking '{booking_ref}' is cancelled/rejected and cannot be paid.")
 
+        if cls.active_payment_gateway() == "ICICI":
+            return cls._retry_icici_payment(db, booking, user_id=user_id)
+
+        cls.assert_gateway_exclusive(db, booking, "RAZORPAY")
+
         authoritative_amount = float(booking.total_amount)
         amount_paise = int(round(authoritative_amount * 100))
 
@@ -1728,19 +2016,16 @@ class PaymentService:
         )
         existing_oid = (existing_tx.gateway_payment_id if existing_tx else "") or ""
         if existing_oid.startswith("order_") and not existing_oid.startswith("order_sim_"):
-            return {
-                "bookingRef": booking.booking_ref,
-                "transactionRef": existing_tx.transaction_ref,
-                "razorpay_order_id": existing_oid,
-                "razorpay_key_id": razorpay_provider.key_id,
-                "razorpay_amount_paise": amount_paise,
-                "totalAmount": authoritative_amount,
-                "currency": booking.currency or "INR",
-                "passengerName": booking.passenger_name,
-                "passengerEmail": booking.passenger_email,
-                "passengerPhone": booking.passenger_phone,
-            }
-
+            return cls._public_checkout_payload(
+                booking_ref=booking.booking_ref,
+                gateway="RAZORPAY",
+                transaction_ref=existing_tx.transaction_ref,
+                total_amount=authoritative_amount,
+                currency=booking.currency or "INR",
+                razorpay_order_id=existing_oid,
+                razorpay_key_id=razorpay_provider.key_id,
+                razorpay_amount_paise=amount_paise,
+            )
         ref = f"PAY-RETRY-{uuid.uuid4().hex[:6].upper()}"
 
         intent = razorpay_provider.create_order(
@@ -1790,17 +2075,331 @@ class PaymentService:
         except Exception:
             pass
 
+        return cls._public_checkout_payload(
+            booking_ref=booking.booking_ref,
+            gateway="RAZORPAY",
+            transaction_ref=ref,
+            total_amount=authoritative_amount,
+            currency=booking.currency or "INR",
+            razorpay_order_id=order_id,
+            razorpay_key_id=razorpay_provider.key_id,
+            razorpay_amount_paise=amount_paise,
+        )
+
+    @classmethod
+    def _retry_icici_payment(cls, db: Session, booking, user_id: Optional[str] = None) -> Dict[str, Any]:
+        cls.assert_gateway_exclusive(db, booking, "ICICI")
+        existing_tx = db.scalar(
+            select(PaymentTransaction)
+            .where(
+                PaymentTransaction.entity_id.in_([booking.booking_ref, str(booking.id)]),
+                PaymentTransaction.status == PaymentStatus.PENDING,
+                PaymentTransaction.gateway_provider == "ICICI",
+            )
+            .order_by(desc(PaymentTransaction.created_at))
+        )
+        if existing_tx and isinstance(existing_tx.gateway_response, dict):
+            payment_url = existing_tx.gateway_response.get("payment_url")
+            if payment_url:
+                return cls._public_checkout_payload(
+                    booking_ref=booking.booking_ref,
+                    gateway="ICICI",
+                    transaction_ref=existing_tx.transaction_ref,
+                    total_amount=float(booking.total_amount),
+                    currency=booking.currency or "INR",
+                    icici_redirect_url=payment_url,
+                    icici_merchant_txn_no=existing_tx.gateway_payment_id,
+                )
+
+        init_request = PaymentInitiateRequest(
+            entity_type="AIRPORT_BOOKING",
+            entity_id=str(booking.booking_ref),
+            customer_name=booking.passenger_name or "Valued Guest",
+            customer_email=booking.passenger_email or "guest@shafsky.com",
+            amount=float(booking.total_amount),
+            currency=booking.currency or "INR",
+            payment_method=PaymentMethod.CREDIT_CARD,
+            customer_id=user_id or (str(booking.user_id) if booking.user_id else None),
+        )
+        tx = cls._initiate_icici_payment(db, init_request)
+        gw = tx.gateway_response if isinstance(tx.gateway_response, dict) else {}
+        return cls._public_checkout_payload(
+            booking_ref=booking.booking_ref,
+            gateway="ICICI",
+            transaction_ref=tx.transaction_ref,
+            total_amount=float(booking.total_amount),
+            currency=booking.currency or "INR",
+            icici_redirect_url=gw.get("payment_url"),
+            icici_merchant_txn_no=tx.gateway_payment_id,
+        )
+
+    @classmethod
+    def handle_icici_browser_cancel(
+        cls,
+        db: Session,
+        query_params: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        ICICI hosted-page Back/Cancel uses browser GET to merchant returnURL.
+        Never confirms payment. Redirects customer to payment-result as cancelled.
+        """
+        from app.providers.icici_provider import icici_provider
+
+        params = icici_provider.flatten_callback_payload(query_params or {})
+        merchant_txn_no = str(
+            params.get("merchantTxnNo")
+            or params.get("merchant_txn_no")
+            or ""
+        ).strip()
+        booking_ref = str(params.get("ref") or params.get("booking_ref") or "").strip() or "unknown"
+
+        if merchant_txn_no:
+            transaction = db.scalar(
+                select(PaymentTransaction)
+                .where(
+                    PaymentTransaction.gateway_provider == "ICICI",
+                    PaymentTransaction.gateway_payment_id == merchant_txn_no,
+                )
+                .order_by(desc(PaymentTransaction.created_at))
+            )
+            if transaction and transaction.entity_id:
+                booking_ref = str(transaction.entity_id)
+                # Leave PENDING/PROCESSING as-is; do not mark FAILED solely from Back.
+                logger.info(
+                    "[ICICI] browser Back/Cancel for txn=%s booking=%s status=%s (no confirmation)",
+                    merchant_txn_no,
+                    booking_ref,
+                    transaction.status.value if hasattr(transaction.status, "value") else transaction.status,
+                )
+
+        redirect_url = icici_provider.resolve_customer_return_url(
+            booking_ref,
+            success=False,
+            cancelled=True,
+        )
         return {
-            "bookingRef": booking.booking_ref,
-            "transactionRef": ref,
-            "razorpay_order_id": order_id,
-            "razorpay_key_id": razorpay_provider.key_id,
-            "razorpay_amount_paise": amount_paise,
-            "totalAmount": authoritative_amount,
-            "currency": booking.currency or "INR",
-            "passengerName": booking.passenger_name,
-            "passengerEmail": booking.passenger_email,
-            "passengerPhone": booking.passenger_phone,
+            "success": False,
+            "cancelled": True,
+            "booking_ref": booking_ref,
+            "redirect_url": redirect_url,
+        }
+
+    @classmethod
+    def handle_icici_browser_back(
+        cls,
+        db: Session,
+        query_params: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        ICICI hosted-page Back/Cancel navigates with GET to merchant returnURL.
+        Never confirms payment. Resolves booking_ref when merchantTxnNo is known,
+        then redirects to the customer payment-result page as cancelled.
+        """
+        from app.providers.icici_provider import icici_provider
+
+        params = icici_provider.flatten_callback_payload(query_params or {})
+        merchant_txn_no = str(params.get("merchantTxnNo") or "").strip()
+        booking_ref = str(params.get("ref") or params.get("booking_ref") or "").strip() or "unknown"
+
+        if merchant_txn_no:
+            transaction = db.scalar(
+                select(PaymentTransaction)
+                .where(
+                    PaymentTransaction.gateway_provider == "ICICI",
+                    PaymentTransaction.gateway_payment_id == merchant_txn_no,
+                )
+                .order_by(desc(PaymentTransaction.created_at))
+            )
+            if transaction and transaction.entity_id:
+                booking_ref = str(transaction.entity_id)
+
+        redirect_url = icici_provider.resolve_customer_return_url(
+            booking_ref,
+            success=False,
+            cancelled=True,
+        )
+        logger.info(
+            "[ICICI] browser Back/Cancel GET handled txn=%s booking=%s (no confirmation)",
+            merchant_txn_no or "-",
+            booking_ref,
+        )
+        return {
+            "success": False,
+            "cancelled": True,
+            "booking_ref": booking_ref,
+            "redirect_url": redirect_url,
+        }
+
+    @classmethod
+    def process_icici_callback(cls, db: Session, raw_params: Dict[str, Any]) -> Dict[str, Any]:
+        """Verify ICICI callback + STATUS, then confirm via handle_verified_payment."""
+        from app.providers.icici_provider import icici_provider
+
+        params = icici_provider.flatten_callback_payload(raw_params)
+        merchant_txn_no = str(params.get("merchantTxnNo") or "").strip()
+        if not merchant_txn_no:
+            return {
+                "success": False,
+                "error": "Missing merchantTxnNo",
+                "redirect_url": icici_provider.resolve_customer_return_url("unknown", success=False),
+            }
+
+        transaction = db.scalar(
+            select(PaymentTransaction)
+            .where(
+                PaymentTransaction.gateway_provider == "ICICI",
+                PaymentTransaction.gateway_payment_id == merchant_txn_no,
+            )
+            .order_by(desc(PaymentTransaction.created_at))
+        )
+        if not transaction:
+            logger.warning("[ICICI] callback for unknown merchantTxnNo=%s", merchant_txn_no)
+            return {
+                "success": False,
+                "error": "Unknown transaction",
+                "redirect_url": icici_provider.resolve_customer_return_url("unknown", success=False),
+            }
+
+        booking_ref = transaction.entity_id
+        redirect_fail = icici_provider.resolve_customer_return_url(booking_ref, success=False)
+        redirect_ok = icici_provider.resolve_customer_return_url(booking_ref, success=True)
+
+        if transaction.status == PaymentStatus.SUCCESSFUL:
+            return {
+                "success": True,
+                "already_confirmed": True,
+                "booking_ref": booking_ref,
+                "redirect_url": redirect_ok,
+            }
+
+        identity = icici_provider.verify_callback_identity(
+            params,
+            expected_merchant_txn_no=merchant_txn_no,
+            expected_amount=float(transaction.amount),
+        )
+        if not identity.get("ok"):
+            logger.warning(
+                "[ICICI] callback verification failed txn=%s errors=%s",
+                merchant_txn_no,
+                identity.get("errors"),
+            )
+            try:
+                if PaymentStateMachine.can_transition(transaction.status, PaymentStatus.FAILED):
+                    transaction.status = PaymentStatus.FAILED
+                    notes = (transaction.notes or "") + f" | ICICI callback verify failed: {identity.get('errors')}"
+                    transaction.notes = notes[:2000]
+                    db.commit()
+            except Exception:
+                db.rollback()
+            return {
+                "success": False,
+                "error": "Callback verification failed",
+                "booking_ref": booking_ref,
+                "redirect_url": redirect_fail,
+            }
+
+        status_result = icici_provider.check_transaction_status(
+            merchant_txn_no=merchant_txn_no,
+            original_txn_no=str(params.get("txnID") or params.get("originalTxnNo") or merchant_txn_no),
+        )
+        if status_result.get("timeout") or status_result.get("pending"):
+            try:
+                if PaymentStateMachine.can_transition(transaction.status, PaymentStatus.PROCESSING):
+                    transaction.status = PaymentStatus.PROCESSING
+                    merged = dict(transaction.gateway_response or {})
+                    merged["last_status"] = status_result.get("data")
+                    transaction.gateway_response = merged
+                    db.commit()
+            except Exception:
+                db.rollback()
+            redirect_pending = icici_provider.resolve_customer_return_url(
+                booking_ref, success=False, pending=True
+            )
+            return {
+                "success": False,
+                "pending": True,
+                "error": status_result.get("error") or "Payment pending",
+                "booking_ref": booking_ref,
+                "redirect_url": redirect_pending,
+            }
+
+        if not status_result.get("success") or not status_result.get("paid"):
+            try:
+                if PaymentStateMachine.can_transition(transaction.status, PaymentStatus.FAILED):
+                    transaction.status = PaymentStatus.FAILED
+                    merged = dict(transaction.gateway_response or {})
+                    merged["last_status"] = status_result.get("data")
+                    transaction.gateway_response = merged
+                    db.commit()
+            except Exception:
+                db.rollback()
+            return {
+                "success": False,
+                "error": status_result.get("error")
+                or status_result.get("txnRespDescription")
+                or "Payment not successful",
+                "booking_ref": booking_ref,
+                "redirect_url": redirect_fail,
+            }
+
+        # STATUS amount must match booking/transaction (rupees, not paise)
+        status_amount_raw = status_result.get("amount")
+        if status_amount_raw in (None, ""):
+            logger.warning("[ICICI] STATUS missing amount for txn=%s", merchant_txn_no)
+            return {
+                "success": False,
+                "error": "STATUS amount missing",
+                "booking_ref": booking_ref,
+                "redirect_url": redirect_fail,
+            }
+        try:
+            from app.providers.icici_provider import format_icici_amount
+            if format_icici_amount(status_amount_raw) != format_icici_amount(transaction.amount):
+                logger.error(
+                    "[ICICI] STATUS amount mismatch txn=%s status=%s expected=%s",
+                    merchant_txn_no,
+                    status_amount_raw,
+                    transaction.amount,
+                )
+                return {
+                    "success": False,
+                    "error": "STATUS amount mismatch",
+                    "booking_ref": booking_ref,
+                    "redirect_url": redirect_fail,
+                }
+        except Exception:
+            logger.exception("[ICICI] STATUS amount parse failed txn=%s", merchant_txn_no)
+            return {
+                "success": False,
+                "error": "STATUS amount invalid",
+                "booking_ref": booking_ref,
+                "redirect_url": redirect_fail,
+            }
+
+        txn_id = str(status_result.get("txnID") or params.get("txnID") or merchant_txn_no)
+        from app.providers.icici_provider import format_icici_amount as _fmt_amt
+        result = cls.handle_verified_payment(
+            db,
+            event_name="ICICI_STATUS_SUC",
+            gateway_provider="ICICI",
+            order_id=merchant_txn_no,
+            payment_id=txn_id,
+            booking_ref=booking_ref,
+            signature=None,
+            raw_payload={
+                "icici_callback": {k: v for k, v in params.items() if str(k).lower() != "securehash"},
+                "icici_status": status_result.get("data"),
+            },
+            channel="web",
+            amount=float(_fmt_amt(status_amount_raw)),
+            currency=transaction.currency or "INR",
+        )
+        ok = bool(result.get("success") or result.get("already_processed"))
+        return {
+            "success": ok,
+            "booking_ref": booking_ref,
+            "redirect_url": redirect_ok if ok else redirect_fail,
+            "result": result,
         }
 
     @classmethod
@@ -1810,12 +2409,11 @@ class PaymentService:
         payload: WebhookPayload,
         provider: Optional[PaymentProvider] = None
     ) -> PaymentTransaction:
-        """Handles incoming payment gateway webhooks with strict idempotency and state machine protection.
-
-        Signature verification must already have passed at the router layer.
-        Do not default to MockPaymentProvider (H10) — that path is for explicit tests only.
         """
-        _ = provider  # optional injected provider reserved for tests; not used for auth
+        Internal webhook handler. Signature verification must already have passed.
+        Success events go exclusively through handle_verified_payment (never mark SUCCESSFUL here alone).
+        """
+        _ = provider
 
         transaction = db.scalar(
             select(PaymentTransaction).where(PaymentTransaction.transaction_ref == payload.transaction_ref)
@@ -1823,46 +2421,46 @@ class PaymentService:
         if not transaction:
             raise ValueError(f"Transaction with reference '{payload.transaction_ref}' not found.")
 
-        # 1. Rule 14: Webhook Idempotency Check
         if transaction.status == PaymentStatus.SUCCESSFUL:
-            logger.info("Idempotent webhook delivery received for transaction %s; skipping duplicate processing.", payload.transaction_ref)
+            logger.info(
+                "Idempotent webhook delivery received for transaction %s; skipping duplicate processing.",
+                payload.transaction_ref,
+            )
             return transaction
 
-        # 2. Rule 15: Payment State Machine Transition Protection
-        if transaction.status in [PaymentStatus.FAILED, PaymentStatus.REFUNDED, PaymentStatus.EXPIRED]:
-            if payload.event_type in ["payment.succeeded", "PAYMENT_SUCCESS"]:
-                raise ValueError(f"Invalid payment state transition from '{transaction.status.value}' to 'SUCCESSFUL'.")
-
-        # Update status based on event
-        if payload.event_type in ["payment.succeeded", "PAYMENT_SUCCESS"]:
-            transaction.status = PaymentStatus.SUCCESSFUL
-            transaction.gateway_payment_id = payload.gateway_payment_id
-
-            # Auto-generate Invoice (Idempotent)
-            cls.generate_invoice(
+        if payload.event_type in ["payment.succeeded", "PAYMENT_SUCCESS", "payment.captured"]:
+            if transaction.status in [PaymentStatus.FAILED, PaymentStatus.REFUNDED, PaymentStatus.EXPIRED]:
+                raise ValueError(
+                    f"Invalid payment state transition from '{transaction.status.value}' to 'SUCCESSFUL'."
+                )
+            result = cls.handle_verified_payment(
                 db,
-                transaction=transaction,
-                customer_name="Valued Customer",
-                customer_email="customer@shafsky.com"
+                event_name="PAYMENT_SUCCESS",
+                gateway_provider=str(payload.provider or transaction.gateway_provider or "RAZORPAY").upper(),
+                order_id=payload.gateway_payment_id if str(payload.gateway_payment_id or "").startswith("order_") else None,
+                payment_id=payload.gateway_payment_id,
+                booking_ref=transaction.entity_id,
+                signature=payload.signature,
+                raw_payload=payload.data if isinstance(payload.data, dict) else None,
+                amount=float(transaction.amount) if transaction.amount is not None else None,
+                currency=transaction.currency,
             )
-
-            # Timeline event
-            TimelineService.add_entry(
-                db,
-                entity_type=transaction.entity_type,
-                entity_id=transaction.entity_id,
-                event_type="PAYMENT_VERIFIED",
-                title=f"Payment Verified ({transaction.transaction_ref})",
-                details={"amount": transaction.amount, "currency": transaction.currency}
+            if not result.get("success"):
+                raise ValueError(result.get("reason") or "Payment confirmation failed.")
+            refreshed = db.scalar(
+                select(PaymentTransaction).where(PaymentTransaction.transaction_ref == payload.transaction_ref)
             )
+            return refreshed or transaction
 
-        elif payload.event_type in ["payment.failed", "PAYMENT_FAILED"]:
+        if payload.event_type in ["payment.failed", "PAYMENT_FAILED"]:
+            PaymentStateMachine.validate_transition(transaction.status, PaymentStatus.FAILED)
             transaction.status = PaymentStatus.FAILED
+            transaction.updated_at = datetime.now(timezone.utc)
+            db.commit()
+            db.refresh(transaction)
+            return transaction
 
-        transaction.updated_at = datetime.now(timezone.utc)
-        db.commit()
-        db.refresh(transaction)
-        return transaction
+        raise ValueError(f"Unsupported webhook event_type '{payload.event_type}'.")
 
 
     @classmethod
@@ -1928,10 +2526,14 @@ class PaymentService:
     ) -> Refund:
         """
         Processes a production refund against a successful payment transaction.
-        Validates refund ceiling, invokes Razorpay refund API, and manages partial vs full states.
+        Routes to Razorpay or ICICI based on the transaction gateway_provider.
+        Never simulates ICICI refunds.
         """
         from app.providers.razorpay_provider import razorpay_provider
+        from app.providers.icici_provider import icici_provider, generate_merchant_txn_no
         from app.models.schema import Booking, BookingStatus
+
+        _ = provider
 
         try:
             tx_uuid = uuid.UUID(payload.transaction_id)
@@ -1951,7 +2553,6 @@ class PaymentService:
         if payload.amount <= 0:
             raise ValueError("Refund amount must be greater than zero.")
 
-        # Calculate already refunded total
         existing_refunds_total = sum(
             r.amount for r in transaction.refunds
             if r.status in (PaymentStatus.REFUNDED, PaymentStatus.SUCCESSFUL, PaymentStatus.PROCESSING)
@@ -1965,31 +2566,66 @@ class PaymentService:
             )
 
         ref_id = f"REF-{uuid.uuid4().hex[:8].upper()}"
+        gateway = str(transaction.gateway_provider or "").strip().upper()
+        reason = payload.reason or "Admin authorized refund"
 
-        # Invoke Razorpay Refund API
-        gateway_payment_id = transaction.gateway_payment_id or str(transaction.id)
-        gateway_res = razorpay_provider.create_refund(
-            payment_id=gateway_payment_id,
-            amount=payload.amount,
-            reason=payload.reason or "Admin authorized refund"
-        )
+        if gateway == "ICICI":
+            if not icici_provider.is_configured():
+                raise ValueError("ICICI payment gateway is not configured for refunds.")
+            gw_resp = transaction.gateway_response if isinstance(transaction.gateway_response, dict) else {}
+            original_txn = (
+                str(gw_resp.get("txnID") or "")
+                or str((gw_resp.get("last_status") or {}).get("txnID") or "")
+                or str((gw_resp.get("icici_status") or {}).get("txnID") or "")
+                or str(transaction.gateway_payment_id or "")
+            ).strip()
+            if not original_txn:
+                raise ValueError("ICICI original transaction id missing; cannot refund.")
+            refund_merchant_txn = generate_merchant_txn_no("RF")
+            gateway_res = icici_provider.refund(
+                merchant_txn_no=refund_merchant_txn,
+                original_txn_no=original_txn,
+                amount=payload.amount,
+                extra={"addlParam1": reason[:50]},
+            )
+            if not gateway_res.get("success"):
+                raise ValueError(gateway_res.get("error") or "ICICI refund execution failed.")
+            if gateway_res.get("simulated"):
+                raise ValueError("ICICI refund simulation is not allowed.")
+            gateway_refund_id = (
+                str((gateway_res.get("data") or {}).get("txnID") or "")
+                or str((gateway_res.get("raw") or {}).get("txnID") or "")
+                or refund_merchant_txn
+            )
+        elif gateway == "RAZORPAY":
+            gateway_payment_id = transaction.gateway_payment_id or str(transaction.id)
+            if str(gateway_payment_id).startswith(("SF", "RF")) and not str(gateway_payment_id).startswith("pay_"):
+                # Guard: ICICI-looking ids must never hit Razorpay
+                raise ValueError(
+                    f"Transaction gateway is RAZORPAY but payment id '{gateway_payment_id}' looks non-Razorpay."
+                )
+            gateway_res = razorpay_provider.create_refund(
+                payment_id=gateway_payment_id,
+                amount=payload.amount,
+                reason=reason,
+            )
+            if not gateway_res.get("success"):
+                raise ValueError(gateway_res.get("error", "Razorpay refund execution failed."))
+            gateway_refund_id = gateway_res.get("refund_id")
+        else:
+            raise ValueError(f"Unsupported payment gateway for refunds: '{gateway or 'UNKNOWN'}'.")
 
-        if not gateway_res.get("success"):
-            raise ValueError(gateway_res.get("error", "Razorpay refund execution failed."))
-
-        gateway_refund_id = gateway_res.get("refund_id")
-
-        # Determine if full or partial refund
         new_total_refunded = existing_refunds_total + payload.amount
         is_full_refund = round(new_total_refunded, 2) >= round(transaction.amount, 2)
         new_tx_status = PaymentStatus.REFUNDED if is_full_refund else PaymentStatus.PARTIALLY_REFUNDED
+        PaymentStateMachine.validate_transition(transaction.status, new_tx_status)
 
         refund = Refund(
             refund_ref=ref_id,
             transaction_id=transaction.id,
             amount=payload.amount,
             currency=transaction.currency,
-            reason=payload.reason or "Admin authorized refund",
+            reason=reason,
             status=PaymentStatus.REFUNDED,
             gateway_refund_id=gateway_refund_id,
             processed_at=datetime.now(timezone.utc)
@@ -1999,11 +2635,9 @@ class PaymentService:
         transaction.status = new_tx_status
         transaction.updated_at = datetime.now(timezone.utc)
 
-        # Update linked Invoices
         for inv in transaction.invoices:
             inv.status = InvoiceStatus.CANCELLED if is_full_refund else InvoiceStatus.PARTIALLY_PAID
 
-        # Update linked Booking if full refund
         if is_full_refund:
             booking = None
             if transaction.entity_id:
@@ -2020,9 +2654,11 @@ class PaymentService:
             if booking:
                 booking.status = BookingStatus.CANCELLED
                 booking.updated_at = datetime.now(timezone.utc)
-                logger.info(f"[PaymentService] Full refund processed for booking '{booking.booking_ref}'. Booking status set to CANCELLED.")
+                logger.info(
+                    f"[PaymentService] Full refund processed for booking '{booking.booking_ref}'. "
+                    "Booking status set to CANCELLED."
+                )
 
-        # Timeline event
         TimelineService.add_entry(
             db,
             entity_type=transaction.entity_type,
@@ -2033,11 +2669,11 @@ class PaymentService:
                 "refundAmount": payload.amount,
                 "refundRef": ref_id,
                 "isFullRefund": is_full_refund,
-                "gatewayRefundId": gateway_refund_id
+                "gatewayRefundId": gateway_refund_id,
+                "gateway": gateway,
             }
         )
 
-        # Audit log
         AdminService.log_audit_action(
             db,
             actor_email=actor_email,
@@ -2048,7 +2684,8 @@ class PaymentService:
                 "refund_ref": ref_id,
                 "amount": payload.amount,
                 "gateway_refund_id": gateway_refund_id,
-                "is_full_refund": is_full_refund
+                "is_full_refund": is_full_refund,
+                "gateway": gateway,
             }
         )
 

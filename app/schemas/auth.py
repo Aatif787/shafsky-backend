@@ -5,6 +5,11 @@ class LoginRequest(BaseModel):
     email: str = Field(..., description="Email address or admin ID")
     password: str
 
+class ClerkExchangeRequest(BaseModel):
+    """Optional body token. Role, email, and user id in the body are ignored."""
+    model_config = {"extra": "ignore"}
+    token: Optional[str] = None
+
 class RefreshTokenRequest(BaseModel):
     refreshToken: Optional[str] = None
 

@@ -85,6 +85,8 @@ class BookingApiResponse(BaseModel):
 class BookingStatusUpdate(BaseModel):
     status: str
     version: Optional[int] = None
+    force_confirm: bool = False
+    reason: Optional[str] = Field(None, max_length=500)
 
 class BookingAssign(BaseModel):
     assignedTo: str
