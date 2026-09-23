@@ -33,10 +33,19 @@ class PaymentService:
 
     @classmethod
     def active_payment_gateway(cls) -> str:
-        """RAZORPAY (default) or ICICI when configured and selected."""
+        """RAZORPAY (default) or ICICI when selected and credentials are present.
+
+        Reads process env on every call so a restarted process / updated env is honored
+        without relying on a stale Settings singleton.
+        """
         from app.providers.icici_provider import icici_provider
 
-        requested = (getattr(settings, "PAYMENT_GATEWAY", None) or "RAZORPAY").strip().upper()
+        requested = (
+            os.getenv("PAYMENT_GATEWAY")
+            or getattr(settings, "PAYMENT_GATEWAY", None)
+            or "RAZORPAY"
+        )
+        requested = str(requested).strip().upper()
         if requested == "ICICI":
             icici_provider.reload()
             if icici_provider.is_configured():

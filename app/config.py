@@ -120,7 +120,8 @@ class Settings(BaseSettings):
     RAZORPAY_KEY_SECRET: str = os.getenv("RAZORPAY_KEY_SECRET", "")
 
     # Active web checkout gateway for paid airport bookings: RAZORPAY | ICICI
-    PAYMENT_GATEWAY: str = (os.getenv("PAYMENT_GATEWAY") or "RAZORPAY").strip().upper()
+    # Prefer plain default; pydantic-settings / process env / .env supply the real value.
+    PAYMENT_GATEWAY: str = "RAZORPAY"
 
     # Signed guest payment-session tokens (retry / create-order / ICICI initiate)
     PAYMENT_SESSION_SECRET: str = os.getenv("PAYMENT_SESSION_SECRET", "") or os.getenv("JWT_SECRET", "")

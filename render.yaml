@@ -78,6 +78,30 @@ services:
         sync: false
       - key: RAZORPAY_WEBHOOK_SECRET
         sync: false
+      - key: PAYMENT_GATEWAY
+        sync: false
+      - key: PAYMENT_SESSION_SECRET
+        sync: false
+      - key: PUBLIC_BACKEND_URL
+        sync: false
+      - key: PUBLIC_FRONTEND_URL
+        sync: false
+      - key: ICICI_MID
+        sync: false
+      - key: ICICI_KEY
+        sync: false
+      - key: ICICI_AGG_ID
+        sync: false
+      - key: ICICI_RETURN_URL
+        sync: false
+      - key: ICICI_CUSTOMER_RETURN_URL
+        sync: false
+      - key: ICICI_SALE_URL
+        sync: false
+      - key: ICICI_COMMAND_URL
+        sync: false
+      - key: ICICI_ENV
+        sync: false
       - key: WHATSAPP_ACCESS_TOKEN
         sync: false
       - key: WHATSAPP_APP_SECRET

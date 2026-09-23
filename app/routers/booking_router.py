@@ -112,6 +112,11 @@ async def create_booking(
     try:
         transaction = PaymentService.initiate_payment(db, init_request)
         db.commit()
+        logger.info(
+            "Booking %s payment initiated via %s",
+            booking.booking_ref,
+            transaction.gateway_provider,
+        )
     except Exception as e:
         db.rollback()
         logger.exception("Payment initiation failed after booking %s was created", booking.booking_ref)
