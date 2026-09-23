@@ -46,7 +46,9 @@ def _pending_catalog_booking():
     assert res.status_code == 201, res.text
     data = res.json()["data"]
     paise = int(round(float(data["totalAmount"]) * 100))
-    return data["bookingRef"], paise
+    payment_token = data.get("payment_token")
+    assert payment_token, "Booking create must issue a payment_token for guest checkout"
+    return data["bookingRef"], paise, payment_token
 
 
 def test_razorpay_credentials_loaded():
@@ -66,12 +68,13 @@ def test_create_order_minimum_amount_validation():
 
 def test_create_order_success():
     """Verify create-order successfully generates an order for a real booking."""
-    booking_ref, paise = _pending_catalog_booking()
+    booking_ref, paise, payment_token = _pending_catalog_booking()
     payload = {
         "amount": paise,
         "currency": "INR",
         "receipt": booking_ref,
         "notes": {"service": "Meet and Greet"},
+        "payment_token": payment_token,
     }
     res = client.post("/api/create-order", json=payload)
     assert res.status_code == 201, res.text
@@ -85,11 +88,12 @@ def test_create_order_success():
 
 def test_create_order_via_payments_prefix():
     """Verify create-order also works on /api/payments/create-order."""
-    booking_ref, paise = _pending_catalog_booking()
+    booking_ref, paise, payment_token = _pending_catalog_booking()
     payload = {
         "amount": paise,
         "currency": "INR",
         "receipt": booking_ref,
+        "payment_token": payment_token,
     }
     res = client.post("/api/payments/create-order", json=payload)
     assert res.status_code == 201, res.text
@@ -100,10 +104,15 @@ def test_create_order_via_payments_prefix():
 
 def test_verify_signature_success():
     """Verify valid HMAC-SHA256 signature is accepted for a real pending order."""
-    booking_ref, paise = _pending_catalog_booking()
+    booking_ref, paise, payment_token = _pending_catalog_booking()
     order_res = client.post(
         "/api/create-order",
-        json={"amount": paise, "currency": "INR", "receipt": booking_ref},
+        json={
+            "amount": paise,
+            "currency": "INR",
+            "receipt": booking_ref,
+            "payment_token": payment_token,
+        },
     )
     assert order_res.status_code == 201, order_res.text
     order_id = order_res.json()["order_id"]
@@ -117,6 +126,7 @@ def test_verify_signature_success():
         "razorpay_order_id": order_id,
         "razorpay_payment_id": payment_id,
         "razorpay_signature": valid_sig,
+        "booking_ref": booking_ref,
     }
 
     res = client.post("/api/verify-payment", json=payload)

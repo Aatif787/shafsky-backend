@@ -83,10 +83,15 @@ def test_02_sequential_version_increments():
     booking_ref = res_create.json()["data"]["bookingRef"]
     assert res_create.json()["data"]["version"] == 1
 
-    # First Update: PENDING -> CONFIRMED
+    # First Update: PENDING -> CONFIRMED (admin force for unpaid test booking)
     res_up1 = client.patch(
         f"/api/bookings/admin/{booking_ref}/status",
-        json={"status": "CONFIRMED", "version": 1},
+        json={
+            "status": "CONFIRMED",
+            "version": 1,
+            "force_confirm": True,
+            "reason": "Optimistic locking unit test",
+        },
         headers=admin_headers
     )
     assert res_up1.status_code == 200, res_up1.text
@@ -131,7 +136,12 @@ def test_03_stale_update_returns_http_409_conflict():
     # Transaction A updates to CONFIRMED (version becomes 2)
     res_up1 = client.patch(
         f"/api/bookings/admin/{booking_ref}/status",
-        json={"status": "CONFIRMED", "version": 1},
+        json={
+            "status": "CONFIRMED",
+            "version": 1,
+            "force_confirm": True,
+            "reason": "Optimistic locking stale-version unit test",
+        },
         headers=admin_headers
     )
     assert res_up1.status_code == 200
@@ -174,7 +184,14 @@ def test_04_concurrent_thread_updates():
     def perform_update(new_status):
         db = SessionLocal()
         try:
-            res = BookingService.admin_update_status(db, booking_ref, new_status, expected_version=1)
+            res = BookingService.admin_update_status(
+                db,
+                booking_ref,
+                new_status,
+                expected_version=1,
+                force_confirm=(str(new_status).upper() == "CONFIRMED"),
+                reason="Optimistic locking concurrency unit test",
+            )
             return ("SUCCESS", res)
         except Exception as exc:
             return ("FAILED", exc)

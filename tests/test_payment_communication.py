@@ -4,6 +4,9 @@ Verifies payment initiation, webhook verification, invoice generation,
 refund processing, email/WhatsApp/SMS dispatching, and REST APIs.
 """
 
+import hashlib
+import hmac
+import os
 import pytest
 import uuid
 from datetime import datetime, timezone
@@ -20,6 +23,16 @@ client = TestClient(app)
 
 from app.models.schema import Booking, BookingStatus
 from app.database import get_db
+
+
+def _sign_internal_webhook(transaction_ref: str, event_type: str, gateway_payment_id: str) -> str:
+    secret = (
+        os.getenv("PAYMENT_WEBHOOK_SECRET")
+        or os.getenv("RAZORPAY_WEBHOOK_SECRET")
+        or "test-payment-webhook-secret"
+    ).strip()
+    canonical = f"{transaction_ref}:{event_type}:{gateway_payment_id}"
+    return hmac.new(secret.encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256).hexdigest()
 
 @pytest.fixture(scope="session", autouse=True)
 def setup_db():
@@ -72,12 +85,14 @@ def test_payment_initiation_webhook_and_invoice():
     tx_id = tx_data["id"]
     assert tx_data["status"] == "PENDING"
 
-    # 2. Webhook Callback (Payment Succeeded)
+    # 2. Webhook Callback (Payment Succeeded) — signed (fail-closed)
+    gateway_payment_id = f"pay_{uuid.uuid4().hex[:8]}"
     wh_payload = {
         "provider": "MOCK_PAYMENT",
         "event_type": "payment.succeeded",
         "transaction_ref": tx_ref,
-        "gateway_payment_id": f"pay_{uuid.uuid4().hex[:8]}"
+        "gateway_payment_id": gateway_payment_id,
+        "signature": _sign_internal_webhook(tx_ref, "payment.succeeded", gateway_payment_id),
     }
     wh_res = client.post("/api/payments/webhook", json=wh_payload)
     assert wh_res.status_code == 200, wh_res.text
@@ -127,12 +142,15 @@ def test_payment_refund_flow():
     tx_id = res.json()["data"]["id"]
     tx_ref = res.json()["data"]["transaction_ref"]
 
-    client.post("/api/payments/webhook", json={
+    gateway_payment_id = f"pay_{uuid.uuid4().hex[:10]}"
+    wh_res = client.post("/api/payments/webhook", json={
         "provider": "MOCK_PAYMENT",
         "event_type": "payment.succeeded",
         "transaction_ref": tx_ref,
-        "gateway_payment_id": "pay_mock_123"
+        "gateway_payment_id": gateway_payment_id,
+        "signature": _sign_internal_webhook(tx_ref, "payment.succeeded", gateway_payment_id),
     })
+    assert wh_res.status_code == 200, wh_res.text
 
 
     # 2. Refund

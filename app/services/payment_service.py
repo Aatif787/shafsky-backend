@@ -1181,10 +1181,17 @@ class PaymentService:
                 value for value in (order_id, payment_id, payment_link_id) if value
             }
             if gateway_ids:
+                gateway_lookup = select(PaymentTransaction).where(
+                    PaymentTransaction.gateway_payment_id.in_(gateway_ids)
+                )
+                # When booking_ref is known, never attach a payment_id from another booking
+                # (e.g. reused test fixtures or replayed gateway ids).
+                if booking_ref:
+                    gateway_lookup = gateway_lookup.where(
+                        PaymentTransaction.entity_id == booking_ref
+                    )
                 transaction = db.scalar(
-                    select(PaymentTransaction)
-                    .where(PaymentTransaction.gateway_payment_id.in_(gateway_ids))
-                    .order_by(PaymentTransaction.created_at.desc())
+                    gateway_lookup.order_by(PaymentTransaction.created_at.desc())
                 )
             if not transaction and booking_ref:
                 booking_transactions = list(db.scalars(
@@ -1206,6 +1213,21 @@ class PaymentService:
                         ),
                         None,
                     )
+                    # Capture / internal webhooks often supply a new payment_id while the
+                    # pending row still stores the order_id. Prefer an active pending row
+                    # for this booking instead of dropping the ledger correlation.
+                    if not transaction:
+                        transaction = next(
+                            (
+                                candidate
+                                for candidate in booking_transactions
+                                if candidate.status in (
+                                    PaymentStatus.PENDING,
+                                    PaymentStatus.PROCESSING,
+                                )
+                            ),
+                            None,
+                        )
                 else:
                     transaction = booking_transactions[0] if booking_transactions else None
             if booking_ref and transaction and transaction.status != PaymentStatus.SUCCESSFUL:
@@ -2442,12 +2464,19 @@ class PaymentService:
                 raise ValueError(
                     f"Invalid payment state transition from '{transaction.status.value}' to 'SUCCESSFUL'."
                 )
+            # Pending rows usually store the order_id; the webhook supplies the payment_id.
+            existing_gw = str(transaction.gateway_payment_id or "").strip()
+            order_id = existing_gw if existing_gw.startswith("order_") else None
+            payment_id = str(payload.gateway_payment_id or "").strip() or None
+            if payment_id and payment_id.startswith("order_") and not order_id:
+                order_id = payment_id
+                payment_id = None
             result = cls.handle_verified_payment(
                 db,
                 event_name="PAYMENT_SUCCESS",
                 gateway_provider=str(payload.provider or transaction.gateway_provider or "RAZORPAY").upper(),
-                order_id=payload.gateway_payment_id if str(payload.gateway_payment_id or "").startswith("order_") else None,
-                payment_id=payload.gateway_payment_id,
+                order_id=order_id,
+                payment_id=payment_id,
                 booking_ref=transaction.entity_id,
                 signature=payload.signature,
                 raw_payload=payload.data if isinstance(payload.data, dict) else None,

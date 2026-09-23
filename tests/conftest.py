@@ -39,9 +39,14 @@ def configure_test_database() -> None:
 
     os.environ["TESTING"] = "1"
     os.environ.setdefault("ENVIRONMENT", "test")
-    os.environ.setdefault("ALLOW_PAYMENT_SIMULATION", "true")
+    # Force simulation opt-in: local .env often sets ALLOW_PAYMENT_SIMULATION=false
+    # while CI has no live Razorpay keys. Tests must not call the real gateway.
+    os.environ["ALLOW_PAYMENT_SIMULATION"] = "true"
     os.environ.setdefault("PAYMENT_SESSION_SECRET", "test-payment-session-secret")
     os.environ.setdefault("PAYMENT_WEBHOOK_SECRET", "test-payment-webhook-secret")
+    # Default suite expects Razorpay checkout. Force this so a developer shell
+    # with PAYMENT_GATEWAY=ICICI (or a local .env) cannot break CI/payment tests.
+    os.environ["PAYMENT_GATEWAY"] = "RAZORPAY"
     # CI has no Razorpay key, so the placeholders below apply. A local .env may
     # already contain a live key; load_dotenv() will not override an rzp_test_
     # key exported by the shell. Pytest must not keep a non-test key.

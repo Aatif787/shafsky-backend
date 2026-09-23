@@ -19,7 +19,7 @@ import app.models.airport  # Phase C.1 Airport Meet & Assist models
 import app.models.journey_models  # Phase 1 Journey Detection Engine models
 import app.models.charter_models  # Private Charter Engine models
 from app.security.middleware import SecurityMiddleware
-from app.security.dependencies import get_required_admin
+from app.security.dependencies import get_required_admin, get_optional_user
 from app.security.secrets import validate_secrets_on_startup
 from app.monitoring.middlewares import ObservabilityMiddleware
 from app.monitoring.health import HealthCheckSuite
@@ -222,11 +222,18 @@ app.include_router(charter_router.router)
 
 # Direct Razorpay Standard Checkout Root Endpoints
 @app.post("/api/create-order", tags=["Razorpay Checkout"], status_code=201)
-async def root_create_order(payload: payment_router.RazorpayCreateOrderRequest, db: Session = Depends(get_db)):
-    return await payment_router.create_order_endpoint(payload, db)
+async def root_create_order(
+    payload: payment_router.RazorpayCreateOrderRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_optional_user),
+):
+    return await payment_router.create_order_endpoint(payload, db, current_user)
 
 @app.post("/api/verify-payment", tags=["Razorpay Checkout"], status_code=200)
-async def root_verify_payment(payload: payment_router.PaymentVerifyRequest, db: Session = Depends(get_db)):
+async def root_verify_payment(
+    payload: payment_router.PaymentVerifyRequest,
+    db: Session = Depends(get_db),
+):
     return await payment_router.verify_payment_endpoint(payload, db)
 
 
