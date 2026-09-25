@@ -58,6 +58,11 @@ logger = logging.getLogger("shafsky.flight.aviationstack_provider")
 # In-memory RAM cache for fast sub-millisecond retrieval
 _IN_MEMORY_CACHE: Dict[str, Tuple[float, Any]] = {}
 
+# Negative-result cache: flight numbers confirmed NOT to exist, keyed by "NOT_FOUND:{flight}:{date}"
+# TTL = 15 minutes — prevents hammering the API for wrong/invalid flight numbers
+_NOT_FOUND_CACHE: Dict[str, float] = {}  # key -> expiry_timestamp
+NOT_FOUND_CACHE_TTL = 900  # 15 minutes
+
 # Canonical airline names for common carriers
 AIRLINE_IATA_MASTER: Dict[str, str] = {
     "6E": "IndiGo",
@@ -165,6 +170,34 @@ class AviationStackProvider(FlightProvider):
             client.set(key, json.dumps(data), ex=cache_duration)
         except Exception as err:
             logger.debug("Redis set failed for key %s: %s", key, err)
+
+    @staticmethod
+    def _not_found_cache_key(flight_clean: str, date_clean: str) -> str:
+        return f"NOT_FOUND:{flight_clean}:{date_clean}"
+
+    @staticmethod
+    def _is_not_found_cached(flight_clean: str, date_clean: str) -> bool:
+        """Return True if this flight+date was already confirmed non-existent within the last 15 min."""
+        key = AviationStackProvider._not_found_cache_key(flight_clean, date_clean)
+        expiry = _NOT_FOUND_CACHE.get(key)
+        if expiry and time.time() < expiry:
+            logger.info(
+                "[NOT-FOUND CACHE HIT] Flight: %s on %s — skipping API call (cached 15 min)",
+                flight_clean, date_clean
+            )
+            return True
+        _NOT_FOUND_CACHE.pop(key, None)
+        return False
+
+    @staticmethod
+    def _set_not_found_cache(flight_clean: str, date_clean: str) -> None:
+        """Mark this flight+date as not-found in RAM for 15 minutes."""
+        key = AviationStackProvider._not_found_cache_key(flight_clean, date_clean)
+        _NOT_FOUND_CACHE[key] = time.time() + NOT_FOUND_CACHE_TTL
+        logger.info(
+            "[NOT-FOUND CACHE SET] Flight: %s on %s — will skip API for 15 min",
+            flight_clean, date_clean
+        )
 
     def _make_request(self, endpoint: str, params: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
@@ -459,6 +492,10 @@ class AviationStackProvider(FlightProvider):
             f":{origin_iata or '-'}:{dest_iata or '-'}:{service_iata or '-'}"
         )
 
+        # ── 0. Check Negative-Result Cache (wrong / nonexistent flight numbers) ─
+        if self._is_not_found_cached(flight_clean, date_clean):
+            raise FlightNotFoundException(flight_num=flight_clean, date=date_clean)
+
         # ── 1. Check Unified Cross-Provider Cache (RAM -> Redis -> PostgreSQL) ─
         try:
             unified_hit = get_unified_flight(
@@ -471,7 +508,14 @@ class AviationStackProvider(FlightProvider):
             if unified_hit:
                 cached_status = to_flight_status_data(unified_hit, flight_clean, target_date=date_clean)
                 if cached_status:
-                    logger.info("[UNIFIED FLIGHT CACHE HIT] Flight: %s (bypassed AviationStack)", flight_clean)
+                    logger.info(
+                        "[UNIFIED FLIGHT CACHE HIT] Flight: %s | Dep: %s %s (T%s) | Arr: %s %s (T%s) — bypassed AviationStack",
+                        flight_clean,
+                        cached_status.departure.airport, cached_status.departure.scheduled,
+                        cached_status.departure.terminal or "-",
+                        cached_status.arrival.airport, cached_status.arrival.scheduled,
+                        cached_status.arrival.terminal or "-",
+                    )
                     return cached_status
         except Exception as err:
             logger.debug("Unified cache check error in AviationStackProvider: %s", err)
@@ -499,8 +543,9 @@ class AviationStackProvider(FlightProvider):
                 )
 
         if not raw_candidates:
-            today_str = datetime.now().strftime("%Y-%m-%d")
             logger.warning("[AVIATIONSTACK NO RECORDS] Flight: %s on %s", flight_clean, date_clean)
+            # Cache the negative result so repeated wrong-number lookups skip the API for 15 min
+            self._set_not_found_cache(flight_clean, date_clean)
             raise FlightNotFoundException(flight_num=flight_clean, date=date_clean)
 
         # ── 4. Candidate Matching & Sector Ranking ────────────────────────────
@@ -570,12 +615,13 @@ class AviationStackProvider(FlightProvider):
             requested_flight=flight_clean,
         )
 
-        # ── 5. Cache Results ──────────────────────────────────────────────────
-        self._set_cached_data(cache_key, flight_status.model_dump(mode="json"))
+        # ── 5. Cache full rich flight data (terminal, gate, timezone, delay, aircraft, duration) ─
+        full_data = flight_status.model_dump(mode="json")
+        self._set_cached_data(cache_key, full_data)
         try:
             store_unified_flight(
                 flight_clean,
-                flight_status.model_dump(mode="json"),
+                full_data,
                 provider="aviationstack",
                 flight_date=date_clean,
                 direction=direction_clean,
@@ -586,12 +632,23 @@ class AviationStackProvider(FlightProvider):
             logger.debug("Failed to store unified flight cache: %s", err)
 
         logger.info(
-            "[AVIATIONSTACK SUCCESS] Flight: %s | %s (%s) -> %s (%s)",
+            "[AVIATIONSTACK SUCCESS] Flight: %s | "
+            "Dep: %s %s (Terminal: %s, Gate: %s, Delay: %s min) | "
+            "Arr: %s %s (Terminal: %s, Gate: %s) | "
+            "Duration: %s | Aircraft: %s | Status: %s — stored to cache",
             flight_clean,
             flight_status.departure.airport,
             flight_status.departure.scheduled,
+            flight_status.departure.terminal or "-",
+            flight_status.departure.gate or "-",
+            flight_status.departure.delay or 0,
             flight_status.arrival.airport,
             flight_status.arrival.scheduled,
+            flight_status.arrival.terminal or "-",
+            flight_status.arrival.gate or "-",
+            flight_status.duration.formatted or "-",
+            flight_status.aircraft.model or flight_status.aircraft.registration or "-",
+            flight_status.status or "Scheduled",
         )
         return flight_status
 
