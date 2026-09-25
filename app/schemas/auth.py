@@ -1,5 +1,5 @@
 from typing import Optional, Any
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
 
 class LoginRequest(BaseModel):
     email: str = Field(..., description="Email address or admin ID")

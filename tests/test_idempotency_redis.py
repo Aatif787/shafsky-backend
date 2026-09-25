@@ -3,16 +3,16 @@ Unit and Integration Test Suite for Milestone A4: Redis Distributed Locking
 and Idempotency Middleware.
 """
 
-import sys
 import os
-import uuid
+import sys
 import time
-import pytest
+import uuid
 from datetime import datetime, timezone, timedelta
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+# pylint: disable=wrong-import-position
 from app.main import app
 from app.services.idempotency_service import IdempotencyService
 from app.core.redis_lock import InMemoryLockStore

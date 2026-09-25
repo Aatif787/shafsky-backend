@@ -195,7 +195,7 @@ def seed_default_workflows(db: Session) -> Dict[str, str]:
     for service_type, config in DEFAULT_WORKFLOW_DEFINITIONS.items():
         existing = db.query(WorkflowDefinition).filter(
             WorkflowDefinition.service_type == service_type,
-            WorkflowDefinition.is_active == True
+            WorkflowDefinition.is_active.is_(True)
         ).first()
 
         if not existing:

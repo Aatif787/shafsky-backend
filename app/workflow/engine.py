@@ -42,7 +42,7 @@ class WorkflowEngine:
         if version is not None:
             wf_def = query.filter(WorkflowDefinition.version == version).first()
         else:
-            wf_def = query.filter(WorkflowDefinition.is_active == True).first()
+            wf_def = query.filter(WorkflowDefinition.is_active.is_(True)).first()
 
         if not wf_def:
             from app.workflow.definitions import DEFAULT_WORKFLOW_DEFINITIONS
@@ -52,7 +52,7 @@ class WorkflowEngine:
                 if version is not None:
                     wf_def = query.filter(WorkflowDefinition.version == version).first()
                 else:
-                    wf_def = query.filter(WorkflowDefinition.is_active == True).first()
+                    wf_def = query.filter(WorkflowDefinition.is_active.is_(True)).first()
 
         if not wf_def:
             raise ValueError(f"Workflow definition for '{service_type_clean}' (version={version}) not found.")
@@ -214,6 +214,9 @@ class WorkflowEngine:
         definition = instance.definition or db.query(WorkflowDefinition).filter(
             WorkflowDefinition.id == instance.workflow_definition_id
         ).first()
+
+        if not definition:
+            raise ValueError(f"Workflow definition '{instance.workflow_definition_id}' not found.")
 
         old_state = instance.current_state
         action_clean = action.strip().upper()

@@ -5,8 +5,9 @@ Revises: 45dc91f8a958
 Create Date: 2026-07-31 15:59:00.000000
 
 """
-from alembic import op
+# pylint: disable=no-member,invalid-name
 import sqlalchemy as sa
+from alembic import op
 
 
 # revision identifiers, used by Alembic.

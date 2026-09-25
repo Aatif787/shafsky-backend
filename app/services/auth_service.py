@@ -2,20 +2,19 @@
 Authentication Service with Refresh Token Rotation (RTR) and Token Family Revocation.
 """
 
-import uuid
-import jwt
+# pylint: disable=no-member
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional
+import jwt
 from passlib.context import CryptContext
-from sqlalchemy.orm import Session
 from sqlalchemy import select, update
+from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models.schema import RefreshToken, UserAuth
 from app.security.jwt import SecurityJWT
-from fastapi import HTTPException
-import logging
 
 logger = logging.getLogger("shafsky.security.auth_service")
 
@@ -29,7 +28,7 @@ class AuthService:
     @staticmethod
     def hash_password(password: str) -> str:
         import bcrypt
-        pwd_bytes = str(password).encode('utf-8')[:72]
+        pwd_bytes = password.encode('utf-8')[:72]
         return bcrypt.hashpw(pwd_bytes, bcrypt.gensalt()).decode('utf-8')
 
     @staticmethod
@@ -38,8 +37,8 @@ class AuthService:
             return False
         try:
             import bcrypt
-            pwd_bytes = str(plain_password).encode('utf-8')[:72]
-            hash_bytes = str(hashed_password).encode('utf-8')
+            pwd_bytes = plain_password.encode('utf-8')[:72]
+            hash_bytes = hashed_password.encode('utf-8')
             return bcrypt.checkpw(pwd_bytes, hash_bytes)
         except Exception:
             return False
@@ -84,11 +83,11 @@ class AuthService:
         try:
             payload = jwt.decode(token, secret, algorithms=["HS256"], options={"verify_aud": False})
             return payload
-        except jwt.ExpiredSignatureError:
-            raise ValueError("REFRESH_TOKEN_EXPIRED")
+        except jwt.ExpiredSignatureError as exc:
+            raise ValueError("REFRESH_TOKEN_EXPIRED") from exc
         except Exception as exc:
             logger.exception("Failed to decode legacy refresh token: %s", exc)
-            raise ValueError("INVALID_REFRESH_TOKEN")
+            raise ValueError("INVALID_REFRESH_TOKEN") from exc
 
     @classmethod
     def register_refresh_token(

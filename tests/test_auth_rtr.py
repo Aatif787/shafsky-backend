@@ -188,6 +188,7 @@ def test_05_expired_refresh_token_rejection():
     """Verify that expired refresh tokens are rejected with HTTP 401."""
     db = SessionLocal()
     user = db.scalar(select(UserAuth).where(UserAuth.email == "admin@shafskyaviation.com"))
+    assert user is not None
     raw_token, token_hash = SecurityJWT.generate_refresh_token()
     expired_time = datetime.now(timezone.utc) - timedelta(days=1)
 
@@ -212,6 +213,7 @@ def test_06_revoked_refresh_token_rejection():
     """Verify that explicitly revoked refresh tokens are rejected."""
     db = SessionLocal()
     user = db.scalar(select(UserAuth).where(UserAuth.email == "admin@shafskyaviation.com"))
+    assert user is not None
     raw_token, token_hash = SecurityJWT.generate_refresh_token()
 
     rev_rec = RefreshToken(

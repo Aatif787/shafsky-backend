@@ -24,11 +24,13 @@ from app.flight.exceptions import FlightNotFoundException
 def test_build_flight_airport_preserves_exact_iata_code():
     """Verify that build_flight_airport always trusts the exact provider IATA code."""
     ap = build_flight_airport("MAA")
+    assert ap is not None
     assert ap.code == "MAA"
     assert ap.name == "Chennai International Airport"
     assert ap.city == "Chennai"
 
     ap_del = build_flight_airport("DEL")
+    assert ap_del is not None
     assert ap_del.code == "DEL"
     assert ap_del.name == "Delhi Indira Gandhi International Airport"
 
@@ -91,8 +93,8 @@ def test_cache_isolation_between_directions():
     provider = AviationEdgeProvider()
     cache_store = {}
 
-    def mock_set_cache(key, val):
-        cache_store[key] = val
+    def mock_set_cache(key, data, ttl=300):
+        cache_store[key] = data
 
     def mock_get_cache(key):
         return cache_store.get(key)

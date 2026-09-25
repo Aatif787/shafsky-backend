@@ -5,6 +5,7 @@ Provides singleton connection pool management, health checks, latency monitoring
 and structured logging for Redis infrastructure.
 """
 
+# pylint: disable=import-self,no-member,global-statement,invalid-name
 import time
 import logging
 from typing import Optional, Dict, Any

@@ -2,19 +2,19 @@
 Unit and Integration Tests for Milestone A1: RS256 JWT Infrastructure Upgrade.
 """
 
-import sys
 import os
+import sys
+from datetime import datetime, timezone, timedelta
 import jwt
 import pytest
-from datetime import datetime, timezone, timedelta
 from fastapi import HTTPException
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+# pylint: disable=wrong-import-position
 from app.security.keys import (
     get_jwt_private_key,
     get_jwt_public_key,
-    generate_rsa_key_pair,
     reset_key_cache
 )
 from app.security.jwt import SecurityJWT

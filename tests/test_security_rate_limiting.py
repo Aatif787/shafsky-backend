@@ -137,7 +137,7 @@ def test_safe_log_key_masks_pii():
 
 def test_payment_order_rate_limiting_end_to_end():
     """Verify POST /api/create-order allows 15 requests and returns 429 with Retry-After on 16th."""
-    async def dummy_endpoint(request):
+    async def dummy_endpoint(_request):
         return JSONResponse({"status": "created"}, status_code=201)
 
     app = Starlette(routes=[Route("/api/create-order", dummy_endpoint, methods=["POST"])])
@@ -145,7 +145,7 @@ def test_payment_order_rate_limiting_end_to_end():
     client = TestClient(app)
 
     # First 15 requests succeed
-    for i in range(15):
+    for _ in range(15):
         res = client.post("/api/create-order", headers={"X-Forwarded-For": "198.51.100.1"})
         assert res.status_code == 201
 
@@ -163,7 +163,7 @@ def test_payment_order_rate_limiting_end_to_end():
 
 def test_password_reset_rate_limiting_end_to_end():
     """Verify POST /api/auth/request-password-reset allows 10 requests and returns 429 on 11th."""
-    async def dummy_endpoint(request):
+    async def dummy_endpoint(_request):
         return JSONResponse({"status": "sent"}, status_code=200)
 
     app = Starlette(routes=[Route("/api/auth/request-password-reset", dummy_endpoint, methods=["POST"])])
@@ -171,7 +171,7 @@ def test_password_reset_rate_limiting_end_to_end():
     client = TestClient(app)
 
     # First 10 requests succeed
-    for i in range(10):
+    for _ in range(10):
         res = client.post("/api/auth/request-password-reset", headers={"X-Forwarded-For": "203.0.113.5"})
         assert res.status_code == 200
 
@@ -183,7 +183,7 @@ def test_password_reset_rate_limiting_end_to_end():
 
 def test_health_check_unthrottled():
     """Verify health check /health is not throttled."""
-    async def dummy_health(request):
+    async def dummy_health(_request):
         return JSONResponse({"status": "ok"}, status_code=200)
 
     app = Starlette(routes=[Route("/health", dummy_health, methods=["GET"])])

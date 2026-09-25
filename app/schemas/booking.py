@@ -1,7 +1,7 @@
-from typing import Optional, Dict, Any, List
-from datetime import datetime
-from pydantic import BaseModel, EmailStr, Field, field_validator, ConfigDict
 import re
+from datetime import datetime
+from typing import Optional, Dict, Any
+from pydantic import BaseModel, EmailStr, Field, field_validator, ConfigDict
 
 class BookingCreate(BaseModel):
     model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
@@ -9,25 +9,25 @@ class BookingCreate(BaseModel):
     passenger_name: str = Field(..., min_length=2, max_length=100, alias="passengerName")
     passenger_email: EmailStr = Field(..., alias="passengerEmail")
     passenger_phone: str = Field(..., min_length=7, max_length=25, alias="passengerPhone")
-    
+
     service_category: Optional[str] = Field(default=None, alias="serviceCategory")
     service_type: str = Field(..., min_length=2, max_length=100, alias="serviceType")
-    
+
     # Flight details (optional for non-flight services, required for Airport Assistance)
     flight_num: Optional[str] = Field(default=None, alias="flightNum")
     origin_code: Optional[str] = Field(default=None, alias="originCode")
     dest_code: Optional[str] = Field(default=None, alias="destCode")
     departure_time: Optional[datetime] = Field(default=None, alias="departureTime")
     arrival_time: Optional[datetime] = Field(default=None, alias="arrivalTime")
-    
+
     # Service options / selected services
     selected_services: Dict[str, Any] = Field(default_factory=dict, alias="selectedServices")
     service_options: Dict[str, Any] = Field(default_factory=dict, alias="serviceOptions")
     options: Optional[Dict[str, Any]] = Field(default=None)
-    
+
     metadata_json: Dict[str, Any] = Field(default_factory=dict, alias="metadataJson")
     metadata: Optional[Dict[str, Any]] = Field(default=None)
-    
+
     total_amount: float = Field(..., gt=0, alias="totalAmount")
     currency: Optional[str] = Field(default="INR")
     notes: Optional[str] = Field(default=None)

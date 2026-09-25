@@ -1,3 +1,4 @@
+import json
 import os
 from typing import Any
 from urllib.parse import quote
@@ -106,6 +107,12 @@ class Settings(BaseSettings):
     AVIATIONSTACK_MAX_RETRIES: int = int(os.getenv("AVIATIONSTACK_MAX_RETRIES", "2"))
     AVIATIONSTACK_CACHE_TTL_SECONDS: int = int(os.getenv("AVIATIONSTACK_CACHE_TTL_SECONDS", "300"))
 
+    # Primary flight provider for website flight intelligence: "aviationstack" or "aviation_edge"
+    FLIGHT_PROVIDER: str = os.getenv(
+        "FLIGHT_PROVIDER",
+        "aviation_edge" if os.getenv("TESTING") == "1" else "aviationstack"
+    ).lower()
+
     # Meta WhatsApp Cloud API
     WHATSAPP_ACCESS_TOKEN: str = os.getenv("WHATSAPP_ACCESS_TOKEN", "")
     WHATSAPP_PHONE_NUMBER_ID: str = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
@@ -189,7 +196,7 @@ class Settings(BaseSettings):
         return self.ENVIRONMENT.lower() not in ("development", "dev", "test", "testing")
 
     @property
-    def ALLOWED_ORIGINS(self) -> list:
+    def ALLOWED_ORIGINS(self) -> list:  # pylint: disable=invalid-name
         local_dev = [
             "http://localhost:5173",
             "http://127.0.0.1:5173",
@@ -202,7 +209,6 @@ class Settings(BaseSettings):
         parsed: list[str] = []
         if raw and raw.strip().startswith("["):
             try:
-                import json
                 loaded = json.loads(raw)
                 if isinstance(loaded, list):
                     parsed = [str(o).strip() for o in loaded if str(o).strip()]

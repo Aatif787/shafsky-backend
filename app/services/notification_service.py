@@ -323,8 +323,8 @@ class NotificationService:
         if not booking_ref:
             return None, "MISSING_REF"
 
-        ref_clean = str(booking_ref).strip()
-        rec_clean = str(recipient or "").strip()
+        ref_clean = booking_ref.strip()
+        rec_clean = (recipient or "").strip()
         now = datetime.now(timezone.utc)
 
         # Database-level advisory lock to serialize concurrent claim attempts for the same notification identity
@@ -353,7 +353,7 @@ class NotificationService:
             b_ref = str(p.get("booking_ref") or p.get("bookingRef") or "")
             if b_ref == ref_clean:
                 if rec_clean:
-                    r_rec = str(r.recipient_email or r.recipient_phone or "").strip()
+                    r_rec = (r.recipient_email or r.recipient_phone or "").strip()
                     if r_rec == rec_clean or (len(rec_clean) >= 10 and rec_clean[-10:] in r_rec):
                         matching_records.append(r)
                 else:
@@ -509,7 +509,8 @@ class NotificationService:
         if result.get("status") == "DELIVERED":
             record.status = NotificationStatus.DELIVERED
             record.delivered_at = now
-            record.message_id = result.get("message_id")
+            msg_id = result.get("message_id")
+            record.message_id = str(msg_id) if msg_id else None
             record.error_log = None
         elif result.get("status") == "BYPASSED":
             record.status = NotificationStatus.BYPASSED
@@ -847,8 +848,8 @@ class NotificationService:
         Marks DELIVERED only after Meta accepts the message.
         Failures are retryable and never raise to the payment caller.
         """
-        booking_ref = str(booking_ref or "").strip()
-        phone = str(recipient_phone or "").strip()
+        booking_ref = (booking_ref or "").strip()
+        phone = (recipient_phone or "").strip()
         if not booking_ref or not phone:
             return {"status": "FAILED", "error": "missing_recipient"}
 
@@ -900,7 +901,8 @@ class NotificationService:
         if result.get("success"):
             record.status = NotificationStatus.DELIVERED
             record.delivered_at = now
-            record.message_id = result.get("message_id")
+            msg_id = result.get("message_id")
+            record.message_id = str(msg_id) if msg_id else None
             record.error_log = None
             try:
                 db.commit()

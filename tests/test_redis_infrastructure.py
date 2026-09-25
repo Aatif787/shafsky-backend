@@ -3,15 +3,15 @@ Unit and Integration Test Suite for Milestone A4 - Part 1: Centralized Redis Inf
 and Distributed Lock Service.
 """
 
-import sys
 import os
+import sys
 import time
 import uuid
-import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from app.core.redis import check_redis_health, get_redis_client, reset_redis_client
+# pylint: disable=wrong-import-position
+from app.core.redis import check_redis_health
 from app.core.redis_lock import RedisDistributedLock, InMemoryLockStore
 
 

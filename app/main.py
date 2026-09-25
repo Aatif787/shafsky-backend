@@ -1,18 +1,19 @@
-import os
-import uvicorn
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+import os
 from fastapi import FastAPI, Depends, Response, Request, HTTPException
-from starlette.exceptions import HTTPException as StarletteHTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
+from starlette.exceptions import HTTPException as StarletteHTTPException
+import uvicorn
 
 from app.config import settings
-from app.database import engine, Base, get_db
-from sqlalchemy import text
+from app.database import engine, get_db
 import app.models.schema  # Ensure models are loaded
 import app.models.shared_domain  # Phase B.5 Shared Domain models
 import app.models.airport  # Phase C.1 Airport Meet & Assist models
@@ -42,18 +43,9 @@ validate_secrets_on_startup()
 
 _prod = settings.is_production
 
-app = FastAPI(
-    title=settings.PROJECT_NAME,
-    version="2.0.0",
-    description="Enterprise FastAPI Backend Engine for Shafsky Aviation Concierge Platform",
-    docs_url=None if _prod else "/docs",
-    redoc_url=None if _prod else "/redoc",
-    openapi_url=None if _prod else "/openapi.json",
-)
 
-
-@app.on_event("startup")
-async def startup_checks():
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
     """Run lightweight startup checks: DB connectivity and basic readiness.
 
     Fail fast if DB is unreachable in non-development environments.
@@ -97,6 +89,18 @@ async def startup_checks():
             "airports.csv could not be preloaded; global airport search will retry on first query",
             extra={"error": str(csv_err)},
         )
+    yield
+
+
+app = FastAPI(
+    title=settings.PROJECT_NAME,
+    version="2.0.0",
+    description="Enterprise FastAPI Backend Engine for Shafsky Aviation Concierge Platform",
+    docs_url=None if _prod else "/docs",
+    redoc_url=None if _prod else "/redoc",
+    openapi_url=None if _prod else "/openapi.json",
+    lifespan=lifespan,
+)
 
 from app.middleware.idempotency import IdempotencyMiddleware
 
@@ -288,7 +292,7 @@ async def liveness_check():
 
 @app.get("/metrics", tags=["Observability & Health"])
 async def prometheus_metrics(
-    request: Request,
+    _request: Request,
     _admin=Depends(get_required_admin),
 ):
     metrics_text = PrometheusMetricsCollector.generate_metrics_text()
@@ -308,4 +312,3 @@ if __name__ == "__main__":
     reload_flag = env in ["development", "dev", "testing", "test"]
     host = os.getenv("BIND_HOST", "127.0.0.1")
     uvicorn.run("app.main:app", host=host, port=port, reload=reload_flag)
-

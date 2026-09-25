@@ -8,6 +8,7 @@ RSA JWT signing keys on application launch.
 import logging
 import os
 from app.config import settings
+from app.core.redis import get_redis_client
 from app.security.keys import get_jwt_private_key, get_jwt_public_key, get_jwt_key_id
 
 logger = logging.getLogger("shafsky.security.secrets")
@@ -36,17 +37,17 @@ def validate_secrets_on_startup():
         )
 
     critical_secrets = [
-        ("DATABASE_URL", str(settings.DATABASE_URL)),
+        ("DATABASE_URL", settings.DATABASE_URL),
     ]
 
     # Add known critical secrets to the list
     critical_secrets.extend([
-        ("JWT_PRIVATE_KEY", str(settings.JWT_PRIVATE_KEY)),
-        ("JWT_PUBLIC_KEY", str(settings.JWT_PUBLIC_KEY)),
-        ("JWT_REFRESH_SECRET", str(settings.JWT_REFRESH_SECRET)),
+        ("JWT_PRIVATE_KEY", settings.JWT_PRIVATE_KEY),
+        ("JWT_PUBLIC_KEY", settings.JWT_PUBLIC_KEY),
+        ("JWT_REFRESH_SECRET", settings.JWT_REFRESH_SECRET),
     ])
     if getattr(settings, "ALLOW_HS256_LEGACY_FALLBACK", False) or getattr(settings, "JWT_ALGORITHM", "RS256").upper() == "HS256":
-        critical_secrets.append(("JWT_SECRET", str(settings.JWT_SECRET)))
+        critical_secrets.append(("JWT_SECRET", settings.JWT_SECRET))
 
     if env not in ["development", "dev", "test", "testing"]:
         critical_secrets.extend([
@@ -64,13 +65,11 @@ def validate_secrets_on_startup():
             missing.append(name)
 
     # Validate RSA Key loading and key ID calculation
-    rsa_keys_ok = False
     active_kid = "unknown"
     try:
         priv = get_jwt_private_key()
         pub = get_jwt_public_key()
         if priv and pub and "BEGIN" in priv and "BEGIN" in pub:
-            rsa_keys_ok = True
             active_kid = get_jwt_key_id()
         else:
             missing.append("JWT_RSA_KEYS")
@@ -98,8 +97,6 @@ def validate_secrets_on_startup():
 
         if getattr(settings, "REQUIRE_REDIS", False):
             try:
-                from app.core.redis import get_redis_client
-
                 client = get_redis_client()
                 if client is None:
                     raise RuntimeError("Redis client unavailable")

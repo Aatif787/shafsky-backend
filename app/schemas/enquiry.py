@@ -1,8 +1,8 @@
 """Public service quotation / enquiry schemas (non-airport, no payment)."""
 
+import re
 from typing import Optional, Dict, Any, Literal
 from pydantic import BaseModel, EmailStr, Field, ConfigDict, field_validator, model_validator
-import re
 
 EnquiryCategory = Literal[
     "Ground Transport",

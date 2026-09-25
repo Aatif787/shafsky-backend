@@ -6,17 +6,17 @@ public verification registries for zero-downtime key rotation, and backward-comp
 legacy token decoding.
 """
 
-import jwt
+# pylint: disable=import-self,no-member
 import hashlib
-import secrets
 import logging
+import secrets
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, Tuple
+import jwt
 from fastapi import HTTPException
 from app.config import settings
 from app.security.keys import (
     get_jwt_private_key,
-    get_jwt_public_key,
     get_jwt_key_id,
     get_all_verification_public_keys
 )
@@ -95,12 +95,12 @@ class SecurityJWT:
         if token_kid and token_kid in all_public_keys:
             keys_to_try.append(all_public_keys[token_kid])
 
-        for pkid, pub_pem in all_public_keys.items():
+        for pub_pem in all_public_keys.values():
             if pub_pem not in keys_to_try:
                 keys_to_try.append(pub_pem)
 
         # 1. Verification with RSA Public Keys
-        decode_kwargs = {
+        decode_kwargs: Dict[str, Any] = {
             "algorithms": ["RS256"],
             "options": {"verify_aud": settings.is_production},
         }
@@ -122,8 +122,8 @@ class SecurityJWT:
                         payload = None
                         continue
                     return cls._normalize_access_payload(payload)
-            except jwt.ExpiredSignatureError:
-                raise HTTPException(status_code=401, detail="Token has expired.")
+            except jwt.ExpiredSignatureError as exc:
+                raise HTTPException(status_code=401, detail="Token has expired.") from exc
             except (jwt.InvalidSignatureError, jwt.DecodeError, jwt.InvalidAlgorithmError):
                 continue
             except Exception:
@@ -150,8 +150,8 @@ class SecurityJWT:
                             payload = None
                         else:
                             return cls._normalize_access_payload(payload)
-                except jwt.ExpiredSignatureError:
-                    raise HTTPException(status_code=401, detail="Token has expired.")
+                except jwt.ExpiredSignatureError as exc:
+                    raise HTTPException(status_code=401, detail="Token has expired.") from exc
                 except Exception:
                     # If fallback fails, continue to final error
                     pass

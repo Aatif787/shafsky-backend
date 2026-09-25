@@ -13,6 +13,7 @@ Models:
 """
 
 import uuid
+from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 from sqlalchemy import (
     String, Boolean, DateTime, Integer, BigInteger, Text, JSON, Index,
@@ -38,11 +39,11 @@ class Assignment(Base):
     entity_type: Mapped[str] = mapped_column(String, index=True, nullable=False)
     entity_id: Mapped[str] = mapped_column(String, index=True, nullable=False)
     staff_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True, nullable=False)
-    assigned_by: Mapped[str] = mapped_column(String, nullable=True)
+    assigned_by: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     role_type: Mapped[str] = mapped_column(String, nullable=False, default="GENERAL")
     status: Mapped[str] = mapped_column(String, default="ASSIGNED", nullable=False)
-    notes: Mapped[str] = mapped_column(Text, nullable=True)
-    deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -68,10 +69,10 @@ class AssignmentHistory(Base):
         nullable=False,
     )
     action: Mapped[str] = mapped_column(String, nullable=False)
-    from_status: Mapped[str] = mapped_column(String, nullable=True)
+    from_status: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     to_status: Mapped[str] = mapped_column(String, nullable=False)
-    actor_id: Mapped[str] = mapped_column(String, nullable=True)
-    reason: Mapped[str] = mapped_column(Text, nullable=True)
+    actor_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
@@ -97,10 +98,10 @@ class TimelineEntry(Base):
     event_type: Mapped[str] = mapped_column(String, index=True, nullable=False)
     title: Mapped[str] = mapped_column(String, nullable=False)
     details: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
-    actor_id: Mapped[str] = mapped_column(String, nullable=True)
-    actor_role: Mapped[str] = mapped_column(String, nullable=True)
-    reference_type: Mapped[str] = mapped_column(String, nullable=True)
-    reference_id: Mapped[str] = mapped_column(String, nullable=True)
+    actor_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    actor_role: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    reference_type: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    reference_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), index=True, default=lambda: datetime.now(timezone.utc)
     )
@@ -122,11 +123,11 @@ class Note(Base):
     entity_id: Mapped[str] = mapped_column(String, index=True, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     visibility: Mapped[str] = mapped_column(String, default="INTERNAL", nullable=False)
-    author_id: Mapped[str] = mapped_column(String, nullable=True)
-    mentions: Mapped[dict] = mapped_column(JSON, default=list, nullable=False)
+    author_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    mentions: Mapped[List[Any]] = mapped_column(JSON, default=list, nullable=False)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    deleted_by: Mapped[str] = mapped_column(String, nullable=True)
-    deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_by: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), index=True, default=lambda: datetime.now(timezone.utc)
     )
@@ -152,7 +153,7 @@ class NoteRevision(Base):
         nullable=False,
     )
     content_snapshot: Mapped[str] = mapped_column(Text, nullable=False)
-    edited_by: Mapped[str] = mapped_column(String, nullable=True)
+    edited_by: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     revision_number: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
@@ -177,14 +178,14 @@ class Attachment(Base):
     entity_id: Mapped[str] = mapped_column(String, index=True, nullable=False)
     filename: Mapped[str] = mapped_column(String, nullable=False)
     storage_path: Mapped[str] = mapped_column(String, nullable=False)
-    file_size: Mapped[int] = mapped_column(BigInteger, nullable=True)
-    mime_type: Mapped[str] = mapped_column(String, nullable=True)
+    file_size: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    mime_type: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     category: Mapped[str] = mapped_column(String, default="GENERAL", nullable=False)
-    uploaded_by: Mapped[str] = mapped_column(String, nullable=True)
+    uploaded_by: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     access_level: Mapped[str] = mapped_column(String, default="STAFF", nullable=False)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    deleted_by: Mapped[str] = mapped_column(String, nullable=True)
-    deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_by: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), index=True, default=lambda: datetime.now(timezone.utc)
     )
@@ -238,14 +239,14 @@ class SLAInstance(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
     deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    responded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
-    resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
-    escalated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
-    breached_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
-    started_by: Mapped[str] = mapped_column(String, nullable=True)
-    resolved_by: Mapped[str] = mapped_column(String, nullable=True)
-    escalated_by: Mapped[str] = mapped_column(String, nullable=True)
-    escalation_reason: Mapped[str] = mapped_column(Text, nullable=True)
+    responded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    escalated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    breached_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_by: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    resolved_by: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    escalated_by: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    escalation_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)

@@ -2,8 +2,11 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 
+import os
+from app.config import settings
 from app.flight.service import FlightIntelligenceService
 from app.flight.providers.aviation_edge_provider import AviationEdgeProvider
+from app.flight.providers.aviationstack_provider import AviationStackProvider
 from app.flight.schemas import (
     AircraftDetails,
     AirlineDetails,
@@ -23,8 +26,15 @@ flights_router = APIRouter(prefix="/api/flights", tags=["Flight Operations"])
 
 
 def get_flight_service() -> FlightIntelligenceService:
-    """Dependency provider creating FlightIntelligenceService with AviationEdgeProvider."""
-    provider = AviationEdgeProvider()
+    """Dependency provider creating FlightIntelligenceService with the active FlightProvider."""
+    provider_name = getattr(settings, "FLIGHT_PROVIDER", "").lower()
+    if not provider_name:
+        provider_name = "aviation_edge" if os.getenv("TESTING") == "1" else "aviationstack"
+
+    if provider_name == "aviation_edge":
+        provider = AviationEdgeProvider()
+    else:
+        provider = AviationStackProvider()
     return FlightIntelligenceService(provider=provider)
 
 

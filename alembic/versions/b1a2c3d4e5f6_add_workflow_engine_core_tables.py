@@ -5,9 +5,10 @@ Revises: e7f12a345678
 Create Date: 2026-07-31 16:00:00.000000
 
 """
-from alembic import op
+# pylint: disable=no-member,invalid-name
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = 'b1a2c3d4e5f6'

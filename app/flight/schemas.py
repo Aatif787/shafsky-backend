@@ -1,4 +1,4 @@
-﻿from typing import Optional, List
+from typing import Optional, List
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
@@ -179,6 +179,7 @@ class FlightValidateRequest(BaseModel):
     destination_code: Optional[str] = Field(default=None, alias="destinationCode")
     airline_name: Optional[str] = Field(default=None, alias="airlineName")
     arrival_date: Optional[str] = Field(default=None, alias="arrivalDate")
+    arrival_time: Optional[str] = Field(default=None, alias="arrivalTime")
     trip_type: Optional[str] = Field(default=None, alias="tripType")
     direction: Optional[str] = None
     service_type: Optional[str] = Field(default=None, alias="serviceType")

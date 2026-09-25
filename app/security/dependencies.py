@@ -1,6 +1,7 @@
-from fastapi import Header, HTTPException
 from typing import Optional, Dict, Any
+from fastapi import Header, HTTPException
 from app.services.auth_service import AuthService
+from app.security.payment_token import verify_payment_token
 
 ADMIN_ROLES = [
     "SUPER_ADMIN", "ADMIN", "OPERATIONS_MANAGER",
@@ -105,8 +106,6 @@ def assert_payment_access(
     - caller owns the booking (or is staff), OR
     - a valid signed payment_token for this booking_ref is presented.
     """
-    from app.security.payment_token import verify_payment_token
-
     if user_owns_booking(current_user, booking):
         return
     ref = getattr(booking, "booking_ref", None) or ""

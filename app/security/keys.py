@@ -6,6 +6,7 @@ Private and Public Keys. Enforces strict production key policies and multi-key
 verification registries for zero-downtime key rotation.
 """
 
+# pylint: disable=global-statement
 import os
 import base64
 import hashlib

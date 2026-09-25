@@ -44,12 +44,12 @@ def _refresh_cookie_kwargs(max_age_seconds: int | None = None) -> dict:
     )
     # SameSite=None requires Secure; force Secure whenever none is used.
     secure = settings.is_production or (samesite == "none")
-    kwargs = dict(
-        httponly=True,
-        secure=secure,
-        samesite=samesite,
-        path="/api/auth",
-    )
+    kwargs: Dict[str, Any] = {
+        "httponly": True,
+        "secure": secure,
+        "samesite": samesite,
+        "path": "/api/auth",
+    }
     if max_age_seconds is not None:
         kwargs["max_age"] = max_age_seconds
     return kwargs
@@ -106,7 +106,7 @@ def _parse_user_uuid(user_id_str: str | None) -> uuid.UUID | None:
     if not user_id_str:
         return None
     try:
-        return uuid.UUID(str(user_id_str))
+        return uuid.UUID(user_id_str)
     except Exception:
         return None
 

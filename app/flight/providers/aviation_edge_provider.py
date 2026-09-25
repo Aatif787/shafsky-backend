@@ -8,6 +8,7 @@ Strictly validates carrier IATA/ICAO codes to prevent cross-carrier flight subst
 
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -731,7 +732,7 @@ class AviationEdgeProvider(FlightProvider):
             cand_tokens = _candidate_flight_tokens(item)
             dep_code, arr_code = _candidate_dep_arr(item)
             airline_obj = item.get("airline", {}) if isinstance(item.get("airline"), dict) else {}
-            cand_airline_iata = str(airline_obj.get("iataCode") or item.get("airlineIata") or "").strip().upper()
+            cand_airline_iata = (airline_obj.get("iataCode") or item.get("airlineIata") or "").strip().upper()
             dep_date = str(_scheduled_departure_stamp(item))[:10]
 
             score_flight_iata = 1 if any(
@@ -1185,6 +1186,21 @@ class AviationEdgeProvider(FlightProvider):
                 valid_candidates.append(cand)
 
         if not valid_candidates:
+            if os.getenv("TESTING") != "1" and getattr(settings, "AVIATIONSTACK_API_KEY", "").strip():
+                try:
+                    from app.flight.providers.aviationstack_provider import AviationStackProvider
+                    logger.info("[FALLBACK] AviationEdge returned no candidates; falling back to AviationStack for %s", flight_clean)
+                    return AviationStackProvider().validate_flight(
+                        flight_num=flight_clean,
+                        date=date_clean,
+                        direction=direction_clean,
+                        origin_code=origin_code,
+                        destination_code=destination_code,
+                        airport_code=airport_code,
+                    )
+                except Exception as fb_err:
+                    logger.warning("[FALLBACK FAILED] AviationStack fallback error for %s: %s", flight_clean, fb_err)
+
             logger.warning(
                 f"\n======================================================\n"
                 f"[FLIGHT SEARCH REJECTED DECISION]\n"

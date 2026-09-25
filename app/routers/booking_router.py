@@ -49,7 +49,7 @@ async def create_service_enquiry(
     booking = BookingService.create_service_enquiry(
         db,
         passenger_name=payload.passenger_name,
-        passenger_email=str(payload.passenger_email),
+        passenger_email=payload.passenger_email,
         passenger_phone=payload.passenger_phone,
         service_category=payload.service_category,
         service_type=payload.service_type,
@@ -100,7 +100,7 @@ async def create_booking(
     
     init_request = PaymentInitiateRequest(
         entity_type="AIRPORT_BOOKING",
-        entity_id=str(booking.booking_ref),
+        entity_id=booking.booking_ref,
         customer_name=booking.passenger_name or "Valued Guest",
         customer_email=booking.passenger_email or "guest@shafsky.com",
         amount=float(booking.total_amount),
@@ -125,7 +125,7 @@ async def create_booking(
         booking_dict["payment_gateway"] = None
         booking_dict["razorpay_order_id"] = None
         booking_dict["razorpay_key_id"] = None
-        booking_dict["razorpay_amount_paise"] = int(round(float(booking.total_amount or 0) * 100))
+        booking_dict["razorpay_amount_paise"] = round(float(booking.total_amount or 0) * 100)
         booking_dict["icici_redirect_url"] = None
         booking_dict["payment_init_failed"] = True
         booking_dict["payment_token"] = mint_payment_token(booking.booking_ref)
@@ -419,7 +419,7 @@ async def admin_update_booking_status(
         identifier,
         new_status_str=payload.status,
         expected_version=payload.version,
-        force_confirm=bool(payload.force_confirm),
+        force_confirm=payload.force_confirm,
         reason=payload.reason,
         actor_email=str(admin_context.get("email") or admin_context.get("sub") or "admin"),
     )

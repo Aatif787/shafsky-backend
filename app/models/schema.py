@@ -219,17 +219,17 @@ class NotificationRecord(Base):
     __tablename__ = "notification_records"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    recipient_email: Mapped[str] = mapped_column(String, index=True, nullable=True)
-    recipient_phone: Mapped[str] = mapped_column(String, index=True, nullable=True)
+    recipient_email: Mapped[Optional[str]] = mapped_column(String, index=True, nullable=True)
+    recipient_phone: Mapped[Optional[str]] = mapped_column(String, index=True, nullable=True)
     template_type: Mapped[str] = mapped_column(String, index=True, nullable=False)
     channel: Mapped[str] = mapped_column(String, default="ALL", nullable=False)
     payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     status: Mapped[NotificationStatus] = mapped_column(Enum(NotificationStatus), default=NotificationStatus.QUEUED, nullable=False)
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     max_attempts: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
-    error_log: Mapped[str] = mapped_column(Text, nullable=True)
-    message_id: Mapped[str] = mapped_column(String, nullable=True)
-    delivered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_log: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    message_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    delivered_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
