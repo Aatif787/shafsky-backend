@@ -182,20 +182,45 @@ class AviationStackProvider(FlightProvider):
         expiry = _NOT_FOUND_CACHE.get(key)
         if expiry and time.time() < expiry:
             logger.info(
-                "[NOT-FOUND CACHE HIT] Flight: %s on %s — skipping API call (cached 15 min)",
+                "[NOT-FOUND CACHE HIT - RAM] Flight: %s on %s — skipping API call (cached 15 min)",
                 flight_clean, date_clean
             )
             return True
         _NOT_FOUND_CACHE.pop(key, None)
+        try:
+            from app.flight.unified_cache import get_redis_client
+            r = get_redis_client()
+            if r and r.get(key):
+                logger.info(
+                    "[NOT-FOUND CACHE HIT - REDIS] Flight: %s on %s — skipping API call (cached 15 min)",
+                    flight_clean, date_clean
+                )
+                return True
+        except Exception:
+            pass
         return False
 
     @staticmethod
     def _set_not_found_cache(flight_clean: str, date_clean: str) -> None:
-        """Mark this flight+date as not-found in RAM for 15 minutes."""
+        """Mark this flight+date as not-found in RAM, Redis, and DB for 15 minutes."""
         key = AviationStackProvider._not_found_cache_key(flight_clean, date_clean)
         _NOT_FOUND_CACHE[key] = time.time() + NOT_FOUND_CACHE_TTL
+        try:
+            from app.flight.unified_cache import get_redis_client, store_unified_flight
+            r = get_redis_client()
+            if r:
+                r.setex(key, NOT_FOUND_CACHE_TTL, "1")
+            store_unified_flight(
+                flight_clean,
+                {"not_found": True, "flight_iata": flight_clean, "flight_date": date_clean},
+                provider="aviationstack",
+                flight_date=date_clean,
+                ttl=NOT_FOUND_CACHE_TTL,
+            )
+        except Exception as err:
+            logger.debug("Failed to store not-found in unified cache: %s", err)
         logger.info(
-            "[NOT-FOUND CACHE SET] Flight: %s on %s — will skip API for 15 min",
+            "[NOT-FOUND CACHE SET] Flight: %s on %s — will skip API for 15 min across RAM, Redis, and DB",
             flight_clean, date_clean
         )
 
@@ -506,6 +531,13 @@ class AviationStackProvider(FlightProvider):
                 dest=dest_iata,
             )
             if unified_hit:
+                if unified_hit.get("not_found"):
+                    logger.info(
+                        "[UNIFIED CACHE NOT-FOUND HIT] Flight: %s on %s — skipping AviationStack API",
+                        flight_clean, date_clean
+                    )
+                    raise FlightNotFoundException(flight_num=flight_clean, date=date_clean)
+
                 cached_status = to_flight_status_data(unified_hit, flight_clean, target_date=date_clean)
                 if cached_status:
                     logger.info(
@@ -517,6 +549,8 @@ class AviationStackProvider(FlightProvider):
                         cached_status.arrival.terminal or "-",
                     )
                     return cached_status
+        except FlightNotFoundException:
+            raise
         except Exception as err:
             logger.debug("Unified cache check error in AviationStackProvider: %s", err)
 
@@ -658,15 +692,23 @@ class AviationStackProvider(FlightProvider):
         if not flight_clean:
             raise InvalidFlightNumberException(flight_num)
 
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        if self._is_not_found_cached(flight_clean, today_str):
+            raise FlightNotFoundException(flight_num=flight_clean, date=today_str)
+
         cache_key = f"flight:status:aviationstack:{flight_clean}"
 
         # Check unified cache first
         try:
             unified_hit = get_unified_flight(flight_clean)
             if unified_hit:
+                if unified_hit.get("not_found"):
+                    raise FlightNotFoundException(flight_num=flight_clean, date=today_str)
                 cached_status = to_flight_status_data(unified_hit, flight_clean)
                 if cached_status:
                     return cached_status
+        except FlightNotFoundException:
+            raise
         except Exception:
             pass
 
@@ -679,7 +721,7 @@ class AviationStackProvider(FlightProvider):
 
         results = self._make_request("flights", {"flight_iata": flight_clean, "limit": 5})
         if not results:
-            today_str = datetime.now().strftime("%Y-%m-%d")
+            self._set_not_found_cache(flight_clean, today_str)
             raise FlightNotFoundException(flight_num=flight_clean, date=today_str)
 
         flight_status = self._normalize_flight_data(results[0], requested_flight=flight_clean)

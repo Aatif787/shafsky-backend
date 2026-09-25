@@ -42,7 +42,7 @@ def normalize_flight_code(code: Optional[str]) -> str:
     """Normalize flight number to uppercase alphanumeric without spaces (e.g. 'ai 101' -> 'AI101')."""
     if not code:
         return ""
-    return re.sub(r"[^A-Za-z0-9]", "", str(code)).upper().strip()
+    return re.sub(r"[^A-Za-z0-9]", "", code).upper().strip()
 
 
 def build_cache_keys(
@@ -60,7 +60,7 @@ def build_cache_keys(
     an arrival pollute a later departure for the same flight number.
     """
     clean_flight = normalize_flight_code(flight_iata)
-    clean_date = str(flight_date)[:10].strip() if flight_date else None
+    clean_date = flight_date[:10].strip() if flight_date else None
     sector = ""
     dir_part = (direction or "").strip().lower()
     origin_part = (origin or "").strip().upper()
@@ -135,7 +135,7 @@ def get_unified_flight(
     # ── Tier 3: PostgreSQL Database Cache ─────────────────────────────────────
     try:
         now_dt = datetime.now(timezone.utc)
-        clean_date = str(flight_date)[:10].strip() if flight_date else None
+        clean_date = flight_date[:10].strip() if flight_date else None
         
         with SessionLocal() as session:
             query = session.query(FlightAPICache).filter(
@@ -185,7 +185,7 @@ def store_unified_flight(
     if not clean_flight or not isinstance(data, dict):
         return
 
-    clean_date = str(flight_date)[:10].strip() if flight_date else None
+    clean_date = flight_date[:10].strip() if flight_date else None
     if not clean_date or clean_date in ("ANY", "unknown", "None", ""):
         # Try extracting from payload
         dep = data.get("departure") or {}
@@ -213,7 +213,7 @@ def store_unified_flight(
     # 1. Store in RAM
     with _RAM_LOCK:
         for k in keys:
-            _RAM_CACHE[k] = (now_ts + DEFAULT_RAM_TTL, data)
+            _RAM_CACHE[k] = (now_ts + min(ttl, DEFAULT_RAM_TTL), data)
 
     # 2. Store in Redis
     try:
@@ -256,7 +256,7 @@ def to_flight_status_data(
     target_date: Optional[str] = None
 ) -> Optional[FlightStatusData]:
     """Convert any unified cached flight dictionary into a FlightStatusData schema, retargeting date if specified."""
-    if not isinstance(cached, dict):
+    if not isinstance(cached, dict) or cached.get("not_found"):
         return None
 
     clean_fl = normalize_flight_code(requested_flight)
@@ -326,6 +326,8 @@ def to_flight_status_data(
         scheduled=dep_sched,
         estimated=dep_est,
         actual=dep_act,
+        delay=dep_raw.get("delay"),
+        timezone=dep_raw.get("timezone"),
     )
 
     arr_details = LocationEndpointDetails(
@@ -338,17 +340,51 @@ def to_flight_status_data(
         scheduled=arr_sched,
         estimated=arr_est,
         actual=arr_act,
+        delay=arr_raw.get("delay"),
+        timezone=arr_raw.get("timezone"),
     )
 
     fl_num_part = clean_fl[len(carrier_iata):] if clean_fl.startswith(carrier_iata) else clean_fl
+
+    # Extract or compute duration details
+    dur_raw = cached.get("duration")
+    if isinstance(dur_raw, dict) and (dur_raw.get("minutes") or dur_raw.get("formatted")):
+        duration_details = DurationDetails(
+            minutes=dur_raw.get("minutes"),
+            formatted=dur_raw.get("formatted"),
+        )
+    else:
+        duration_details = DurationDetails()
+        if dep_sched and arr_sched:
+            try:
+                from app.flight.duration import compute_flight_duration
+                d_dt = datetime.fromisoformat(str(dep_sched).replace("Z", "+00:00"))
+                a_dt = datetime.fromisoformat(str(arr_sched).replace("Z", "+00:00"))
+                mins, text = compute_flight_duration(None, d_dt, a_dt, clean_fl)
+                duration_details = DurationDetails(minutes=mins, formatted=text)
+            except Exception:
+                pass
+
+    # Extract aircraft details if available
+    ac_raw = cached.get("aircraft")
+    if isinstance(ac_raw, dict):
+        aircraft_details = AircraftDetails(
+            model=ac_raw.get("model"),
+            registration=ac_raw.get("registration"),
+            icao=ac_raw.get("icao"),
+            type=ac_raw.get("type"),
+            distance=ac_raw.get("distance"),
+        )
+    else:
+        aircraft_details = AircraftDetails()
 
     return FlightStatusData(
         airline=AirlineDetails(name=airline_name, iata=carrier_iata, logo=airline_logo),
         flight=FlightInfo(number=fl_num_part, iata=clean_fl),
         departure=dep_details,
         arrival=arr_details,
-        duration=DurationDetails(),
-        aircraft=AircraftDetails(),
+        duration=duration_details,
+        aircraft=aircraft_details,
         status=cached.get("status") or "Scheduled",
     )
 
@@ -383,6 +419,7 @@ def to_aviationstack_record(cached: Dict[str, Any], requested_flight: str) -> Di
             "actual": dep_obj.get("actual"),
             "terminal": dep_obj.get("terminal"),
             "gate": dep_obj.get("gate"),
+            "delay": dep_obj.get("delay"),
         },
         "arrival": {
             "airport": arr_obj.get("airport_name") or arr_iata,
@@ -393,6 +430,7 @@ def to_aviationstack_record(cached: Dict[str, Any], requested_flight: str) -> Di
             "actual": arr_obj.get("actual"),
             "terminal": arr_obj.get("terminal"),
             "gate": arr_obj.get("gate"),
+            "delay": arr_obj.get("delay"),
         },
         "status": cached.get("status") or "scheduled",
         "flight_date": ((dep_obj.get("scheduled") or "")[:10]) or cached.get("flight_date"),
@@ -404,6 +442,17 @@ def clear_unified_cache() -> None:
     """Drop RAM + PostgreSQL flight cache (tests). Redis keys are flushed by conftest."""
     with _RAM_LOCK:
         _RAM_CACHE.clear()
+    try:
+        from app.flight.providers import aviationstack_provider as as_mod
+        as_mod._NOT_FOUND_CACHE.clear()
+        as_mod._IN_MEMORY_CACHE.clear()
+    except Exception:
+        pass
+    try:
+        from app.flight.providers import aviation_edge_provider as ae_mod
+        ae_mod._IN_MEMORY_CACHE.clear()
+    except Exception:
+        pass
     try:
         with SessionLocal() as session:
             session.query(FlightAPICache).delete()

@@ -120,7 +120,24 @@ def test_aviationstack_validate_flight_not_found(mock_request):
     provider = AviationStackProvider(api_key="test_key")
 
     with pytest.raises(FlightNotFoundException):
-        provider.validate_flight(flight_num="AI995", date="2026-09-25")
+        provider.validate_flight(flight_num="AI9999", date="2026-09-25")
+
+
+@patch.object(AviationStackProvider, "_make_request")
+def test_aviationstack_negative_cache_prevents_api_call(mock_request):
+    mock_request.return_value = []
+    provider = AviationStackProvider(api_key="test_key")
+
+    # First lookup: not found, hits _make_request
+    with pytest.raises(FlightNotFoundException):
+        provider.validate_flight(flight_num="AI8888", date="2026-09-25")
+    assert mock_request.call_count >= 1
+
+    # Second lookup for same flight + date: caught by negative cache, _make_request not called again
+    initial_count = mock_request.call_count
+    with pytest.raises(FlightNotFoundException):
+        provider.validate_flight(flight_num="AI8888", date="2026-09-25")
+    assert mock_request.call_count == initial_count
 
 
 @patch.object(AviationStackProvider, "_make_request")
