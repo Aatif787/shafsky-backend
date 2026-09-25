@@ -66,8 +66,8 @@ def validate_flight(
             except Exception:
                 arr_dt = dep_dt + timedelta(hours=2)
 
-            orig_code = (payload.origin_code or "").strip().upper()
-            dest_code = (payload.destination_code or "").strip().upper()
+            orig_code = (payload.resolved_origin_code or "").strip().upper()
+            dest_code = (payload.resolved_destination_code or "").strip().upper()
             fl_num = (payload.resolved_flight_num or "").strip().upper()
             if not orig_code or not dest_code or not fl_num:
                 raise HTTPException(
@@ -141,8 +141,8 @@ def validate_flight(
             flight_num,
             flight_date,
             direction=direction,
-            origin_code=payload.origin_code,
-            destination_code=payload.destination_code,
+            origin_code=payload.resolved_origin_code,
+            destination_code=payload.resolved_destination_code,
             airport_code=payload.airport_code,
         )
         return FlightValidateResponse(

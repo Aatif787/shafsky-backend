@@ -110,6 +110,10 @@ services:
         sync: false
       - key: WHATSAPP_WEBHOOK_VERIFY_TOKEN
         sync: false
+      - key: AVIATIONSTACK_API_KEY
+        sync: false
+      - key: FLIGHT_PROVIDER
+        sync: false
       - key: RESEND_API_KEY
         sync: false
       - key: EMAIL_FROM

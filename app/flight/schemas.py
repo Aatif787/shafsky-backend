@@ -1,4 +1,4 @@
-from typing import Optional, List
+from typing import Optional
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
@@ -170,13 +170,20 @@ class FlightTelemetry(BaseModel):
 class FlightValidateRequest(BaseModel):
     flight_num: Optional[str] = Field(default=None, alias="flightNum")
     flightNumber: Optional[str] = None
+    flight_number: Optional[str] = None
     date: Optional[str] = Field(default=None, alias="departDate")
     departDate: Optional[str] = None
     depart_date: Optional[str] = None
     is_manual: Optional[bool] = Field(default=False, alias="isManual")
     depart_time: Optional[str] = Field(default=None, alias="departTime")
     origin_code: Optional[str] = Field(default=None, alias="originCode")
+    originCode: Optional[str] = None
+    origin: Optional[str] = None
     destination_code: Optional[str] = Field(default=None, alias="destinationCode")
+    destinationCode: Optional[str] = None
+    destCode: Optional[str] = None
+    dest_code: Optional[str] = None
+    destination: Optional[str] = None
     airline_name: Optional[str] = Field(default=None, alias="airlineName")
     arrival_date: Optional[str] = Field(default=None, alias="arrivalDate")
     arrival_time: Optional[str] = Field(default=None, alias="arrivalTime")
@@ -188,7 +195,7 @@ class FlightValidateRequest(BaseModel):
 
     @property
     def resolved_flight_num(self) -> str:
-        return self.flight_num or self.flightNumber or ""
+        return self.flight_num or self.flightNumber or self.flight_number or ""
 
     @property
     def resolved_date(self) -> str:
@@ -197,6 +204,20 @@ class FlightValidateRequest(BaseModel):
     @property
     def resolved_direction(self) -> str:
         return self.direction or self.trip_type or self.service_type or self.mode or "any"
+
+    @property
+    def resolved_origin_code(self) -> Optional[str]:
+        return self.origin_code or self.originCode or self.origin
+
+    @property
+    def resolved_destination_code(self) -> Optional[str]:
+        return (
+            self.destination_code
+            or self.destinationCode
+            or self.destCode
+            or self.dest_code
+            or self.destination
+        )
 
     model_config = ConfigDict(populate_by_name=True)
 
