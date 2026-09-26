@@ -2,10 +2,13 @@
 Authentication Router with Refresh Token Rotation, HttpOnly Cookie Security, and Logout Revocation.
 """
 
+import logging
 import os
 import uuid
 from datetime import datetime, timezone
 from typing import Dict, Any
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Body, HTTPException, Depends, Request, Response
 from sqlalchemy.orm import Session
@@ -92,9 +95,9 @@ def _validate_cookie_request_origin(request: Request) -> None:
     request_origin = str(request.base_url).rstrip("/")
     if origin == request_origin or origin in allowed:
         return
-    # Match production CORS regex so Vercel preview deploys can refresh sessions.
+    # Match production CORS regex so Shafsky Vercel deployments can refresh sessions.
     vercel_ok = re.match(
-        r"^https?://(localhost|127\.0\.0\.1|.*\.ngrok-free\.(dev|app)|.*\.ngrok\.io|.*\.vercel\.app)(:\d+)?$",
+        r"^https?://(localhost|127\.0\.0\.1|.*\.ngrok-free\.(dev|app)|.*\.ngrok\.io|(shafsky[a-zA-Z0-9_-]*|shafsky)\.vercel\.app)(:\d+)?$",
         origin,
     )
     if vercel_ok:
@@ -527,8 +530,13 @@ async def update_user_profile(
         if payload.passport_number is not None:
             profile.passport_number = payload.passport_number
 
-    db.commit()
-    db.refresh(profile)
+    try:
+        db.commit()
+        db.refresh(profile)
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Failed to update profile: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to save profile changes.")
 
     return ApiResponse(success=True, data=_profile_payload(profile))
 
@@ -552,7 +560,12 @@ async def change_password(
 
     user.password_hash = AuthService.hash_password(payload.new_password)
     user.updated_at = datetime.now(timezone.utc)
-    db.commit()
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Failed to update password: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to update password.")
 
     # Revoke all refresh sessions and clear cookies so stolen sessions cannot continue.
     DeviceTracking.revoke_all_user_sessions(db, user.id)

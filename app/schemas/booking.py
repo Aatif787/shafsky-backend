@@ -90,3 +90,15 @@ class BookingStatusUpdate(BaseModel):
 
 class BookingAssign(BaseModel):
     assignedTo: str
+
+
+class EstimatePriceRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    package_id: Optional[str] = Field(default=None, alias="packageId")
+    service_type: Optional[str] = Field(default=None, alias="serviceType")
+    airport_code: Optional[str] = Field(default=None, alias="airportCode")
+    origin_code: Optional[str] = Field(default=None, alias="originCode")
+    journey_type: Optional[str] = Field(default="DEPARTURE", alias="journeyType")
+    flight_type: Optional[str] = Field(default="DOMESTIC", alias="flightType")
+    pax_adults: int = Field(default=1, ge=1, le=100, alias="paxAdults")

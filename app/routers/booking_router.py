@@ -1,4 +1,5 @@
 import logging
+import uuid
 from typing import Optional, Dict, Any
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
@@ -9,7 +10,8 @@ from app.database import get_db
 from app.schemas.booking import (
     BookingCreate,
     BookingApiResponse,
-    BookingStatusUpdate
+    BookingStatusUpdate,
+    EstimatePriceRequest,
 )
 from app.schemas.enquiry import (
     ServiceEnquiryCreate,
@@ -87,7 +89,6 @@ async def create_booking(
         raw_id = user_context.get("user_id") or user_context.get("userId")
         if raw_id:
             try:
-                import uuid
                 profile_id = uuid.UUID(str(raw_id))
             except Exception:
                 pass
@@ -430,14 +431,14 @@ async def admin_update_booking_status(
 
 @router.post("/estimate-price", response_model=BookingApiResponse)
 async def estimate_booking_price(
-    payload: Dict[str, Any],
+    payload: EstimatePriceRequest,
     db: Session = Depends(get_db)
 ):
-    package_id = str(payload.get("package_id", payload.get("service_type", "silver"))).lower()
-    airport_code = str(payload.get("airport_code", payload.get("origin_code", "DEL"))).upper()
-    journey_type = str(payload.get("journey_type", "DEPARTURE")).upper()
-    flight_type = str(payload.get("flight_type", "DOMESTIC")).upper()
-    pax_adults = max(1, int(payload.get("pax_adults", 1)))
+    package_id = (payload.package_id or payload.service_type or "silver").lower().strip()
+    airport_code = (payload.airport_code or payload.origin_code or "DEL").upper().strip()
+    journey_type = (payload.journey_type or "DEPARTURE").upper().strip()
+    flight_type = (payload.flight_type or "DOMESTIC").upper().strip()
+    pax_adults = max(1, payload.pax_adults)
 
     total_calculated = BookingService.calculate_authoritative_price(
         db=db,

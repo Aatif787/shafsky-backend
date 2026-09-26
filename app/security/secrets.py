@@ -95,6 +95,13 @@ def validate_secrets_on_startup():
         if alg.upper() != "RS256" and env not in ["development", "dev", "test", "testing"]:
             raise ValueError("JWT_ALGORITHM must be RS256 in production environments.")
 
+        # Ensure ICICI production configuration does not point to UAT endpoints
+        if getattr(settings, "ICICI_ENV", "UAT").upper() == "PROD" and env not in ["development", "dev", "test", "testing"]:
+            sale_url = str(getattr(settings, "ICICI_SALE_URL", "")).lower()
+            cmd_url = str(getattr(settings, "ICICI_COMMAND_URL", "")).lower()
+            if "pgpayuat" in sale_url or "pgpayuat" in cmd_url:
+                raise ValueError("CRITICAL: ICICI_ENV is PROD but ICICI gateway URLs point to UAT endpoints.")
+
         if getattr(settings, "REQUIRE_REDIS", False):
             try:
                 client = get_redis_client()

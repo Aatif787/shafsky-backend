@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
@@ -5,6 +6,8 @@ from typing import Optional, Dict, Any
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from app.models.schema import AirportManagement, FeatureFlag, Coupon
 
@@ -14,7 +17,10 @@ from app.schemas.admin import (
     RoleUpdateRequest,
     StaffAssignRequest,
     ShiftCreateRequest,
-    AirportCreateRequest
+    AirportCreateRequest,
+    AirportPatchRequest,
+    AirportServiceUpdateRequest,
+    CouponToggleRequest,
 )
 from app.services.admin_service import AdminService
 from app.security.dependencies import (
@@ -187,7 +193,7 @@ async def update_user_role(
 @router.patch("/airports/{airport_code}", response_model=AdminApiResponse)
 async def patch_airport_config(
     airport_code: str,
-    payload: Dict[str, Any],
+    payload: AirportPatchRequest,
     db: Session = Depends(get_db),
     _admin_context: Dict[str, Any] = Depends(get_required_admin)
 ):
@@ -196,22 +202,27 @@ async def patch_airport_config(
     if not airport:
         return AdminApiResponse(success=False, error=f"Airport '{code}' not found.")
 
-    if "name" in payload:
-        airport.name = payload["name"]
-    if "city" in payload:
-        airport.city = payload["city"]
-    if "country" in payload:
-        airport.country = payload["country"]
-    if "is_active" in payload:
-        airport.is_active = bool(payload["is_active"])
-    if "operating_hours" in payload:
-        airport.operating_hours = payload["operating_hours"]
-    if "services_config" in payload:
-        airport.services_config = payload["services_config"]
+    if payload.name is not None:
+        airport.name = payload.name
+    if payload.city is not None:
+        airport.city = payload.city
+    if payload.country is not None:
+        airport.country = payload.country
+    if payload.is_active is not None:
+        airport.is_active = payload.is_active
+    if payload.operating_hours is not None:
+        airport.operating_hours = payload.operating_hours
+    if payload.services_config is not None:
+        airport.services_config = payload.services_config
 
     airport.updated_at = datetime.now(timezone.utc)
-    db.commit()
-    db.refresh(airport)
+    try:
+        db.commit()
+        db.refresh(airport)
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Failed to update airport config: %s", exc)
+        return AdminApiResponse(success=False, error="Failed to save airport configuration.")
 
     return AdminApiResponse(
         success=True,
@@ -241,7 +252,12 @@ async def delete_airport_config(
 
     airport.is_active = False
     airport.updated_at = datetime.now(timezone.utc)
-    db.commit()
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Failed to deactivate airport: %s", exc)
+        return AdminApiResponse(success=False, error=f"Failed to deactivate airport '{code}'.")
 
     return AdminApiResponse(
         success=True,
@@ -296,7 +312,13 @@ async def patch_feature_flags(
             flag.updated_at = datetime.now(timezone.utc)
         updated.append(flag_key)
 
-    db.commit()
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Failed to update feature flags: %s", exc)
+        return AdminApiResponse(success=False, error="Failed to save feature flags.")
+
     return AdminApiResponse(success=True, data={"updated": updated, "message": "Feature flags updated."})
 
 
@@ -370,7 +392,7 @@ async def list_coupons(
 @router.patch("/coupons/{coupon_id}/toggle", response_model=AdminApiResponse)
 async def toggle_coupon_status(
     coupon_id: str,
-    payload: Optional[Dict[str, Any]] = None,
+    payload: Optional[CouponToggleRequest] = None,
     db: Session = Depends(get_db),
     _admin_context: Dict[str, Any] = Depends(get_required_admin)
 ):
@@ -383,15 +405,20 @@ async def toggle_coupon_status(
     if not cp:
         return AdminApiResponse(success=False, error=f"Coupon '{coupon_id}' not found.")
 
-    if payload and "is_active" in payload:
-        cp.is_active = bool(payload["is_active"])
-    elif payload and "status" in payload:
-        cp.is_active = payload["status"].upper() == "ACTIVE"
+    if payload and payload.is_active is not None:
+        cp.is_active = payload.is_active
+    elif payload and payload.status is not None:
+        cp.is_active = payload.status.upper() == "ACTIVE"
     else:
         cp.is_active = not cp.is_active
 
-    db.commit()
-    db.refresh(cp)
+    try:
+        db.commit()
+        db.refresh(cp)
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Failed to update coupon status: %s", exc)
+        return AdminApiResponse(success=False, error="Failed to update coupon status.")
 
     return AdminApiResponse(
         success=True,
@@ -431,15 +458,16 @@ async def list_admin_airport_services(
 @router.patch("/airport-services/{mapping_id}", response_model=AdminApiResponse)
 async def update_admin_airport_service(
     mapping_id: str,
-    payload: Dict[str, Any],
+    payload: AirportServiceUpdateRequest,
     db: Session = Depends(get_db),
     admin_context: Dict[str, Any] = Depends(get_required_admin),
 ):
     admin_email = admin_context.get("email", "admin@shafskyaviation.com")
+    updates = payload.model_dump(exclude_unset=True)
     updated = AdminService.update_airport_service(
         db=db,
         mapping_id=mapping_id,
-        updates=payload,
+        updates=updates,
         admin_email=admin_email,
     )
     return AdminApiResponse(success=True, data=updated)

@@ -3,9 +3,12 @@ FastAPI Router for Configuration, Feature Flags, Airport Config, and Coupons.
 Provides /api/config/feature-flags, /api/airports/{code}, /api/coupons endpoints.
 """
 
+import logging
 from typing import Optional, Dict, Any, List
 import uuid
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 from fastapi import APIRouter, Depends, HTTPException, Query, Body, Response, status
 from sqlalchemy.orm import Session
 from sqlalchemy import select, update, delete
@@ -70,7 +73,13 @@ async def patch_config_feature_flags(
             flag.updated_at = datetime.now(timezone.utc)
         updated.append(flag_key)
 
-    db.commit()
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Failed to update feature flags: %s", exc)
+        return AdminApiResponse(success=False, error="Failed to save feature flags.")
+
     return AdminApiResponse(success=True, data={"updated": updated, "message": "Feature flags updated."})
 
 
@@ -175,8 +184,13 @@ async def patch_airport_by_code(
         airport.services_config = payload["services_config"]
 
     airport.updated_at = datetime.now(timezone.utc)
-    db.commit()
-    db.refresh(airport)
+    try:
+        db.commit()
+        db.refresh(airport)
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Failed to update airport '%s': %s", code, exc)
+        return AdminApiResponse(success=False, error=f"Failed to update airport '{code}'.")
 
     return AdminApiResponse(
         success=True,
@@ -205,7 +219,12 @@ async def delete_airport_by_code(
 
     airport.is_active = False
     airport.updated_at = datetime.now(timezone.utc)
-    db.commit()
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Failed to deactivate airport '%s': %s", code, exc)
+        return AdminApiResponse(success=False, error=f"Failed to deactivate airport '{code}'.")
 
     return AdminApiResponse(success=True, data={"code": code, "message": f"Airport '{code}' deactivated."})
 
@@ -257,8 +276,13 @@ async def patch_coupon_status(
     else:
         cp.is_active = not cp.is_active
 
-    db.commit()
-    db.refresh(cp)
+    try:
+        db.commit()
+        db.refresh(cp)
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Failed to update coupon '%s': %s", coupon_id, exc)
+        return AdminApiResponse(success=False, error=f"Failed to update coupon '{coupon_id}'.")
 
     return AdminApiResponse(
         success=True,
@@ -349,8 +373,13 @@ async def upsert_branding(
         )
         db.add(bp)
 
-    db.commit()
-    db.refresh(bp)
+    try:
+        db.commit()
+        db.refresh(bp)
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Failed to save branding profile: %s", exc)
+        return AdminApiResponse(success=False, error="Failed to save branding profile.")
 
     res = {
         "id": str(bp.id),

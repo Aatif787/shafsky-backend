@@ -73,7 +73,12 @@ def test_fulfill_skip_notifications_sets_pdf_without_notify(monkeypatch):
         wa,
     )
 
-    db = SessionLocal()
+    try:
+        db = SessionLocal()
+        from sqlalchemy import text
+        db.execute(text("SELECT 1"))
+    except Exception:
+        pytest.skip("Test database not reachable on 55432")
     try:
         ref = f"SHF-HARDEN-{uuid.uuid4().hex[:8].upper()}"
         booking = Booking(
@@ -129,3 +134,22 @@ def test_fulfill_skip_notifications_sets_pdf_without_notify(monkeypatch):
         wa.assert_not_called()
     finally:
         db.close()
+
+
+def test_get_db_rollback_on_exception(monkeypatch):
+    """Verify get_db generator rolls back the session on unhandled exception before closing."""
+    from unittest.mock import MagicMock
+    from app.database import get_db
+
+    mock_session = MagicMock()
+    monkeypatch.setattr("app.database.SessionLocal", lambda: mock_session)
+
+    gen = get_db()
+    db = next(gen)
+    assert db == mock_session
+
+    with pytest.raises(RuntimeError, match="Simulated route error"):
+        gen.throw(RuntimeError("Simulated route error"))
+
+    mock_session.rollback.assert_called_once()
+    mock_session.close.assert_called_once()

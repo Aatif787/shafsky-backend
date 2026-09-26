@@ -27,6 +27,30 @@ class AirportCreateRequest(BaseModel):
     operating_hours: Optional[str] = "24/7"
     services_config: Optional[Dict[str, Any]] = Field(default_factory=dict)
 
+class AirportPatchRequest(BaseModel):
+    name: Optional[str] = None
+    city: Optional[str] = None
+    country: Optional[str] = None
+    is_active: Optional[bool] = None
+    operating_hours: Optional[str] = None
+    services_config: Optional[Dict[str, Any]] = None
+
+
+class AirportServiceUpdateRequest(BaseModel):
+    price: Optional[float] = Field(None, gt=0, le=50000000)
+    currency: Optional[str] = Field(None, min_length=3, max_length=3)
+    is_available: Optional[bool] = None
+    terminal: Optional[str] = None
+    features: Optional[List[str] | str] = None
+    short_description: Optional[str] = None
+    min_booking_notice_hours: Optional[int] = Field(None, ge=0)
+
+
+class CouponToggleRequest(BaseModel):
+    is_active: Optional[bool] = None
+    status: Optional[str] = None
+
+
 class AdminApiResponse(BaseModel):
     success: bool
     data: Optional[Any] = None
