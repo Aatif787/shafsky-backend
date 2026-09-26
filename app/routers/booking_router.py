@@ -436,6 +436,7 @@ async def estimate_booking_price(
     package_id = str(payload.get("package_id", payload.get("service_type", "silver"))).lower()
     airport_code = str(payload.get("airport_code", payload.get("origin_code", "DEL"))).upper()
     journey_type = str(payload.get("journey_type", "DEPARTURE")).upper()
+    flight_type = str(payload.get("flight_type", "DOMESTIC")).upper()
     pax_adults = max(1, int(payload.get("pax_adults", 1)))
 
     total_calculated = BookingService.calculate_authoritative_price(
@@ -443,7 +444,7 @@ async def estimate_booking_price(
         airport_code=airport_code,
         service_tier_or_slug=package_id,
         journey_type=journey_type,
-        flight_type="DOMESTIC",
+        flight_type=flight_type,
         pax_count=pax_adults
     )
 
