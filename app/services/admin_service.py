@@ -31,6 +31,21 @@ from app.schemas.admin import (
 
 class AdminService:
     @staticmethod
+    def _to_json_safe(obj: Any) -> Any:
+        if isinstance(obj, (int, float, str, bool)) or obj is None:
+            return obj
+        from decimal import Decimal
+        if isinstance(obj, Decimal):
+            return float(obj)
+        if isinstance(obj, uuid.UUID):
+            return str(obj)
+        if isinstance(obj, dict):
+            return {str(k): AdminService._to_json_safe(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple, set)):
+            return [AdminService._to_json_safe(v) for v in obj]
+        return str(obj)
+
+    @staticmethod
     def log_audit_action(
         db: Session,
         actor_email: str,
@@ -41,6 +56,7 @@ class AdminService:
         details: Optional[Dict[str, Any]] = None,
         ip_address: Optional[str] = None
     ) -> AuditLog:
+        safe_details = AdminService._to_json_safe(details) if details else {}
         audit_entry = AuditLog(
             id=uuid.uuid4(),
             actor_id=actor_id,
@@ -48,7 +64,7 @@ class AdminService:
             action=action,
             resource_type=resource_type,
             resource_id=resource_id,
-            details=details or {},
+            details=safe_details,
             ip_address=ip_address,
             created_at=datetime.now(timezone.utc)
         )
@@ -604,12 +620,13 @@ class AdminService:
             raise HTTPException(status_code=404, detail="Airport service mapping not found.")
 
         old_details = {
-            "price": mapping.price,
+            "price": float(mapping.price) if mapping.price is not None else 0.0,
             "currency": mapping.currency,
             "is_available": mapping.is_available,
             "terminal": mapping.terminal,
             "journey_type": mapping.journey_type,
             "flight_type": mapping.flight_type,
+            "features": list(mapping.features) if isinstance(mapping.features, list) else [],
         }
 
         if "price" in updates and updates["price"] is not None:
@@ -637,9 +654,20 @@ class AdminService:
 
         if "features" in updates and updates["features"] is not None:
             if isinstance(updates["features"], list):
-                setattr(mapping, "features", updates["features"])
+                cleaned_features = [
+                    str(f).strip().lstrip("•-*").strip()
+                    for f in updates["features"]
+                    if str(f).strip()
+                ]
+                setattr(mapping, "features", cleaned_features)
             elif isinstance(updates["features"], str):
-                setattr(mapping, "features", [f.strip() for f in updates["features"].split(",") if f.strip()])
+                raw_str = updates["features"].strip()
+                if "\n" in raw_str:
+                    lines = [line.strip().lstrip("•-*").strip() for line in raw_str.split("\n")]
+                else:
+                    lines = [f.strip().lstrip("•-*").strip() for f in raw_str.split(",")]
+                cleaned_features = [line for line in lines if line]
+                setattr(mapping, "features", cleaned_features)
 
         if "short_description" in updates and updates["short_description"] is not None:
             mapping.short_description = str(updates["short_description"]).strip()
@@ -670,14 +698,16 @@ class AdminService:
                 details={
                     "old": old_details,
                     "new": {
-                        "price": mapping.price,
+                        "price": float(mapping.price) if mapping.price is not None else 0.0,
                         "currency": mapping.currency,
                         "is_available": mapping.is_available,
                         "terminal": mapping.terminal,
+                        "features": list(mapping.features) if isinstance(mapping.features, list) else [],
                     }
                 }
             )
         except Exception as audit_err:
+            db.rollback()
             logger.warning("[AdminService] Audit log write failed: %s", audit_err)
 
         apt = db.scalar(select(SupportedAirport).where(SupportedAirport.id == mapping.airport_id))

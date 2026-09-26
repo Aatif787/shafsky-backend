@@ -60,69 +60,115 @@ class PaymentReconciliationService:
             booking_ref = tx.entity_id
 
             try:
-                # 1. Order-based reconciliation (Web Checkout)
-                if target_id.startswith("order_"):
-                    payments_res = razorpay_provider.fetch_order_payments(target_id)
-                    if payments_res.get("success"):
-                        items = payments_res.get("items", [])
-                        captured_payment = next(
-                            (p for p in items if str(p.get("status", "")).lower() == "captured"),
-                            None
+                gateway = str(tx.gateway_provider or "").strip().upper()
+                if not gateway:
+                    if target_id.startswith(("order_", "plink_")):
+                        gateway = "RAZORPAY"
+                    else:
+                        gateway = "ICICI"
+
+                # -----------------------------------------------------
+                # ICICI BANK CHECK ONLY
+                # -----------------------------------------------------
+                if gateway == "ICICI" and booking_ref:
+                    from app.providers.icici_provider import icici_provider
+                    status_res = icici_provider.check_transaction_status(merchant_txn_no=target_id)
+                    if status_res.get("success") and status_res.get("paid"):
+                        pay_id = str(status_res.get("txnID") or target_id)
+                        amount_val = float(status_res.get("amount") or tx.amount)
+
+                        result = PaymentService.handle_verified_payment(
+                            db,
+                            event_name="ICICI_STATUS_SUC",
+                            gateway_provider="ICICI",
+                            order_id=target_id,
+                            payment_id=pay_id,
+                            booking_ref=booking_ref,
+                            amount=amount_val,
+                            currency="INR",
+                            channel="web_reconciliation",
                         )
+                        if result.get("success") and result.get("status") in {
+                            "CONFIRMED",
+                            "ALREADY_CONFIRMED",
+                        }:
+                            reconciled_count += 1
+                            reconciled_details.append({
+                                "booking_ref": booking_ref,
+                                "merchant_txn_no": target_id,
+                                "payment_id": pay_id,
+                                "amount": amount_val,
+                                "status": "CONFIRMED"
+                            })
+                            logger.info(f"[PaymentReconciliation] Successfully reconciled ICICI booking {booking_ref} (txn: {target_id}, payment: {pay_id})")
 
-                        if captured_payment:
-                            pay_id = captured_payment.get("id")
-                            # Canonical payment handling expects Razorpay's raw amount in paise.
-                            amount_paise = captured_payment.get("amount")
-                            curr = captured_payment.get("currency", "INR")
-
-                            result = PaymentService.handle_verified_payment(
-                                db,
-                                event_name="payment.captured",
-                                gateway_provider="RAZORPAY",
-                                order_id=target_id,
-                                payment_id=pay_id,
-                                booking_ref=booking_ref,
-                                amount=amount_paise,
-                                currency=curr,
-                                channel="web_reconciliation"
+                # -----------------------------------------------------
+                # RAZORPAY CHECK ONLY
+                # -----------------------------------------------------
+                elif gateway == "RAZORPAY":
+                    # 1. Order-based reconciliation (Razorpay Order)
+                    if target_id.startswith("order_"):
+                        payments_res = razorpay_provider.fetch_order_payments(target_id)
+                        if payments_res.get("success"):
+                            items = payments_res.get("items", [])
+                            captured_payment = next(
+                                (p for p in items if str(p.get("status", "")).lower() == "captured"),
+                                None
                             )
 
-                            if result.get("success") and result.get("status") in {
-                                "CONFIRMED",
-                                "ALREADY_CONFIRMED",
-                            }:
-                                reconciled_count += 1
-                                reconciled_details.append({
-                                    "booking_ref": booking_ref,
-                                    "order_id": target_id,
-                                    "payment_id": pay_id,
-                                    "amount": (
-                                        float(amount_paise) / 100.0
-                                        if amount_paise is not None
-                                        else None
-                                    ),
-                                    "status": "CONFIRMED"
-                                })
-                                logger.info(f"[PaymentReconciliation] Successfully reconciled booking {booking_ref} (order: {target_id}, payment: {pay_id})")
-                            elif not result.get("success"):
-                                logger.warning(
-                                    "[PaymentReconciliation] Reconciliation rejected for booking %s: %s",
-                                    booking_ref,
-                                    result,
+                            if captured_payment:
+                                pay_id = captured_payment.get("id")
+                                # Canonical payment handling expects Razorpay's raw amount in paise.
+                                amount_paise = captured_payment.get("amount")
+                                curr = captured_payment.get("currency", "INR")
+
+                                result = PaymentService.handle_verified_payment(
+                                    db,
+                                    event_name="payment.captured",
+                                    gateway_provider="RAZORPAY",
+                                    order_id=target_id,
+                                    payment_id=pay_id,
+                                    booking_ref=booking_ref,
+                                    amount=amount_paise,
+                                    currency=curr,
+                                    channel="web_reconciliation"
                                 )
 
-                # 2. Payment Link-based reconciliation (WhatsApp)
-                elif target_id.startswith("plink_") and booking_ref:
-                    link_res = PaymentService.reconcile_whatsapp_payment_link(db, booking_ref)
-                    if link_res.get("success") and link_res.get("status") == "PAID":
-                        reconciled_count += 1
-                        reconciled_details.append({
-                            "booking_ref": booking_ref,
-                            "payment_link_id": target_id,
-                            "status": "CONFIRMED"
-                        })
-                        logger.info(f"[PaymentReconciliation] Successfully reconciled WhatsApp link for booking {booking_ref}")
+                                if result.get("success") and result.get("status") in {
+                                    "CONFIRMED",
+                                    "ALREADY_CONFIRMED",
+                                }:
+                                    reconciled_count += 1
+                                    reconciled_details.append({
+                                        "booking_ref": booking_ref,
+                                        "order_id": target_id,
+                                        "payment_id": pay_id,
+                                        "amount": (
+                                            float(amount_paise) / 100.0
+                                            if amount_paise is not None
+                                            else None
+                                        ),
+                                        "status": "CONFIRMED"
+                                    })
+                                    logger.info(f"[PaymentReconciliation] Successfully reconciled Razorpay booking {booking_ref} (order: {target_id}, payment: {pay_id})")
+                                elif not result.get("success"):
+                                    logger.warning(
+                                        "[PaymentReconciliation] Reconciliation rejected for booking %s: %s",
+                                        booking_ref,
+                                        result,
+                                    )
+
+                    # 2. Payment Link-based reconciliation (Razorpay WhatsApp)
+                    elif target_id.startswith("plink_") and booking_ref:
+                        link_res = PaymentService.reconcile_whatsapp_payment_link(db, booking_ref)
+                        if link_res.get("success") and link_res.get("status") == "PAID":
+                            reconciled_count += 1
+                            reconciled_details.append({
+                                "booking_ref": booking_ref,
+                                "payment_link_id": target_id,
+                                "status": "CONFIRMED"
+                            })
+                            logger.info(f"[PaymentReconciliation] Successfully reconciled WhatsApp link for booking {booking_ref}")
 
             except Exception as ex:
                 logger.warning(f"[PaymentReconciliation] Error reconciling tx {tx.transaction_ref} (booking {booking_ref}): {ex}")

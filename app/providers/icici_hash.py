@@ -45,8 +45,11 @@ _HASH_EXCLUDE_KEYS = {"securehash", "secure_hash"}
 def _is_empty(value: Any) -> bool:
     if value is None:
         return True
-    if isinstance(value, str) and value.strip() == "":
-        return True
+    if isinstance(value, bool):
+        return not value
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return cleaned == "" or cleaned.lower() == "false"
     return False
 
 
@@ -62,7 +65,9 @@ def build_v1_hash_payload(params: Mapping[str, Any]) -> str:
         value = params[key]
         if _is_empty(value):
             continue
-        if isinstance(value, (dict, list)):
+        if value is True:
+            parts.append("true")
+        elif isinstance(value, (dict, list)):
             # Nested structures are not described for V1 form callbacks; stringify
             # stably so unexpected nested values still participate (Note 1).
             parts.append(json.dumps(value, separators=(",", ":"), ensure_ascii=True, sort_keys=True))

@@ -1,4 +1,4 @@
-﻿"""
+"""
 Review & Payment Flow Mixin for WhatsApp Booking State Machine.
 Handles:
 - Booking review verification and email guard
@@ -53,7 +53,8 @@ class ReviewPaymentFlowMixin(BaseFlowMixin):
                 return {"status": "invalid_email", "success": False, "reason": "reserved_or_placeholder"}
             if (conv.selected_category or "").strip().lower() == "private charter":
                 # Private Charter is enquiry-only - no booking/payment pipeline.
-                return cls._submit_charter_enquiry(db, conv)
+                from app.integrations.whatsapp.handlers.charter_hotel_flow import CharterHotelFlowMixin
+                return CharterHotelFlowMixin._submit_charter_enquiry(db, conv)
             return cls._create_booking_request(db, conv)
 
         whatsapp_client.send_text_message(conv.phone_number, "Please select *Confirm Booking*, *Change Details*, or *Cancel*.")
@@ -282,9 +283,11 @@ class ReviewPaymentFlowMixin(BaseFlowMixin):
                 booking_ref = existing_booking.booking_ref
                 new_booking = existing_booking
             else:
-                # 2. Cancel any stale uncompleted PENDING drafts for this customer phone
+                # 2. Cancel only stale uncompleted WhatsApp PENDING drafts for this customer phone
+                # Strict Channel Isolation: NEVER supersede Web bookings, ICICI bookings, or bookings with active payments.
                 caller_phone = conv.customer_phone or conv.phone_number
                 if caller_phone:
+                    from app.models.payment import PaymentTransaction, PaymentStatus
                     clean_digits = "".join(filter(str.isdigit, caller_phone))
                     stale_bookings = db.scalars(
                         select(Booking)
@@ -292,10 +295,30 @@ class ReviewPaymentFlowMixin(BaseFlowMixin):
                         .where(Booking.deleted_at.is_(None))
                     ).all()
                     for sb in stale_bookings:
+                        sb_meta = sb.metadata_json or {}
+                        sb_channel = str(sb_meta.get("channel") or sb_meta.get("source") or "").lower()
+                        # Only supersede drafts originating from WhatsApp
+                        if sb_channel not in ("whatsapp", ""):
+                            continue
+                        if str(sb_meta.get("payment_gateway") or "").upper() == "ICICI":
+                            continue
+                        if sb_meta.get("payment_status") in ("PAID", "SUCCESSFUL"):
+                            continue
+
                         sb_digits = "".join(filter(str.isdigit, sb.passenger_phone or ""))
                         if sb_digits and (sb_digits.endswith(clean_digits[-10:]) or clean_digits.endswith(sb_digits[-10:])):
+                            has_active_payment = db.scalar(
+                                select(PaymentTransaction.id)
+                                .where(
+                                    PaymentTransaction.entity_id == sb.booking_ref,
+                                    PaymentTransaction.status.in_([PaymentStatus.SUCCESSFUL, PaymentStatus.PROCESSING, PaymentStatus.PENDING])
+                                )
+                            )
+                            if has_active_payment:
+                                continue
+
                             sb.status = BookingStatus.CANCELLED
-                            sb.notes = f"Superseded by new booking request {booking_ref}"
+                            sb.notes = f"Superseded by new WhatsApp booking request {booking_ref}"
                             sb.updated_at = datetime.now(timezone.utc)
 
                 new_booking = Booking(
@@ -671,9 +694,11 @@ class ReviewPaymentFlowMixin(BaseFlowMixin):
             conv.current_state = "COMPLETED"
             conv.updated_at = datetime.now(timezone.utc)
 
-            # Cancel any older unpaid PENDING drafts for this customer phone
+            # Cancel only older unpaid WhatsApp PENDING drafts for this customer phone
+            # Strict Channel Isolation: NEVER cancel Web bookings, ICICI bookings, or bookings with active payments.
             caller_phone = conv.customer_phone or conv.phone_number
             if caller_phone:
+                from app.models.payment import PaymentTransaction, PaymentStatus
                 clean_digits = "".join(filter(str.isdigit, caller_phone))
                 other_pending = db.scalars(
                     select(Booking)
@@ -682,10 +707,29 @@ class ReviewPaymentFlowMixin(BaseFlowMixin):
                     .where(Booking.deleted_at.is_(None))
                 ).all()
                 for op in other_pending:
+                    op_meta = op.metadata_json or {}
+                    op_channel = str(op_meta.get("channel") or op_meta.get("source") or "").lower()
+                    if op_channel not in ("whatsapp", ""):
+                        continue
+                    if str(op_meta.get("payment_gateway") or "").upper() == "ICICI":
+                        continue
+                    if op_meta.get("payment_status") in ("PAID", "SUCCESSFUL"):
+                        continue
+
                     op_digits = "".join(filter(str.isdigit, op.passenger_phone or ""))
                     if op_digits and (op_digits.endswith(clean_digits[-10:]) or clean_digits.endswith(op_digits[-10:])):
+                        has_active_payment = db.scalar(
+                            select(PaymentTransaction.id)
+                            .where(
+                                PaymentTransaction.entity_id == op.booking_ref,
+                                PaymentTransaction.status.in_([PaymentStatus.SUCCESSFUL, PaymentStatus.PROCESSING, PaymentStatus.PENDING])
+                            )
+                        )
+                        if has_active_payment:
+                            continue
+
                         op.status = BookingStatus.CANCELLED
-                        op.notes = f"Superseded by confirmed booking {booking_ref}"
+                        op.notes = f"Superseded by confirmed WhatsApp booking {booking_ref}"
                         op.updated_at = datetime.now(timezone.utc)
 
             if conv.customer_phone:

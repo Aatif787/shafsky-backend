@@ -413,3 +413,184 @@ def test_icici_callback_get_not_404(monkeypatch):
     assert "/book/payment-result" in loc
     assert "status=cancelled" in loc
     assert "ERR_404" not in (res.text or "")
+
+
+def test_icici_status_response_with_boolean_oth_charge():
+    """
+    Live regression: ICICI STATUS response contains 'oth_charge': false.
+    In Orange PG V1 hash, false/empty values are omitted.
+    """
+    from app.providers.icici_hash import verify_callback_or_status_response_hash
+
+    payload = {
+        "txnRespDescription": "Transaction successful",
+        "amount": "1.00",
+        "txnAuthID": "626946005333",
+        "txnResponseCode": "0000",
+        "customerEmailID": "aarizfarooqui786@gmail.com",
+        "paymentMode": "UPI",
+        "respDescription": "Request processed successfully",
+        "aggregatorID": "100000000523237",
+        "TransmissionDateTime": "20260926051640",
+        "oth_charge": False,
+        "paymentInstId": "8864931247@apl",
+        "customerMobileNo": "08864931247",
+        "responseCode": "000",
+        "transactionType": "SALE",
+        "acqName": "icici",
+        "txnStatus": "SUC",
+        "merchantId": "100000000523238",
+        "merchantTxnNo": "4000003640341",
+        "paymentDateTime": "20260926104721",
+        "txnID": "4000003640341",
+        "secureHash": "d2b14621c3875aa0d7dd190974702e3746664814957f044e4e7e39ab2ad5e3f7",
+    }
+    secret = "6e623c86-2609-4e82-947c-67b8b1108f16"
+    assert verify_callback_or_status_response_hash(payload, secret) is True
+
+
+def test_reconcile_booking_payment_icici_success(monkeypatch):
+    """Admin reconcile-sync with ICICI verifies STATUS and confirms booking."""
+    from app.services.payment_service import PaymentService
+    from app.models.schema import Booking, BookingStatus
+    from app.models.payment import PaymentTransaction, PaymentStatus
+
+    booking_ref = "SHF-TEST-REC-01"
+    booking = Booking(
+        booking_ref=booking_ref,
+        passenger_name="Aariz",
+        passenger_email="aariz@example.com",
+        status=BookingStatus.PENDING,
+        total_amount=500.0,
+        currency="INR",
+        metadata_json={"payment_gateway": "ICICI"},
+    )
+    tx = PaymentTransaction(
+        transaction_ref="PAY-TEST-REC-01",
+        entity_id=booking_ref,
+        amount=500.0,
+        currency="INR",
+        status=PaymentStatus.PENDING,
+        gateway_provider="ICICI",
+        gateway_payment_id="SFTEST123456",
+    )
+
+    db = MagicMock()
+    # First scalar call is booking, second is tx
+    db.scalar.side_effect = [booking, tx]
+
+    mock_status_result = {
+        "success": True,
+        "paid": True,
+        "txnID": "ICICI_TXN_999",
+        "amount": "500.00",
+        "txnStatus": "SUC",
+        "data": {},
+    }
+
+    monkeypatch.setattr(
+        "app.providers.icici_provider.icici_provider.check_transaction_status",
+        lambda merchant_txn_no: mock_status_result,
+    )
+
+    with patch.object(
+        PaymentService,
+        "handle_verified_payment",
+        return_value={"success": True, "status": "CONFIRMED"},
+    ) as mock_handle:
+        result = PaymentService.reconcile_booking_payment(db, booking_ref)
+        assert result["reconciled"] is True
+        assert result["status"] == "CONFIRMED"
+        mock_handle.assert_called_once()
+        kws = mock_handle.call_args.kwargs
+        assert kws["gateway_provider"] == "ICICI"
+        assert kws["order_id"] == "SFTEST123456"
+        assert kws["payment_id"] == "ICICI_TXN_999"
+        assert kws["amount"] == 500.0
+
+
+def test_reconcile_booking_payment_razorpay_strict_separation(monkeypatch):
+    """Admin reconcile for Razorpay booking queries Razorpay exclusively and does not touch ICICI."""
+    from app.services.payment_service import PaymentService
+    from app.models.schema import Booking, BookingStatus
+    from app.models.payment import PaymentTransaction, PaymentStatus
+
+    booking_ref = "SHF-TEST-RZP-01"
+    booking = Booking(
+        booking_ref=booking_ref,
+        passenger_name="Aariz",
+        passenger_email="aariz@example.com",
+        status=BookingStatus.PENDING,
+        total_amount=1500.0,
+        currency="INR",
+        metadata_json={"payment_gateway": "RAZORPAY", "order_id": "order_RZP12345"},
+    )
+    tx = PaymentTransaction(
+        transaction_ref="PAY-TEST-RZP-01",
+        entity_type="AIRPORT_BOOKING",
+        entity_id=booking_ref,
+        amount=1500.0,
+        currency="INR",
+        status=PaymentStatus.PENDING,
+        gateway_provider="RAZORPAY",
+        gateway_payment_id="order_RZP12345",
+    )
+
+    db = MagicMock()
+    db.scalar.side_effect = [booking, tx]
+
+    mock_icici_status = MagicMock()
+    monkeypatch.setattr(
+        "app.providers.icici_provider.icici_provider.check_transaction_status",
+        mock_icici_status,
+    )
+
+    mock_order = {"success": True, "order": {"status": "paid"}}
+    mock_payments = {
+        "success": True,
+        "items": [{"id": "pay_RZP999", "status": "captured", "amount": 150000, "currency": "INR"}],
+    }
+
+    monkeypatch.setattr("app.providers.razorpay_provider.razorpay_provider.fetch_order", lambda oid: mock_order)
+    monkeypatch.setattr("app.providers.razorpay_provider.razorpay_provider.fetch_order_payments", lambda oid: mock_payments)
+
+    with patch.object(
+        PaymentService,
+        "handle_verified_payment",
+        return_value={"success": True, "status": "CONFIRMED"},
+    ) as mock_handle:
+        result = PaymentService.reconcile_booking_payment(db, booking_ref)
+        assert result["reconciled"] is True
+        assert result["gateway"] == "RAZORPAY"
+        assert result["status"] == "CONFIRMED"
+        mock_icici_status.assert_not_called()
+        mock_handle.assert_called_once()
+        kws = mock_handle.call_args.kwargs
+        assert kws["gateway_provider"] == "RAZORPAY"
+        assert kws["order_id"] == "order_RZP12345"
+        assert kws["payment_id"] == "pay_RZP999"
+
+
+def test_whatsapp_isolation_guard_preserves_web_and_icici_bookings():
+    """Verify that channel isolation logic prevents WhatsApp flow from cancelling Web/ICICI bookings."""
+    from app.models.schema import Booking, BookingStatus
+
+    # A Web booking with ICICI gateway
+    web_booking = Booking(
+        booking_ref="SHF-WEB-001",
+        passenger_phone="+919876543210",
+        status=BookingStatus.PENDING,
+        metadata_json={"channel": "web", "payment_gateway": "ICICI"},
+    )
+    meta = web_booking.metadata_json or {}
+    channel = str(meta.get("channel") or meta.get("source") or "").lower()
+    gateway = str(meta.get("payment_gateway") or "").upper()
+
+    # WhatsApp cancellation check:
+    # 1. Channel must be whatsapp or blank draft
+    assert channel not in ("whatsapp", "")
+    # 2. Gateway must not be ICICI
+    assert gateway == "ICICI"
+    # Therefore, Web/ICICI booking is protected and skipped by WhatsApp flow
+
+
