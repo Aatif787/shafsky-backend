@@ -3,86 +3,169 @@ from sqlalchemy.orm import Session
 from app.models.journey_models import SupportedAirport, Service, AirportService
 
 
-TRV_DOMESTIC_DEPARTURE_SILVER_FEATURES = [
-    "WELCOME GUEST FROM CURBSIDE AREA",
+# =========================================================================
+# THIRUVANANTHAPURAM / TRIVANDRUM AIRPORT (TRV) — AUTHORITATIVE PRODUCTION PACKAGES
+# =========================================================================
+
+# 1. Domestic Departure — Platinum (INR 2420)
+TRV_DOMESTIC_DEPARTURE_PLATINUM_FEATURES = [
+    "WELCOME GUEST FROM CURB SIDE AREA",
     "PORTER SERVICE WITH DEDICATED STAFF",
-    "ASSIST IN SEPARATE ENTRY GATE",
-    "ASSIST IN AIRLINE CHECK IN BAGGAGE",
-    "ASSIST IN S.H.A (SECURITY HOLD AREA)",
-    "DROP OFF TILL BOARDING GATE.",
+    "WHEELCHAIR SERVICE AVAILABLE (Through Airlines)",
+    "ASSIST FROM SEPARATE ENTRY GATE",
+    "ASSIST TO BAGGAGE WRAPPING FACILITIES",
+    "ASSIST SEPARATE BAGGAGE CHECK-IN AT AIRLINE COUNTER",
+    "ASSIST IN S.H.A.(SECURITY HOLD AREA)",
+    "ASSIST GUEST UPTO BOARDING GATE",
 ]
 
+# 2. Domestic Departure — Elite (INR 4400)
 TRV_DOMESTIC_DEPARTURE_ELITE_FEATURES = [
     "WELCOME GUEST FROM CURBSIDE AREA",
     "PORTER SERVICE WITH DEDICATED STAFF",
-    "ASSIST IN SEPARATE ENTRY GATE",
-    "ASSIST IN AIRLINE CHECK IN BAGGAGE",
-    "ASSIST IN S.H.A (SECURITY HOLD AREA)",
-    "LOUNGE ACCESS FOR 2 HOURS",
-    "DROP OFF TILL BOARDING GATE.",
+    "WHEELCHAIR SERVICE AVAILABLE (Through Airlines)",
+    "ASSIST FROM SEPARATE ENTRY GATE",
+    "ASSIST TO BAGGAGE WRAPPING FACILITIES",
+    "ASSIST AT SEPARATE CHECKIN PROCESS AT COUNTERS",
+    "ASSIST IN S.H.A.(SECURITY HOLD AREA)",
+    "LOUNGE SERVICE FACILITY AVAILABLE",
+    "ASSIST GUEST TILL THE BOARDING GATE",
+    "CANCELLATION BENEFITS UPTO 12 HOUR’S OF SERVICE TIME",
+    "MINIMUM 6 HOURS PRIORS NOTICE REQUIRED FOR RESCHEDULING.",
 ]
 
-TRV_DOMESTIC_ARRIVAL_SILVER_FEATURES = [
-    "WELCOME GUEST FROM END OF THE AEROBRIDGE.",
-    "DEDICATED STAFF WITH PLACARD.",
+# 3. Domestic Arrival — Platinum (INR 2420)
+TRV_DOMESTIC_ARRIVAL_PLATINUM_FEATURES = [
+    "WELCOME GUEST FROM AEROBRIDGE",
+    "DEDICATED STAFF WITH PLACARD",
+    "PORTER SERVICE WITH DEDICATED STAFF AT ARRIVALS",
+    "WHEELCHAIR SERVICE AVAILABLE WITH DEDICATED STAFF (Through Airlines)",
     "ASSIST IN BAGGAGE BELT AREA",
-    "COORDINATION WITH RECEIVING PARTY.",
-    "DROP OFF TILL CAR PARKING AREA.",
+    "ASSIST GUEST TILL THE CAR PARKING AREA",
 ]
 
+# 4. Domestic Arrival — Elite (INR 4400)
 TRV_DOMESTIC_ARRIVAL_ELITE_FEATURES = [
-    "WELCOME GUEST FROM END OF THE AEROBRIDGE.",
-    "DEDICATED STAFF WITH PLACARD.",
+    "WELCOME GUEST FROM AEROBRIDGE",
+    "DEDICATED STAFF WITH PLACARD",
+    "PORTER SERVICE WITH DEDICATED STAFF AT ARRIVALS",
+    "WHEELCHAIR SERVICE AVAILABLE WITH DEDICATED STAFF (Through Airlines)",
     "ASSIST IN BAGGAGE BELT AREA",
-    "COORDINATION WITH RECEIVING PARTY.",
-    "LOUNGE ACCESS FOR 2 HOURS",
-    "DROP OFF TILL CAR PARKING AREA.",
+    "ASSIST GUEST TILL THE CAR PARKING AREA",
+    "CANCELLATION BENEFITS UPTO 12 HOUR’S OF SERVICE TIME",
+    "MINIMUM 6 HOURS PRIORS NOTICE REQUIRED FOR RESCHEDULING.",
 ]
 
-TRV_INTERNATIONAL_DEPARTURE_SILVER_FEATURES = [
-    "WELCOME GUEST FROM CURBSIDE AREA",
+# 5. International Departure — Platinum (INR 3300)
+TRV_INTERNATIONAL_DEPARTURE_PLATINUM_FEATURES = [
+    "WELCOME GUEST FROM CURB SIDE AREA",
     "PORTER SERVICE WITH DEDICATED STAFF",
-    "ASSIST IN SEPARATE ENTRY GATE",
-    "ASSIST AT IMMIGRATION COUNTERS",
-    "ASSIST IN S.H.A (SECURITY HOLD AREA)",
-    "DROP OFF TILL BOARDING GATE.",
+    "WHEELCHAIR SERVICE AVAILABLE (Through Airlines)",
+    "ASSIST FROM SEPARATE ENTRY GATE",
+    "ASSIST IN MONEY EXCHANGE COUNTER",
+    "ASSIST TO BAGGAGE WRAPPING FACILITIES",
+    "ASSIST SEPARATE BAGGAGE CHECK-IN AT AIRLINE COUNTER",
+    "ASSIST FOR IMMIGRATION COUNTERS",
+    "ASSIST IN S.H.A.(SECURITY HOLD AREA)",
+    "ASSIST GUEST UPTO BOARDING GATE",
 ]
 
-TRV_INTERNATIONAL_ARRIVAL_SILVER_FEATURES = [
-    "WELCOME GUEST FROM END OF THE AEROBRIDGE.",
-    "DEDICATED STAFF WITH PLACARD.",
-    "ASSIST THROUGH IMMIGRATION",
-    "ASSIST IN BAGGAGE BELT AREA",
+# 6. International Departure — Elite (INR 4950)
+TRV_INTERNATIONAL_DEPARTURE_ELITE_FEATURES = [
+    "WELCOME GUEST FROM CURB SIDE AREA",
+    "PORTER SERVICE WITH DEDICATED STAFF",
+    "WHEELCHAIR SERVICE AVAILABLE (Through Airlines)",
+    "ASSIST FROM SEPARATE ENTRY GATE",
+    "ASSIST IN MONEY EXCHANGE COUNTER",
+    "ASSIST TO BAGGAGE WRAPPING FACILITIES",
+    "ASSIST SEPARATE BAGGAGE CHECK-IN AT AIRLINE COUNTER",
+    "ASSIST FOR IMMIGRATION COUNTERS",
+    "ASSIST IN S.H.A.(SECURITY HOLD AREA)",
+    "LOUNGE SERVICE FACILITY AVAILABLE (02 HOURS)",
+    "ASSIST GUEST UPTO BOARDING GATE",
+    "CANCELLATION BENEFITS UPTO 12 HOUR’S OF SERVICE TIME",
+    "MINIMUM 6 HOURS PRIORS NOTICE REQUIRED FOR RESCHEDULING.",
+]
+
+# 7. International Arrival — Platinum (INR 2750)
+TRV_INTERNATIONAL_ARRIVAL_PLATINUM_FEATURES = [
+    "WELCOME GUEST FROM POST IMMIGRATION.",
+    "ASSIST IN DUTY FREE SHOP.",
+    "ASSIST IN BAGGAGE BELT AREA.",
+    "ASSIST FROM POST CUSTOMS.",
+    "COORDINATION WITH RECEIVING PERSON.",
     "DROP OFF TILL CAR PARKING AREA.",
 ]
+
+
+# 7 Authoritative TRV Pricing Mappings
+TRV_PRICING = {
+    ("DEPARTURE", "DOMESTIC", "platinum"): 2420.00,
+    ("DEPARTURE", "DOMESTIC", "elite"): 4400.00,
+    ("ARRIVAL", "DOMESTIC", "platinum"): 2420.00,
+    ("ARRIVAL", "DOMESTIC", "elite"): 4400.00,
+    ("DEPARTURE", "INTERNATIONAL", "platinum"): 3300.00,
+    ("DEPARTURE", "INTERNATIONAL", "elite"): 4950.00,
+    ("ARRIVAL", "INTERNATIONAL", "platinum"): 2750.00,
+}
 
 
 def seed_trv_production_packages(db: Session, trv_airport: SupportedAirport, service_map: dict[str, Service]):
-    """Thiruvananthapuram (TRV) — 6 active packages (4 domestic + 2 international silver)."""
-    print("\n-- Configuring Production Packages for Thiruvananthapuram Airport (TRV) --")
+    """
+    Thiruvananthapuram (TRV) — 7 Authoritative Production Packages:
+      - Domestic Departure: Platinum (2420) & Elite (4400)
+      - Domestic Arrival: Platinum (2420) & Elite (4400)
+      - International Departure: Platinum (3300) & Elite (4950)
+      - International Arrival: Platinum (2750)
+      - International Arrival Elite: NOT PROVIDED (MUST NOT BE CREATED)
+      - Transit: NOT PROVIDED (Preserve existing if present as inactive, MUST NOT BE BOOKABLE)
+    """
+    print("\n-- Configuring Authoritative Production Packages for Thiruvananthapuram (TRV) --")
 
-    silver_svc = service_map.get("silver")
+    platinum_svc = service_map.get("platinum")
     elite_svc = service_map.get("elite")
-    if not silver_svc or not elite_svc:
-        raise RuntimeError("TRV requires catalog services slug=silver and slug=elite")
+    if not platinum_svc or not elite_svc:
+        raise RuntimeError("TRV requires catalog services slug=platinum and slug=elite")
 
-    db.query(AirportService).filter(AirportService.airport_id == trv_airport.id).delete(synchronize_session=False)
+    # Remove only departure and arrival mappings for TRV to be replaced with authoritative packages.
+    # Preserve existing Transit mappings if any, but ensure they are disabled (not bookable).
+    db.query(AirportService).filter(
+        AirportService.airport_id == trv_airport.id,
+        AirportService.journey_type.in_(["DEPARTURE", "ARRIVAL"]),
+    ).delete(synchronize_session=False)
+
+    # Disable any existing transit records so TRV transit is never bookable
+    db.query(AirportService).filter(
+        AirportService.airport_id == trv_airport.id,
+        AirportService.journey_type == "TRANSIT",
+    ).update({"is_available": False}, synchronize_session=False)
+
     db.flush()
 
     packages = [
-        (silver_svc, "DEPARTURE", "DOMESTIC", 3500.00, TRV_DOMESTIC_DEPARTURE_SILVER_FEATURES, 1,
-         "Domestic departure assist from curbside to the boarding gate."),
-        (elite_svc, "DEPARTURE", "DOMESTIC", 5500.00, TRV_DOMESTIC_DEPARTURE_ELITE_FEATURES, 2,
-         "Premium domestic departure assist with lounge access."),
-        (silver_svc, "ARRIVAL", "DOMESTIC", 3500.00, TRV_DOMESTIC_ARRIVAL_SILVER_FEATURES, 1,
-         "Domestic arrival assist from the aerobridge to car parking."),
-        (elite_svc, "ARRIVAL", "DOMESTIC", 5500.00, TRV_DOMESTIC_ARRIVAL_ELITE_FEATURES, 2,
-         "Premium domestic arrival assist with lounge access."),
-        (silver_svc, "DEPARTURE", "INTERNATIONAL", 4500.00, TRV_INTERNATIONAL_DEPARTURE_SILVER_FEATURES, 1,
-         "International departure assist from curbside through immigration to the gate."),
-        (silver_svc, "ARRIVAL", "INTERNATIONAL", 4500.00, TRV_INTERNATIONAL_ARRIVAL_SILVER_FEATURES, 1,
-         "International arrival assist from the aerobridge through immigration to parking."),
+        # Domestic Departure
+        (platinum_svc, "DEPARTURE", "DOMESTIC", 2420.00, TRV_DOMESTIC_DEPARTURE_PLATINUM_FEATURES, 1,
+         "Authoritative TRV domestic departure Platinum assist."),
+        (elite_svc, "DEPARTURE", "DOMESTIC", 4400.00, TRV_DOMESTIC_DEPARTURE_ELITE_FEATURES, 2,
+         "Authoritative TRV domestic departure Elite assist with lounge facility and flexible cancellation."),
+
+        # Domestic Arrival
+        (platinum_svc, "ARRIVAL", "DOMESTIC", 2420.00, TRV_DOMESTIC_ARRIVAL_PLATINUM_FEATURES, 1,
+         "Authoritative TRV domestic arrival Platinum assist from aerobridge to car parking."),
+        (elite_svc, "ARRIVAL", "DOMESTIC", 4400.00, TRV_DOMESTIC_ARRIVAL_ELITE_FEATURES, 2,
+         "Authoritative TRV domestic arrival Elite assist with flexible cancellation."),
+
+        # International Departure
+        (platinum_svc, "DEPARTURE", "INTERNATIONAL", 3300.00, TRV_INTERNATIONAL_DEPARTURE_PLATINUM_FEATURES, 1,
+         "Authoritative TRV international departure Platinum assist through immigration to gate."),
+        (elite_svc, "DEPARTURE", "INTERNATIONAL", 4950.00, TRV_INTERNATIONAL_DEPARTURE_ELITE_FEATURES, 2,
+         "Authoritative TRV international departure Elite assist with 02 hours lounge facility."),
+
+        # International Arrival (Only Platinum provided)
+        (platinum_svc, "ARRIVAL", "INTERNATIONAL", 2750.00, TRV_INTERNATIONAL_ARRIVAL_PLATINUM_FEATURES, 1,
+         "Authoritative TRV international arrival Platinum assist from post immigration to car parking."),
     ]
+
     for svc, journey, flight, price, features, priority, desc in packages:
         db.add(AirportService(
             id=uuid.uuid4(),
@@ -100,4 +183,10 @@ def seed_trv_production_packages(db: Session, trv_airport: SupportedAirport, ser
             currency="INR",
         ))
     db.flush()
-    print("  + Created TRV Production Packages: 6 active (Dom Dep/Arr Silver+Elite, Intl Dep/Arr Silver)")
+    print("  + Configured TRV Production Packages: 7 active authoritative packages.")
+    print("    - Domestic Departure: Platinum (2420), Elite (4400)")
+    print("    - Domestic Arrival: Platinum (2420), Elite (4400)")
+    print("    - International Departure: Platinum (3300), Elite (4950)")
+    print("    - International Arrival: Platinum (2750)")
+    print("    - International Arrival Elite: NOT CONFIGURED")
+    print("    - Transit: NOT CONFIGURED (Preserved & Disabled)")

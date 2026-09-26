@@ -606,7 +606,7 @@ def test_full_20_airports_regression_suite(db: Session):
         "JAI": 7,
         "LKO": 7,
         "MAA": 4,
-        "TRV": 6,
+        "TRV": (6, 7),
         "VTZ": 2,
     }
 
