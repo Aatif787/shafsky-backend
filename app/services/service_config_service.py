@@ -987,7 +987,55 @@ class ServiceConfigService:
         unit_subtotal = pkg_price + services_price
         subtotal = round(unit_subtotal * guest_count, 2)
         taxes = 0.0
-        total = subtotal
+
+        # Mumbai Airport Express Fee (effective 1 Oct 2026)
+        from app.services.express_fee import calculate_express_fee
+        dep_time_raw = payload.get("departureTime") or payload.get("departure_time")
+        arr_time_raw = payload.get("arrivalTime") or payload.get("arrival_time")
+        dep_dt = None
+        arr_dt = None
+        for raw, setter in [(dep_time_raw, "dep"), (arr_time_raw, "arr")]:
+            if raw is not None:
+                try:
+                    if isinstance(raw, datetime):
+                        dt_val = raw
+                    else:
+                        from dateutil.parser import isoparse
+                        dt_val = isoparse(str(raw))
+                    if dt_val.tzinfo is None:
+                        dt_val = dt_val.replace(tzinfo=timezone.utc)
+                    if setter == "dep":
+                        dep_dt = dt_val
+                    else:
+                        arr_dt = dt_val
+                except Exception:
+                    pass
+
+        bca = datetime.now(timezone.utc)
+        created_at_raw = payload.get("booking_created_at") or payload.get("created_at")
+        if created_at_raw is not None:
+            try:
+                if isinstance(created_at_raw, datetime):
+                    bca = created_at_raw
+                else:
+                    from dateutil.parser import isoparse
+                    bca = isoparse(str(created_at_raw))
+                if bca.tzinfo is None:
+                    bca = bca.replace(tzinfo=timezone.utc)
+            except Exception:
+                pass
+
+        express_fee = calculate_express_fee(
+            airport_code=target_airport_code,
+            service_fee=subtotal,
+            booking_created_at=bca,
+            journey_type=journey_type,
+            flight_type=authoritative_ft or "domestic",
+            departure_time=dep_dt,
+            arrival_time=arr_dt,
+        )
+
+        total = round(subtotal + express_fee, 2)
         currency = config.get("currency", "INR")
 
         return {
@@ -1005,6 +1053,7 @@ class ServiceConfigService:
             "selectedServices": selected_services,
             "overlappingServicesIgnored": overlapping_ignored,
             "subtotal": subtotal,
+            "expressFee": express_fee,
             "taxes": taxes,
             "total": total,
             "currency": currency
@@ -1102,6 +1151,7 @@ class ServiceConfigService:
                 metadata_json={
                     "status": "DRAFT",
                     "subtotal": auth_val.get("subtotal"),
+                    "express_fee": auth_val.get("expressFee", 0.0),
                     "taxes": auth_val.get("taxes"),
                     "total": auth_val.get("total"),
                     "currency": auth_val.get("currency", "INR")
@@ -1124,6 +1174,7 @@ class ServiceConfigService:
                 "selected_package": auth_val.get("selectedPackage"),
                 "selected_services": auth_val.get("selectedServices"),
                 "subtotal": auth_val.get("subtotal"),
+                "expressFee": auth_val.get("expressFee", 0.0),
                 "taxes": auth_val.get("taxes"),
                 "total": auth_val.get("total"),
                 "currency": auth_val.get("currency", "INR")
@@ -1166,6 +1217,7 @@ class ServiceConfigService:
                 "selected_package": auth_val.get("selectedPackage"),
                 "selected_services": auth_val.get("selectedServices"),
                 "subtotal": auth_val.get("subtotal"),
+                "expressFee": auth_val.get("expressFee", 0.0),
                 "taxes": auth_val.get("taxes"),
                 "total": auth_val.get("total"),
                 "currency": auth_val.get("currency", "INR")

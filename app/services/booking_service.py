@@ -485,9 +485,23 @@ class BookingService:
         # All catalog prices are GST-inclusive (do not add extra tax)
         subtotal = round(float(authoritative_price), 2)
         taxes = 0.0
-        charge_amount = subtotal
+
+        # Mumbai Airport Express Fee (effective 1 Oct 2026)
+        from app.services.express_fee import calculate_express_fee
+        express_fee = calculate_express_fee(
+            airport_code=target_airport,
+            service_fee=subtotal,
+            booking_created_at=now,
+            journey_type=journey_type,
+            flight_type=flight_type,
+            departure_time=dep_time,
+            arrival_time=arr_time,
+        )
+
+        charge_amount = round(subtotal + express_fee, 2)
         metadata_json = dict(metadata_json or {})
         metadata_json["subtotal"] = subtotal
+        metadata_json["express_fee"] = express_fee
         metadata_json["taxes"] = taxes
         metadata_json["tax_rate"] = 0.0
         metadata_json["journey_type"] = journey_type
