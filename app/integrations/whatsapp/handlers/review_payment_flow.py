@@ -177,6 +177,11 @@ class ReviewPaymentFlowMixin(BaseFlowMixin):
         from app.services.booking_service import BookingService
 
         booking_ref = BookingService.generate_booking_ref()
+        # Guard against booking_ref collision (token_hex(2) = 65536 possibilities per day)
+        for _ref_attempt in range(5):
+            if not db.scalar(select(Booking).where(Booking.booking_ref == booking_ref)):
+                break
+            booking_ref = BookingService.generate_booking_ref()
         passengers = max(1, conv.passenger_count or 1)
         amount = conv.total_amount or 0.0
 

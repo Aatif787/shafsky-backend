@@ -1,4 +1,4 @@
-﻿"""
+"""
 Charter & Hotel/Transport Flow Mixin for WhatsApp Booking State Machine.
 Handles:
 - Hotel & Ground Transport submenu
@@ -180,7 +180,13 @@ class CharterHotelFlowMixin:
 
         conv.booking_ref = req.request_reference
         conv.payment_status = "QUOTE_REQUESTED"
-        cls._transition_state(db, conv, "AWAITING_QUOTE")
+        # Resolve _transition_state: when called directly on CharterHotelFlowMixin
+        # (not via the full state machine), cls won't have this method.
+        _transition = getattr(cls, "_transition_state", None)
+        if _transition is None:
+            from app.integrations.whatsapp.service import WhatsAppBookingStateMachine
+            _transition = WhatsAppBookingStateMachine._transition_state
+        _transition(db, conv, "AWAITING_QUOTE")
         db.commit()
 
         whatsapp_client.send_text_message(

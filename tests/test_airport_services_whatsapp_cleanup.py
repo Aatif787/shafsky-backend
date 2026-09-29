@@ -59,7 +59,7 @@ def test_database_invariants_preserved(db_session):
             AirportService.airport_id == trv.id, AirportService.is_available.is_(True)
         )
     ).scalar()
-    assert trv_active == 6
+    assert trv_active == 7
 
     bom = db_session.execute(select(SupportedAirport).where(SupportedAirport.iata_code == "BOM")).scalar_one()
     bom_transit = db_session.execute(

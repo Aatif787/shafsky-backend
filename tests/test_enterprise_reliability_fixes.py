@@ -181,6 +181,9 @@ def test_validate_secrets_detects_icici_uat_in_prod(monkeypatch):
     monkeypatch.setattr(settings, "ALLOW_HS256_LEGACY_FALLBACK", False)
     monkeypatch.setattr(settings, "JWT_ALGORITHM", "RS256")
     monkeypatch.setattr(settings, "REQUIRE_REDIS", False)
+    monkeypatch.setattr(settings, "WHATSAPP_ACCESS_TOKEN", "EAAxxxxxxxxxxxxxxx")
+    monkeypatch.setattr(settings, "WHATSAPP_APP_SECRET", "whatsapp_secret_prod_1234")
+    monkeypatch.setattr(settings, "RESEND_API_KEY", "re_prod_12345678")
 
     with pytest.raises(ValueError, match="ICICI_ENV is PROD but ICICI gateway URLs point to UAT"):
         validate_secrets_on_startup()

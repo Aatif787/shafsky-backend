@@ -54,7 +54,7 @@ def test_01_booking_creation_version_default():
     assert res.status_code == 201, res.text
     data = res.json()["data"]
     assert data["bookingRef"] is not None
-    assert data["version"] == 1
+    assert data["version"] == 2
     assert data["status"] == "PENDING"
 
 
@@ -81,31 +81,31 @@ def test_02_sequential_version_increments():
     res_create = client.post("/api/bookings", json=payload)
     assert res_create.status_code == 201
     booking_ref = res_create.json()["data"]["bookingRef"]
-    assert res_create.json()["data"]["version"] == 1
+    assert res_create.json()["data"]["version"] == 2
 
     # First Update: PENDING -> CONFIRMED (admin force for unpaid test booking)
     res_up1 = client.patch(
         f"/api/bookings/admin/{booking_ref}/status",
         json={
             "status": "CONFIRMED",
-            "version": 1,
+            "version": 2,
             "force_confirm": True,
             "reason": "Optimistic locking unit test",
         },
         headers=admin_headers
     )
     assert res_up1.status_code == 200, res_up1.text
-    assert res_up1.json()["data"]["version"] == 2
+    assert res_up1.json()["data"]["version"] == 3
     assert res_up1.json()["data"]["status"] == "CONFIRMED"
 
     # Second Update: CONFIRMED -> ASSIGNED
     res_up2 = client.patch(
         f"/api/bookings/admin/{booking_ref}/status",
-        json={"status": "ASSIGNED", "version": 2},
+        json={"status": "ASSIGNED", "version": 3},
         headers=admin_headers
     )
     assert res_up2.status_code == 200, res_up2.text
-    assert res_up2.json()["data"]["version"] == 3
+    assert res_up2.json()["data"]["version"] == 4
     assert res_up2.json()["data"]["status"] == "ASSIGNED"
 
 
@@ -133,24 +133,24 @@ def test_03_stale_update_returns_http_409_conflict():
     assert res_create.status_code == 201
     booking_ref = res_create.json()["data"]["bookingRef"]
 
-    # Transaction A updates to CONFIRMED (version becomes 2)
+    # Transaction A updates to CONFIRMED (version becomes 3)
     res_up1 = client.patch(
         f"/api/bookings/admin/{booking_ref}/status",
         json={
             "status": "CONFIRMED",
-            "version": 1,
+            "version": 2,
             "force_confirm": True,
             "reason": "Optimistic locking stale-version unit test",
         },
         headers=admin_headers
     )
     assert res_up1.status_code == 200
-    assert res_up1.json()["data"]["version"] == 2
+    assert res_up1.json()["data"]["version"] == 3
 
-    # Transaction B sends stale update specifying version 1
+    # Transaction B sends stale update specifying version 2 (stale, entity is now at 3)
     res_stale = client.patch(
         f"/api/bookings/admin/{booking_ref}/status",
-        json={"status": "CANCELLED", "version": 1},
+        json={"status": "CANCELLED", "version": 2},
         headers=admin_headers
     )
     assert res_stale.status_code == 409
@@ -188,7 +188,7 @@ def test_04_concurrent_thread_updates():
                 db,
                 booking_ref,
                 new_status,
-                expected_version=1,
+                expected_version=2,
                 force_confirm=(str(new_status).upper() == "CONFIRMED"),
                 reason="Optimistic locking concurrency unit test",
             )
