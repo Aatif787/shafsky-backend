@@ -213,10 +213,12 @@ class BookingService:
         # 3. Handle Flight Datetimes if present
         dep_time = payload.departure_time
         arr_time = payload.arrival_time
+        import zoneinfo
+        ist_tz = zoneinfo.ZoneInfo("Asia/Kolkata")
         if dep_time is not None and dep_time.tzinfo is None:
-            dep_time = dep_time.replace(tzinfo=timezone.utc)
+            dep_time = dep_time.replace(tzinfo=ist_tz)
         if arr_time is not None and arr_time.tzinfo is None:
-            arr_time = arr_time.replace(tzinfo=timezone.utc)
+            arr_time = arr_time.replace(tzinfo=ist_tz)
 
         early_meta = payload.metadata_json or payload.metadata or {}
         from app.services.service_airport_rules import normalize_journey_type as _norm_jt

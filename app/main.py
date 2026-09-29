@@ -11,7 +11,6 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 import uvicorn
-
 from app.config import settings
 from app.database import engine, get_db
 import app.models.schema  # Ensure models are loaded

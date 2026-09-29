@@ -1003,7 +1003,8 @@ class ServiceConfigService:
                         from dateutil.parser import isoparse
                         dt_val = isoparse(str(raw))
                     if dt_val.tzinfo is None:
-                        dt_val = dt_val.replace(tzinfo=timezone.utc)
+                        import zoneinfo
+                        dt_val = dt_val.replace(tzinfo=zoneinfo.ZoneInfo("Asia/Kolkata"))
                     if setter == "dep":
                         dep_dt = dt_val
                     else:
