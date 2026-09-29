@@ -1034,6 +1034,7 @@ class ServiceConfigService:
             flight_type=authoritative_ft or "domestic",
             departure_time=dep_dt,
             arrival_time=arr_dt,
+            skip_effective_date_check=True,
         )
 
         total = round(subtotal + express_fee, 2)

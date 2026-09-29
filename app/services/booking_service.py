@@ -488,7 +488,7 @@ class BookingService:
         subtotal = round(float(authoritative_price), 2)
         taxes = 0.0
 
-        # Mumbai Airport Express Fee (effective 1 Oct 2026)
+        # Mumbai Airport Express Fee (effective 1 Oct 2026; live enabled for <24h bookings)
         from app.services.express_fee import calculate_express_fee
         express_fee = calculate_express_fee(
             airport_code=target_airport,
@@ -498,6 +498,7 @@ class BookingService:
             flight_type=flight_type,
             departure_time=dep_time,
             arrival_time=arr_time,
+            skip_effective_date_check=True,
         )
 
         charge_amount = round(subtotal + express_fee, 2)

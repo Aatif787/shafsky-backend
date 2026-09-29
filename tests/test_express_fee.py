@@ -343,3 +343,23 @@ def test_express_fee_rounding():
     )
     # 9999.99 * 0.50 = 4999.995 -> rounds up to 5000.00 in Decimal arithmetic
     assert fee == 5000.0
+
+
+def test_skip_effective_date_check_applies_fee_before_oct1():
+    """Live/authoritative booking with skip_effective_date_check=True applies 50% fee before 1 Oct."""
+    bca = datetime(2026, 9, 29, 22, 10, tzinfo=_IST)
+    # Domestic departure in 18h -> service_start = 16.5h advance (<24h)
+    dep_time = bca + timedelta(hours=18)
+
+    fee = calculate_express_fee(
+        airport_code="BOM",
+        service_fee=4950.0,
+        booking_created_at=bca,
+        journey_type="DEPARTURE",
+        flight_type="DOMESTIC",
+        departure_time=dep_time,
+        arrival_time=None,
+        skip_effective_date_check=True,
+    )
+    assert fee == 2475.0
+

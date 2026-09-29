@@ -11,9 +11,22 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 
-# Express Fee effective date: 1 October 2026 00:00:00 IST
+import os
+
+# Express Fee effective date: 1 October 2026 00:00:00 IST (configurable via env)
 _IST = timezone(timedelta(hours=5, minutes=30))
-EXPRESS_FEE_EFFECTIVE_DATE = datetime(2026, 10, 1, 0, 0, 0, tzinfo=_IST)
+_DEFAULT_EFFECTIVE = datetime(2026, 10, 1, 0, 0, 0, tzinfo=_IST)
+_env_effective = os.getenv("EXPRESS_FEE_EFFECTIVE_DATE")
+if _env_effective:
+    try:
+        from dateutil.parser import isoparse
+        EXPRESS_FEE_EFFECTIVE_DATE = isoparse(_env_effective)
+        if EXPRESS_FEE_EFFECTIVE_DATE.tzinfo is None:
+            EXPRESS_FEE_EFFECTIVE_DATE = EXPRESS_FEE_EFFECTIVE_DATE.replace(tzinfo=_IST)
+    except Exception:
+        EXPRESS_FEE_EFFECTIVE_DATE = _DEFAULT_EFFECTIVE
+else:
+    EXPRESS_FEE_EFFECTIVE_DATE = _DEFAULT_EFFECTIVE
 
 _MUMBAI_IATA = "BOM"
 _EXPRESS_FEE_RATE = Decimal("0.50")
@@ -73,19 +86,20 @@ def calculate_express_fee(
     flight_type: str,
     departure_time: Optional[datetime],
     arrival_time: Optional[datetime],
+    skip_effective_date_check: bool = False,
 ) -> float:
     """
     Calculate the Mumbai Airport Express Fee.
 
     Returns 0.0 when:
       - Airport is not BOM
-      - Booking was created before the effective date (1 Oct 2026)
+      - Booking was created before the effective date (1 Oct 2026) and not skipped
       - Advance time >= 24 hours
       - Required flight datetime is missing (caller handles validation)
 
     Returns round(service_fee * 0.50, 2) when:
       - Airport is BOM
-      - Booking is on or after 1 Oct 2026
+      - Booking is on or after 1 Oct 2026 (or skip_effective_date_check is True)
       - Advance time < 24 hours (strictly less than)
     """
     code = (airport_code or "").strip().upper()
@@ -96,7 +110,7 @@ def calculate_express_fee(
     bca = booking_created_at
     if bca.tzinfo is None:
         bca = bca.replace(tzinfo=timezone.utc)
-    if bca < EXPRESS_FEE_EFFECTIVE_DATE:
+    if not skip_effective_date_check and bca < EXPRESS_FEE_EFFECTIVE_DATE:
         return 0.0
 
     service_start_at = compute_service_start_at(
