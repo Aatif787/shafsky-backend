@@ -418,12 +418,15 @@ def flow_customer_details_endpoint(
     airport = (payload.get("airport_code") or "").strip().upper()
     service_type = (payload.get("service_type") or "").strip().upper()
     flight_number = (payload.get("flight_number") or "").strip().upper()
-    date_str = payload.get("date")
-    selected_service_id = payload.get("selected_service_id")
+    date_raw = payload.get("date")
+    service_id_raw = payload.get("selected_service_id")
     customer = payload.get("customer") or {}
 
-    if not all([airport, service_type, flight_number, date_str, selected_service_id]):
+    if not all([airport, service_type, flight_number, date_raw, service_id_raw]):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing required booking context")
+
+    date_str = str(date_raw).strip()
+    selected_service_id = str(service_id_raw).strip()
 
     if not (customer.get("name") and (customer.get("email") or customer.get("phone"))):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Customer name and email/phone required")

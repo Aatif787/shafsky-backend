@@ -1,4 +1,4 @@
-﻿"""
+"""
 WhatsApp Integration Service & Persistent Booking State Machine Engine.
 Coordinator module composing domain flow mixins:
 - AirportFlowMixin: Categories, Journey Types, Airports, Terminals, Service Packages
@@ -726,7 +726,7 @@ class WhatsAppBookingStateMachine(
         return age <= _PAYMENT_OPTIONS_TTL_SECONDS
 
     @classmethod
-    def _store_wa_menu(cls, db: Session, conv: WhatsAppConversation, items: list) -> None:
+    def _store_wa_menu(cls, db: Session, conv: WhatsAppConversation, menu_items: list) -> None:
         """Store WhatsApp UI menu state in whatsapp_state_json (not flight_details_json)."""
         from decimal import Decimal as _Decimal
 
@@ -739,7 +739,7 @@ class WhatsAppBookingStateMachine(
                 return [_json_safe(v) for v in value]
             return value
 
-        cls._set_wa_state_key(db, conv, "_wa_menu", _json_safe(list(items)))
+        cls._set_wa_state_key(db, conv, "_wa_menu", _json_safe(list(menu_items)))
 
     @classmethod
     def _get_wa_menu(cls, conv: WhatsAppConversation) -> list:
@@ -954,7 +954,7 @@ class WhatsAppBookingStateMachine(
         elif curr == "ADDITIONAL_REQUIREMENTS":
             conv.additional_requirements = None
             # If multi-pax, go back to companion names; otherwise phone
-            companions = max(0, int(conv.passenger_count or 1) - 1)
+            companions = max(0, (conv.passenger_count or 1) - 1)
             if companions > 0:
                 cls._transition_state(db, conv, "COMPANION_NAMES")
                 plural = "s" if companions != 1 else ""

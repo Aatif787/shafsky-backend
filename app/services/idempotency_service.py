@@ -314,7 +314,7 @@ class _PostgresIdempotencyStore:
                         "status_code": data.get("status_code"),
                         "headers": json.dumps(data.get("headers") or {}),
                         "body": data.get("body") or "",
-                        "ttl": int(ttl_seconds),
+                        "ttl": ttl_seconds,
                     },
                 )
         except Exception as err:
@@ -350,7 +350,7 @@ class _PostgresIdempotencyStore:
                         RETURNING lock_token
                         """
                     ),
-                    {"key": key, "token": token, "ttl": int(ttl_seconds)},
+                    {"key": key, "token": token, "ttl": ttl_seconds},
                 ).first()
             if row:
                 return token

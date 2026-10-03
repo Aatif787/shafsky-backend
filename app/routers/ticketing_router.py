@@ -33,7 +33,7 @@ router = APIRouter(prefix="/api/ticketing", tags=["Air Ticketing Engine"])
 def _mask_pii(val: Optional[str]) -> Optional[str]:
     if not val:
         return None
-    val_str = str(val).strip()
+    val_str = val.strip()
     if len(val_str) <= 4:
         return "****"
     return val_str[:2] + ("*" * (len(val_str) - 4)) + val_str[-2:]

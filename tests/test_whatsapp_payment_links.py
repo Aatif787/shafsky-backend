@@ -1,4 +1,4 @@
-﻿"""
+"""
 WhatsApp Razorpay Payment Link initiation, reuse/expiry, and webhook correlation.
 """
 
@@ -7,6 +7,7 @@ import hashlib
 import json
 import uuid
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 from unittest.mock import patch
 
 import pytest
@@ -55,7 +56,7 @@ def generate_webhook_signature(body_bytes: bytes, secret: str = "shafsky_test_wh
     return hmac.new(secret.encode("utf-8"), body_bytes, hashlib.sha256).hexdigest()
 
 
-def _fake_link(ref: str, link_id: str = None, url: str = None, simulated: bool = False):
+def _fake_link(ref: Optional[str] = None, link_id: Optional[str] = None, url: Optional[str] = None, simulated: bool = False):
     plink = link_id or f"plink_{uuid.uuid4().hex[:12]}"
     short = url or f"https://rzp.io/i/{uuid.uuid4().hex[:8]}"
     return {
@@ -68,7 +69,7 @@ def _fake_link(ref: str, link_id: str = None, url: str = None, simulated: bool =
         "expire_by": int((datetime.now(timezone.utc) + timedelta(hours=24)).timestamp()),
         "status": "created",
         "simulated": simulated,
-        "notes": {"booking_ref": ref, "channel": "whatsapp"},
+        "notes": {"booking_ref": ref or "", "channel": "whatsapp"},
     }
 
 
@@ -122,6 +123,7 @@ def test_whatsapp_booking_creates_pending_booking_and_transaction(monkeypatch):
             assert conv.current_state == "WAITING_PAYMENT"
             assert conv.booking_ref
             booking = db.scalar(select(Booking).where(Booking.booking_ref == conv.booking_ref))
+            assert booking is not None
             assert booking.status == BookingStatus.PENDING
             assert float(booking.total_amount) == 4500.0
             tx = db.scalar(
@@ -140,6 +142,7 @@ def test_whatsapp_booking_creates_pending_booking_and_transaction(monkeypatch):
             sent_all = " ".join(str(c[0][1]) for c in mock_text.call_args_list)
             assert "Please complete your payment" in sent_all
             assert "https://rzp.io/" in sent_all
+            assert conv.razorpay_payment_url is not None
             assert conv.razorpay_payment_url.startswith("https://")
     finally:
         db.close()
@@ -161,6 +164,7 @@ def test_simulated_plink_is_rejected_and_not_sent(monkeypatch):
             WhatsAppBookingStateMachine.process_incoming_event(db, phone, "CONFIRM", input_id="btn_confirm_booking")
             db.refresh(conv)
             booking = db.scalar(select(Booking).where(Booking.booking_ref == conv.booking_ref))
+            assert booking is not None
             assert booking.status == BookingStatus.PENDING
             tx = db.scalar(select(PaymentTransaction).where(PaymentTransaction.entity_id == conv.booking_ref))
             assert tx is None
@@ -219,6 +223,7 @@ def test_expired_link_creates_replacement(monkeypatch):
             WhatsAppBookingStateMachine.process_incoming_event(db, phone, "CONFIRM", input_id="btn_confirm_booking")
             db.refresh(conv)
             tx = db.scalar(select(PaymentTransaction).where(PaymentTransaction.entity_id == conv.booking_ref))
+            assert tx is not None
             resp = dict(tx.gateway_response or {})
             resp["expire_by"] = int((datetime.now(timezone.utc) - timedelta(hours=1)).timestamp())
             tx.gateway_response = resp
@@ -232,6 +237,7 @@ def test_expired_link_creates_replacement(monkeypatch):
             txs = list(db.scalars(select(PaymentTransaction).where(PaymentTransaction.entity_id == conv.booking_ref)))
             assert len(txs) == 2
             booking = db.scalar(select(Booking).where(Booking.booking_ref == conv.booking_ref))
+            assert booking is not None
             assert booking.status == BookingStatus.PENDING
     finally:
         db.close()
@@ -256,6 +262,7 @@ def test_cancelled_link_creates_replacement(monkeypatch):
             WhatsAppBookingStateMachine.process_incoming_event(db, phone, "CONFIRM", input_id="btn_confirm_booking")
             db.refresh(conv)
             tx = db.scalar(select(PaymentTransaction).where(PaymentTransaction.entity_id == conv.booking_ref))
+            assert tx is not None
             tx.status = PaymentStatus.CANCELLED
             resp = dict(tx.gateway_response or {})
             resp["link_status"] = "cancelled"
@@ -266,6 +273,7 @@ def test_cancelled_link_creates_replacement(monkeypatch):
             db.refresh(conv)
             assert conv.razorpay_payment_link_id == created[-1]
             booking = db.scalar(select(Booking).where(Booking.booking_ref == conv.booking_ref))
+            assert booking is not None
             assert booking.status == BookingStatus.PENDING
     finally:
         db.close()
@@ -338,8 +346,10 @@ def test_payment_link_paid_confirms_same_transaction(monkeypatch):
         assert res.status_code == 200
         assert res.json()["data"]["status"] == "CONFIRMED"
         booking = db.scalar(select(Booking).where(Booking.booking_ref == booking_ref))
+        assert booking is not None
         db.refresh(booking)
         tx = db.scalar(select(PaymentTransaction).where(PaymentTransaction.entity_id == booking_ref))
+        assert tx is not None
         db.refresh(tx)
         assert booking.status == BookingStatus.CONFIRMED
         assert tx.status == PaymentStatus.SUCCESSFUL
@@ -431,6 +441,7 @@ def test_captured_and_order_paid_after_link_paid_are_idempotent(monkeypatch):
         invoices = list(db.scalars(select(Invoice).where(Invoice.transaction_id == txs[0].id)))
         assert len(invoices) == 1
         booking = db.scalar(select(Booking).where(Booking.booking_ref == booking_ref))
+        assert booking is not None
         db.refresh(booking)
         assert booking.status == BookingStatus.CONFIRMED
     finally:
@@ -528,6 +539,7 @@ def test_customer_i_paid_does_not_confirm_without_gateway(monkeypatch):
             WhatsAppBookingStateMachine.process_incoming_event(db, phone, "I paid")
             db.refresh(conv)
             booking = db.scalar(select(Booking).where(Booking.booking_ref == conv.booking_ref))
+            assert booking is not None
             db.refresh(booking)
             assert booking.status == BookingStatus.PENDING
             assert conv.current_state == "WAITING_PAYMENT"
@@ -579,6 +591,8 @@ def test_payment_link_expired_webhook_keeps_booking_pending(monkeypatch):
         assert res.status_code == 200
         booking = db.scalar(select(Booking).where(Booking.booking_ref == conv.booking_ref))
         tx = db.scalar(select(PaymentTransaction).where(PaymentTransaction.entity_id == conv.booking_ref))
+        assert booking is not None
+        assert tx is not None
         db.refresh(booking)
         db.refresh(tx)
         assert booking.status == BookingStatus.PENDING

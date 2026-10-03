@@ -1,4 +1,4 @@
-﻿"""
+"""
 Comprehensive Unit Test Suite for Shafsky Aviation WhatsApp Booking Automation System.
 Covers all core acceptance test scenarios: 4-option menu, database airport resolution,
 local flight validation, 30m session expiry, back/cancel/restart, and payment-free booking creation.
@@ -623,9 +623,11 @@ def test_scenario_21_whatsapp_flight_pure_local_validation_valid_formats(
         assert res["status"] == "flight_verified"
         assert conv.flight_num is None
         assert conv.current_state == "FLIGHT_CONFIRMATION"
-        assert isinstance(conv.flight_details_json, dict)
-        assert conv.flight_details_json["verification_status"] == "pending_confirmation"
-        pending = conv.flight_details_json["_pending_verified_flight"]
+        meta = conv.flight_details_json
+        assert isinstance(meta, dict)
+        assert meta["verification_status"] == "pending_confirmation"
+        pending = meta["_pending_verified_flight"]
+        assert isinstance(pending, dict)
         assert pending["flight_number"] == expected_normalized
         assert mock_buttons.called
         assert mock_verify.called
@@ -712,8 +714,11 @@ def test_scenario_23_whatsapp_flight_uses_aviationstack_secondary(
         assert res["status"] == "flight_verified"
         assert conv.flight_num is None
         assert conv.current_state == "FLIGHT_CONFIRMATION"
-        assert conv.flight_details_json["verification_status"] == "pending_confirmation"
-        pending = conv.flight_details_json["_pending_verified_flight"]
+        meta = conv.flight_details_json
+        assert isinstance(meta, dict)
+        assert meta["verification_status"] == "pending_confirmation"
+        pending = meta["_pending_verified_flight"]
+        assert isinstance(pending, dict)
         assert pending["flight_number"] == "EK501"
         assert pending["verification_provider"] == "aviationstack"
         # Direct Aviation Edge httpx calls are not made from WhatsApp flight input
@@ -733,6 +738,7 @@ def test_scenario_24_whatsapp_flight_response_time_under_500ms(mock_buttons, moc
     from app.database import SessionLocal
 
     t0 = time.perf_counter()
+    val = None
     for _ in range(100):
         val = WhatsAppBookingStateMachine._validate_flight_number_local("AI2424")
     val_time_ms = ((time.perf_counter() - t0) / 100.0) * 1000.0
@@ -1228,7 +1234,9 @@ def test_scenario_40_dynamic_travel_type_switch_during_service_selection(mock_li
         db.refresh(conv)
 
         # Travel type updated to INTERNATIONAL
-        assert conv.flight_details_json["travel_type"] == "INTERNATIONAL"
+        meta = conv.flight_details_json
+        assert isinstance(meta, dict)
+        assert meta["travel_type"] == "INTERNATIONAL"
         assert mock_list.called
     finally:
         db.close()
@@ -1290,12 +1298,14 @@ def test_scenario_41_complete_separated_airport_service_booking(mock_verify, moc
         WhatsAppBookingStateMachine.process_incoming_event(db, phone, "2")
         db.refresh(conv)
         assert conv.current_state == "AIRPORT_TRAVEL_TYPE"
+        assert conv.flight_details_json is not None
         assert conv.flight_details_json["journey_type"] == "DEPARTURE"
 
         # 4. Select Domestic
         WhatsAppBookingStateMachine.process_incoming_event(db, phone, "1")
         db.refresh(conv)
         assert conv.current_state == "AIRPORT_SELECTION"
+        assert conv.flight_details_json is not None
         assert conv.flight_details_json["travel_type"] == "DOMESTIC"
 
         # 5. Enter Lucknow
@@ -1315,6 +1325,7 @@ def test_scenario_41_complete_separated_airport_service_booking(mock_verify, moc
         db.refresh(conv)
         assert conv.current_state == "FLIGHT_CONFIRMATION"
         assert conv.flight_num is None
+        assert conv.flight_details_json is not None
         assert conv.flight_details_json["verification_status"] == "pending_confirmation"
 
         # 8. Confirm Flight
@@ -1322,6 +1333,7 @@ def test_scenario_41_complete_separated_airport_service_booking(mock_verify, moc
         db.refresh(conv)
         assert conv.current_state == "DATE_SELECTION"
         assert conv.flight_num == "EK501"
+        assert conv.flight_details_json is not None
         assert conv.flight_details_json["verification_status"] == "verified"
 
         # 9. Date

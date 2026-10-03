@@ -62,7 +62,7 @@ class BaseFlowMixin:
         return []
 
     @classmethod
-    def _align_scheduled_datetimes_to_date(cls, metadata: Dict[str, Any], travel_date_str: Any, tz_name: Any = None) -> Dict[str, Any]:
+    def _align_scheduled_datetimes_to_date(cls, metadata: Dict[str, Any], travel_date: Any, tz: Any) -> Dict[str, Any]:
         return metadata
 
     @classmethod

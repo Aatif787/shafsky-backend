@@ -1,4 +1,4 @@
-﻿"""
+"""
 Details Flow Mixin for WhatsApp Booking State Machine.
 Handles:
 - Timezone resolution
@@ -15,7 +15,7 @@ Handles:
 import logging
 import re
 from typing import Dict, Any, Optional, Tuple
-from datetime import datetime, timezone, timedelta, date
+from datetime import datetime, timezone, timedelta, date, tzinfo
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy import select
@@ -23,6 +23,7 @@ from sqlalchemy import select
 from app.models.whatsapp_models import WhatsAppConversation
 from app.models.journey_models import SupportedAirport
 from app.integrations.whatsapp.client import whatsapp_client
+from app.integrations.whatsapp.handlers.base import BaseFlowMixin
 from app.utils.customer_email import (
     is_acceptable_customer_email as is_acceptable_whatsapp_customer_email,
     REAL_EMAIL_HELP as _REAL_EMAIL_HELP,
@@ -32,11 +33,11 @@ from app.utils.customer_email import (
 logger = logging.getLogger(__name__)
 
 
-class DetailsFlowMixin:
+class DetailsFlowMixin(BaseFlowMixin):
     """Mixin for travel date, passenger count, customer details, and booking summary."""
 
     @classmethod
-    def _get_service_timezone(cls, tz_name: Optional[str] = None) -> timezone:
+    def _get_service_timezone(cls, tz_name: Optional[str] = None) -> tzinfo:
         """
         Returns timezone for airport/service. Defaults to IST (Asia/Kolkata, UTC+5:30).
         Safely handles standard named timezones without crashing on Windows if tzdata is absent.
@@ -59,7 +60,7 @@ class DetailsFlowMixin:
         cls,
         metadata: Dict[str, Any],
         travel_date: date,
-        tz: timezone,
+        tz: tzinfo,
     ) -> Dict[str, Any]:
         """
         Authoritatively aligns API-derived departure_scheduled and arrival_scheduled
@@ -248,8 +249,8 @@ class DetailsFlowMixin:
     def _state_date_selection(cls, db: Session, conv: WhatsAppConversation, date_input: str) -> Dict[str, Any]:
         """Strict date validation handler for WhatsApp booking flow."""
         is_valid, parsed_date, err_msg, status_code = cls._validate_whatsapp_date(db, conv, date_input)
-        if not is_valid:
-            whatsapp_client.send_text_message(conv.phone_number, err_msg)
+        if not is_valid or parsed_date is None:
+            whatsapp_client.send_text_message(conv.phone_number, err_msg or "Please enter a valid travel date.")
             return {"status": status_code, "success": False}
 
         date_formatted = parsed_date.strftime("%d %B %Y")
@@ -350,7 +351,7 @@ class DetailsFlowMixin:
                 return {"status": "invalid_phone", "success": False}
             conv.customer_phone = digits
 
-        companions = max(0, int(conv.passenger_count or 1) - 1)
+        companions = max(0, (conv.passenger_count or 1) - 1)
         if companions > 0:
             cls._transition_state(db, conv, "COMPANION_NAMES")
             plural = "s" if companions != 1 else ""
@@ -400,7 +401,7 @@ class DetailsFlowMixin:
             )
             return {"status": "companion_names_saved", "success": True}
 
-        expected = max(0, int(conv.passenger_count or 1) - 1)
+        expected = max(0, (conv.passenger_count or 1) - 1)
         meta = dict(conv.flight_details_json) if isinstance(conv.flight_details_json, dict) else {}
         merged = list(meta.get("companion_names_partial") or [])
         attempts = int(meta.get("companion_names_attempts") or 0)
