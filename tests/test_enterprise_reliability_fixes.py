@@ -39,6 +39,12 @@ def test_cors_origin_regex_allows_shafsky_and_local():
         "https://shafsky.vercel.app",
         "https://my-tunnel.ngrok-free.app",
         "https://tunnel.ngrok.io",
+        "https://shafskyaviation.in",
+        "https://www.shafskyaviation.in",
+        "https://shafskyaviation.com",
+        "https://www.shafskyaviation.com",
+        "https://shafsky.com",
+        "https://www.shafsky.com",
     ]
     for origin in allowed:
         assert re.match(_CORS_ORIGIN_REGEX, origin) is not None, f"Expected {origin} to match CORS regex"

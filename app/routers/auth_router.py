@@ -95,12 +95,16 @@ def _validate_cookie_request_origin(request: Request) -> None:
     request_origin = str(request.base_url).rstrip("/")
     if origin == request_origin or origin in allowed:
         return
-    # Match production CORS regex so Shafsky Vercel deployments can refresh sessions.
-    vercel_ok = re.match(
-        r"^https?://(localhost|127\.0\.0\.1|.*\.ngrok-free\.(dev|app)|.*\.ngrok\.io|(shafsky[a-zA-Z0-9_-]*|shafsky)\.vercel\.app)(:\d+)?$",
+    # Match production CORS regex so Shafsky Vercel deployments and production domains can refresh sessions.
+    origin_ok = re.match(
+        r"^https?://(localhost|127\.0\.0\.1|.*\.ngrok-free\.(dev|app)|.*\.ngrok\.io|"
+        r"(shafsky[a-zA-Z0-9_-]*|shafsky)\.vercel\.app|"
+        r"([a-zA-Z0-9_-]+\.)*shafskyaviation\.(in|com)|"
+        r"([a-zA-Z0-9_-]+\.)*shafsky\.(in|com)"
+        r")(:\d+)?$",
         origin,
     )
-    if vercel_ok:
+    if origin_ok:
         return
     raise HTTPException(status_code=403, detail="Untrusted request origin.")
 

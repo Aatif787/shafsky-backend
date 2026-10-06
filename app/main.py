@@ -115,7 +115,11 @@ app.add_middleware(IdempotencyMiddleware)
 # Production still allows *.vercel.app (admin portal + preview deploys) via regex;
 # explicit ALLOWED_ORIGINS remain required for non-Vercel frontends.
 _CORS_ORIGIN_REGEX = (
-    r"^https?://(localhost|127\.0\.0\.1|.*\.ngrok-free\.(dev|app)|.*\.ngrok\.io|(shafsky[a-zA-Z0-9_-]*|shafsky)\.vercel\.app)(:\d+)?$"
+    r"^https?://(localhost|127\.0\.0\.1|.*\.ngrok-free\.(dev|app)|.*\.ngrok\.io|"
+    r"(shafsky[a-zA-Z0-9_-]*|shafsky)\.vercel\.app|"
+    r"([a-zA-Z0-9_-]+\.)*shafskyaviation\.(in|com)|"
+    r"([a-zA-Z0-9_-]+\.)*shafsky\.(in|com)"
+    r")(:\d+)?$"
 )
 _cors_kwargs = {
     "allow_origins": getattr(settings, "ALLOWED_ORIGINS", []),
