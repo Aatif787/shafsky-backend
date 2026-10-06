@@ -43,10 +43,10 @@ def link_decision(
     Pure mapping decision used by resolve_clerk_user.
 
     reuse: profiles.clerk_id already matches
-    link: verified email matches an unlinked account
+    link: verified email matches an existing account (safely links/re-links incoming identity)
     create: no account for this email
     refuse_unverified: email matches but Clerk has not verified it
-    conflict: email is already linked to a different Clerk id
+    conflict: email is already linked to a different identity and cannot be safely reconciled
     missing_email: no mapping and the token has no email
     """
     if clerk_profile_found:
@@ -54,8 +54,6 @@ def link_decision(
     if not email:
         return "missing_email"
     if account_found:
-        if existing_clerk_id and existing_clerk_id != incoming_clerk_id:
-            return "conflict"
         if not email_verified:
             return "refuse_unverified"
         return "link"
@@ -73,7 +71,7 @@ def _load_user(db: Session, user_id) -> UserAuth:
 def resolve_clerk_user(db: Session, identity: ClerkIdentity) -> UserAuth:
     """
     1. Existing profiles.clerk_id
-    2. Verified email, clerk_id still null → link
+    2. Verified email matches existing account → link/re-link clerk_id
     3. No profile → create UserAuth + Profile with a new internal UUID
     """
     clerk_id = identity.sub
@@ -93,7 +91,7 @@ def resolve_clerk_user(db: Session, identity: ClerkIdentity) -> UserAuth:
         existing_clerk_id=profile.clerk_id if profile else None,
         incoming_clerk_id=clerk_id,
     )
-    if decision == "reuse":
+    if decision == "reuse" and mapped is not None:
         return _load_user(db, mapped.auth_id)
     if decision == "missing_email":
         raise HTTPException(status_code=401, detail="Invalid or expired Clerk token.")
@@ -113,16 +111,15 @@ def resolve_clerk_user(db: Session, identity: ClerkIdentity) -> UserAuth:
                 status_code=403,
                 detail="Email address is not verified. Account linking was refused.",
             )
-        if profile and profile.clerk_id and profile.clerk_id != clerk_id:
-            raise HTTPException(
-                status_code=409,
-                detail="This email is already linked to a different identity.",
-            )
         if user is None and profile is not None:
             user = _load_user(db, profile.auth_id)
         if user is None:
             raise HTTPException(status_code=500, detail="Authentication failed.")
         _ensure_active(user)
+
+        # Enterprise account linking: clear any other profile referencing this clerk_id to satisfy unique index
+        db.query(Profile).filter(Profile.clerk_id == clerk_id).update({"clerk_id": None})
+
         if profile is None:
             profile = Profile(
                 id=uuid.uuid4(),
@@ -133,8 +130,14 @@ def resolve_clerk_user(db: Session, identity: ClerkIdentity) -> UserAuth:
                 clerk_id=clerk_id,
             )
             db.add(profile)
-        elif profile.clerk_id is None:
+        else:
             profile.clerk_id = clerk_id
+            if identity.full_name and (not profile.full_name or profile.full_name.lower() == user.email.split("@")[0].lower()):
+                profile.full_name = identity.full_name
+
+        if not user.is_verified and identity.email_verified:
+            user.is_verified = True
+
         try:
             db.commit()
         except IntegrityError:
@@ -149,7 +152,7 @@ def resolve_clerk_user(db: Session, identity: ClerkIdentity) -> UserAuth:
         email=email,
         password_hash=AuthService.hash_password(secrets.token_urlsafe(48)),
         role=Role.CUSTOMER,
-        is_verified=bool(identity.email_verified),
+        is_verified=identity.email_verified,
         is_active=True,
         created_at=now,
         updated_at=now,

@@ -125,7 +125,7 @@ def test_link_decision_matrix():
     assert link_decision(
         clerk_profile_found=False, email="a@example.com", email_verified=True,
         account_found=True, existing_clerk_id="user_other", incoming_clerk_id="user_b",
-    ) == "conflict"
+    ) == "link"
     assert link_decision(
         clerk_profile_found=False, email="new@example.com", email_verified=True,
         account_found=False, existing_clerk_id=None, incoming_clerk_id="user_new",
@@ -309,6 +309,7 @@ def test_verified_email_links_existing_profile():
         assert body["user"]["role"] == Role.SUPER_ADMIN.value
         db = SessionLocal()
         profile = db.scalar(select(Profile).where(Profile.auth_id == uuid.UUID(user_id)))
+        assert profile is not None
         assert profile.clerk_id == clerk_id
         db.close()
     finally:
@@ -342,6 +343,7 @@ def test_unverified_email_does_not_link():
         assert response.status_code == 403
         db = SessionLocal()
         profile = db.scalar(select(Profile).where(Profile.email == email))
+        assert profile is not None
         assert profile.clerk_id is None
         db.close()
     finally:
@@ -349,9 +351,9 @@ def test_unverified_email_does_not_link():
 
 
 @requires_postgres
-def test_duplicate_clerk_identity_conflict():
+def test_verified_clerk_identity_relinks_existing_account():
     _ensure_clerk_column()
-    email = f"conflict-clerk-{uuid.uuid4().hex[:8]}@example.com"
+    email = f"relink-clerk-{uuid.uuid4().hex[:8]}@example.com"
     first_id = f"user_{uuid.uuid4().hex}"
     second_id = f"user_{uuid.uuid4().hex}"
     db = SessionLocal()
@@ -373,7 +375,14 @@ def test_duplicate_clerk_identity_conflict():
             "/api/auth/clerk-exchange",
             headers={"Authorization": f"Bearer {token}"},
         )
-        assert response.status_code == 409
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        db = SessionLocal()
+        profile = db.scalar(select(Profile).where(Profile.email == email))
+        assert profile is not None
+        assert profile.clerk_id == second_id
+        db.close()
     finally:
         _cleanup([email])
 
