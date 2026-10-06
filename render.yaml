@@ -57,6 +57,8 @@ services:
         value: "5"
       - key: BIND_HOST
         value: "0.0.0.0"
+      - key: PORT
+        value: "8003"
       - key: REDIS_URL
         fromService:
           name: shafsky-redis

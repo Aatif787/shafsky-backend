@@ -2,9 +2,9 @@
 # Production entrypoint: optional migrations, then multi-worker ASGI server.
 set -eu
 
-PORT="${PORT:-4000}"
+PORT="${PORT:-8003}"
 WEB_CONCURRENCY="${WEB_CONCURRENCY:-2}"
-RUN_MIGRATIONS="${RUN_MIGRATIONS:-true}"
+RUN_MIGRATIONS="${RUN_MIGRATIONS:-false}"
 
 if [ "$RUN_MIGRATIONS" = "true" ] || [ "$RUN_MIGRATIONS" = "1" ]; then
   echo "[entrypoint] Running alembic upgrade head..."

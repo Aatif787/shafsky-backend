@@ -29,9 +29,9 @@ FROM python:3.13-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     ENVIRONMENT=production \
-    PORT=4000 \
+    PORT=8003 \
     WEB_CONCURRENCY=2 \
-    RUN_MIGRATIONS=true
+    RUN_MIGRATIONS=false
 
 # Create a non-root user
 RUN addgroup --system shafsky && adduser --system --ingroup shafsky shafsky
@@ -69,11 +69,11 @@ RUN mkdir -p /app/data \
 
 USER shafsky
 
-EXPOSE 4000
+EXPOSE 8003 10000 4000
 
 # Readiness-based healthcheck (stdlib urllib; /ready returns 503 when DB/Redis not ready)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
-  CMD python -c 'import os, urllib.request, sys; port=os.environ.get("PORT", "4000"); resp=urllib.request.urlopen("http://127.0.0.1:%s/ready" % port); sys.exit(0 if resp.status == 200 else 1)'
+  CMD python -c 'import os, urllib.request, sys; port=os.environ.get("PORT", "8003"); resp=urllib.request.urlopen("http://127.0.0.1:%s/ready" % port); sys.exit(0 if resp.status == 200 else 1)'
 
 # Entrypoint runs optional alembic migrations then gunicorn/uvicorn workers
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
