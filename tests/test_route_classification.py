@@ -363,3 +363,43 @@ class TestResolveCatalogFlightType:
         assert _is_india("IN") is True
         assert _is_india("IND") is True
         assert _is_india("INDIA") is True
+
+    def test_transit_example_1_bom_del_lko_is_domestic_domestic(self, db):
+        """Mumbai (BOM) -> Delhi (DEL) -> Lucknow (LKO) => DOMESTIC_DOMESTIC"""
+        # Even if initial home selection was INTERNATIONAL, route is authoritative
+        result = resolve_catalog_flight_type(db, "BOM", "LKO", "TRANSIT", "INTERNATIONAL")
+        assert result == "DOMESTIC_DOMESTIC"
+
+    def test_transit_example_2_bom_del_dxb_is_domestic_international(self, db):
+        """Mumbai (BOM) -> Delhi (DEL) -> Dubai (DXB) => DOMESTIC_INTERNATIONAL"""
+        # Even if initial home selection was DOMESTIC, route is authoritative
+        result = resolve_catalog_flight_type(db, "BOM", "DXB", "TRANSIT", "DOMESTIC")
+        assert result == "DOMESTIC_INTERNATIONAL"
+
+    def test_transit_example_3_dxb_del_lko_is_international_domestic(self, db):
+        """Dubai (DXB) -> Delhi (DEL) -> Lucknow (LKO) => INTERNATIONAL_DOMESTIC"""
+        # Even if initial home selection was DOMESTIC, route is authoritative
+        result = resolve_catalog_flight_type(db, "DXB", "LKO", "TRANSIT", "DOMESTIC")
+        assert result == "INTERNATIONAL_DOMESTIC"
+
+    def test_transit_example_4_dxb_del_sin_is_international_international(self, db):
+        """Dubai (DXB) -> Delhi (DEL) -> Singapore (SIN) => INTERNATIONAL_INTERNATIONAL"""
+        # Even if initial home selection was DOMESTIC, route is authoritative
+        result = resolve_catalog_flight_type(db, "DXB", "SIN", "TRANSIT", "DOMESTIC")
+        assert result == "INTERNATIONAL_INTERNATIONAL"
+
+    def test_transit_hub_invariance(self, db):
+        """The Transit Hub does not affect the category (DEL vs BOM vs HYD)"""
+        # BOM -> DXB is always DOMESTIC_INTERNATIONAL
+        res1 = resolve_catalog_flight_type(db, "BOM", "DXB", "TRANSIT", None)
+        assert res1 == "DOMESTIC_INTERNATIONAL"
+
+    def test_transit_route_recalculation(self, db):
+        """Changing Origin or Final Destination recalculates the category"""
+        # BOM -> LKO = DOMESTIC_DOMESTIC
+        assert resolve_catalog_flight_type(db, "BOM", "LKO", "TRANSIT", None) == "DOMESTIC_DOMESTIC"
+        # Change origin to DXB -> DXB -> LKO = INTERNATIONAL_DOMESTIC
+        assert resolve_catalog_flight_type(db, "DXB", "LKO", "TRANSIT", None) == "INTERNATIONAL_DOMESTIC"
+        # Change dest to DXB -> BOM -> DXB = DOMESTIC_INTERNATIONAL
+        assert resolve_catalog_flight_type(db, "BOM", "DXB", "TRANSIT", None) == "DOMESTIC_INTERNATIONAL"
+

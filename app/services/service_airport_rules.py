@@ -288,6 +288,38 @@ def derive_flight_type_from_route(
     return "INTERNATIONAL"
 
 
+def derive_transit_type_from_route(
+    db,
+    origin_code: Optional[str],
+    dest_code: Optional[str],
+) -> Optional[str]:
+    """
+    Authoritative transit classification calculated ONLY from:
+      OriginAirportType -> FinalDestinationAirportType
+
+    The Transit Hub is purely the connecting airport and MUST NOT
+    determine the service category.
+    """
+    origin_clean = normalize_iata(origin_code)
+    dest_clean = normalize_iata(dest_code)
+    if not origin_clean or not dest_clean:
+        return None
+
+    origin_country = resolve_airport_country(db, origin_clean)
+    dest_country = resolve_airport_country(db, dest_clean)
+
+    origin_is_india = _is_india(origin_country)
+    dest_is_india = _is_india(dest_country)
+
+    if origin_is_india and dest_is_india:
+        return "DOMESTIC_DOMESTIC"
+    if origin_is_india and not dest_is_india:
+        return "DOMESTIC_INTERNATIONAL"
+    if not origin_is_india and dest_is_india:
+        return "INTERNATIONAL_DOMESTIC"
+    return "INTERNATIONAL_INTERNATIONAL"
+
+
 def resolve_catalog_flight_type(
     db,
     origin_code: Optional[str],
@@ -301,7 +333,10 @@ def resolve_catalog_flight_type(
     Client DOMESTIC / INTERNATIONAL is never used when both route
     endpoints are known. Derive from origin/destination countries first.
 
-    TRANSIT: returns the client compound type unchanged (never two-point).
+    TRANSIT:
+      - If client specified an authoritative compound type, preserve it.
+      - If both origin and dest are known, derive compound transit category.
+      - Otherwise fallback to client hint.
     ARRIVAL/DEPARTURE with both origin and dest: route-derived value.
     ARRIVAL/DEPARTURE with neither origin nor dest: browsing — client hint.
     ARRIVAL/DEPARTURE with incomplete or unknown airports: raises ValueError.
@@ -310,7 +345,19 @@ def resolve_catalog_flight_type(
     jt = normalize_journey_type(journey_type)
 
     if jt == "TRANSIT":
-        return normalize_flight_type(client_flight_type)
+        cft = normalize_flight_type(client_flight_type)
+        if cft in (
+            "DOMESTIC_DOMESTIC",
+            "DOMESTIC_INTERNATIONAL",
+            "INTERNATIONAL_DOMESTIC",
+            "INTERNATIONAL_INTERNATIONAL",
+        ):
+            return cft
+        origin_clean = normalize_iata(origin_code)
+        dest_clean = normalize_iata(dest_code)
+        if origin_clean and dest_clean:
+            return derive_transit_type_from_route(db, origin_clean, dest_clean)
+        return cft
 
     origin_clean = normalize_iata(origin_code)
     dest_clean = normalize_iata(dest_code)
