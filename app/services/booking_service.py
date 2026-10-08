@@ -256,7 +256,7 @@ class BookingService:
                 airport_min_notice_hours,
                 INTERNATIONAL_MIN_HOURS,
             )
-            from app.services.service_airport_rules import derive_flight_type_from_route
+            from app.services.service_airport_rules import derive_flight_type_from_route, derive_transit_type_from_route
             now_aware = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
             derived_ft = None
             eff_origin = (
@@ -276,35 +276,54 @@ class BookingService:
                     )
                 except (ValueError, Exception):
                     derived_ft = None
+            else:
+                try:
+                    derived_ft = derive_transit_type_from_route(
+                        db, eff_origin, eff_dest
+                    )
+                except (ValueError, Exception):
+                    derived_ft = None
 
             # Strict consistency safeguard: check if requested travel type matches verified route
-            selected_ft = (early_meta or {}).get("travel_type") or (early_meta or {}).get("flight_type")
+            selected_ft = (
+                (early_meta or {}).get("travel_type")
+                or (early_meta or {}).get("flight_type")
+                or (early_meta or {}).get("transit_type")
+            )
             if (
-                early_jt != "TRANSIT"
-                and eff_origin
+                eff_origin
                 and eff_dest
-                and derived_ft in ("DOMESTIC", "INTERNATIONAL")
+                and derived_ft
                 and selected_ft
             ):
                 from app.services.service_airport_rules import normalize_flight_type
                 norm_selected = normalize_flight_type(selected_ft)
-                if norm_selected in ("DOMESTIC", "INTERNATIONAL") and norm_selected != derived_ft:
+                if norm_selected and norm_selected != derived_ft:
+                    label = "Transit category" if early_jt == "TRANSIT" else "Flight type"
                     raise HTTPException(
                         status_code=400,
                         detail=(
-                            f"Flight type mismatch: selected service type is {norm_selected}, "
-                            f"but verified flight route is {derived_ft}."
+                            f"{label} mismatch: selected service category is {norm_selected}, "
+                            f"but verified journey route is {derived_ft}."
                         ),
                     )
 
-            if derived_ft not in ("DOMESTIC", "INTERNATIONAL"):
+            if early_jt == "TRANSIT" and derived_ft:
+                metadata_json["flight_type"] = derived_ft
+                metadata_json["transit_type"] = derived_ft
+                payload.metadata_json = metadata_json
+
+            cutoff_eval_ft = derived_ft
+            if derived_ft in ("DOMESTIC_DOMESTIC", "DOMESTIC_INTERNATIONAL", "INTERNATIONAL_DOMESTIC", "INTERNATIONAL_INTERNATIONAL"):
+                cutoff_eval_ft = "DOMESTIC" if derived_ft == "DOMESTIC_DOMESTIC" else "INTERNATIONAL"
+            elif derived_ft not in ("DOMESTIC", "INTERNATIONAL"):
                 notice = airport_min_notice_hours(
                     derived_ft
                     or (early_meta or {}).get("flight_type")
                     or (early_meta or {}).get("travel_type")
                     or (early_meta or {}).get("transit_type")
                 )
-                derived_ft = "INTERNATIONAL" if notice == INTERNATIONAL_MIN_HOURS else "DOMESTIC"
+                cutoff_eval_ft = "INTERNATIONAL" if notice == INTERNATIONAL_MIN_HOURS else "DOMESTIC"
             svc_iata = service_airport or (
                 payload.origin_code if early_jt == "DEPARTURE" else payload.dest_code
             )
@@ -312,7 +331,7 @@ class BookingService:
                 scheduled_dt=service_clock,
                 now_utc=now_aware,
                 airport_tz_name=lookup_airport_timezone(db, svc_iata),
-                flight_type=derived_ft,
+                flight_type=cutoff_eval_ft,
             )
             if not cutoff.allowed:
                 raise HTTPException(status_code=400, detail=cutoff.customer_message)

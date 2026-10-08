@@ -345,6 +345,10 @@ def resolve_catalog_flight_type(
     jt = normalize_journey_type(journey_type)
 
     if jt == "TRANSIT":
+        origin_clean = normalize_iata(origin_code)
+        dest_clean = normalize_iata(dest_code)
+        if origin_clean and dest_clean:
+            return derive_transit_type_from_route(db, origin_clean, dest_clean)
         cft = normalize_flight_type(client_flight_type)
         if cft in (
             "DOMESTIC_DOMESTIC",
@@ -353,10 +357,6 @@ def resolve_catalog_flight_type(
             "INTERNATIONAL_INTERNATIONAL",
         ):
             return cft
-        origin_clean = normalize_iata(origin_code)
-        dest_clean = normalize_iata(dest_code)
-        if origin_clean and dest_clean:
-            return derive_transit_type_from_route(db, origin_clean, dest_clean)
         return cft
 
     origin_clean = normalize_iata(origin_code)

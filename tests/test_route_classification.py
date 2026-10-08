@@ -335,11 +335,19 @@ class TestResolveCatalogFlightType:
         result = resolve_catalog_flight_type(db, "DEL", "BOM", "DEPARTURE", "INTERNATIONAL")
         assert result == "DOMESTIC"
 
-    def test_transit_preserves_client_compound_type(self, db):
+    def test_transit_preserves_client_compound_type_browsing_without_route(self, db):
+        result = resolve_catalog_flight_type(
+            db, None, None, "TRANSIT", "DOMESTIC_DOMESTIC"
+        )
+        assert result == "DOMESTIC_DOMESTIC"
+
+    def test_transit_route_overrides_client_compound_tampering(self, db):
+        # DXB (AE) -> LHR (GB) is Outside India -> Outside India = INTERNATIONAL_INTERNATIONAL
+        # Even if client sends DOMESTIC_DOMESTIC, route endpoints are authoritative and override it
         result = resolve_catalog_flight_type(
             db, "DXB", "LHR", "TRANSIT", "DOMESTIC_DOMESTIC"
         )
-        assert result == "DOMESTIC_DOMESTIC"
+        assert result == "INTERNATIONAL_INTERNATIONAL"
 
     def test_browsing_without_route_keeps_client(self, db):
         result = resolve_catalog_flight_type(db, None, None, "ARRIVAL", "INTERNATIONAL")
