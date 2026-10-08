@@ -59,6 +59,7 @@ class ServiceEnquiryCreate(BaseModel):
                 "vehicle_category", "vehicleCategory",
                 "provider", "selected_provider",
                 "passenger_count", "passengerCount",
+                "vehicle_count", "vehicleCount",
                 "reference_price", "referencePrice",
                 "additional_requirements",
             ):
