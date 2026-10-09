@@ -1011,60 +1011,39 @@ class JourneyDetectionEngine:
                 pkg_svc = target_mapping.service
                 currency = target_mapping.currency or "INR"
 
-                if not is_bookable:
-                    service_items.append(
-                        ServiceItemAvailability(
-                            service_type=raw_st,
-                            airport_code=apt_code,
-                            airport_name=airport.airport_name,
-                            city=airport.city,
-                            country=airport.country,
-                            is_airport_supported=True,
-                            status="REQUEST_REQUIRED",
-                            status_reason=(
-                                f"Service requires at least {notice_hours} hours advance notice "
-                                f"(approx {hours_rem:.0f}h remaining). VIP concierge contact required."
-                            ),
-                            package_slug=pkg_svc.slug if pkg_svc else None,
-                            package_name=pkg_svc.name if pkg_svc else None,
-                            flight_type=flight_type,
-                            terminal=target_mapping.terminal,
-                            unit_price=unit_price,
-                            total_price=None,
-                            currency=currency,
-                            is_bookable_online=False,
-                            available_packages=pkg_items,
-                            notice_hours_required=notice_hours,
-                            hours_remaining=hours_rem,
-                            urgent_assistance=urgent,
-                        )
+                if not available_mappings and sel.terminal:
+                    available_mappings = cls.get_services_for_airport(
+                        db,
+                        airport_iata=apt_code,
+                        journey_type=raw_st,
+                        flight_type=flight_type,
                     )
-                else:
-                    tot = round(unit_price * guest_count, 2)
-                    service_items.append(
-                        ServiceItemAvailability(
-                            service_type=raw_st,
-                            airport_code=apt_code,
-                            airport_name=airport.airport_name,
-                            city=airport.city,
-                            country=airport.country,
-                            is_airport_supported=True,
-                            status="AVAILABLE",
-                            status_reason="Available for online booking and instant dispatch.",
-                            package_slug=pkg_svc.slug if pkg_svc else None,
-                            package_name=pkg_svc.name if pkg_svc else None,
-                            flight_type=flight_type,
-                            terminal=target_mapping.terminal,
-                            unit_price=unit_price,
-                            total_price=tot,
-                            currency=currency,
-                            is_bookable_online=True,
-                            available_packages=pkg_items,
-                            notice_hours_required=notice_hours,
-                            hours_remaining=hours_rem,
-                            urgent_assistance=None,
-                        )
+
+                tot = round(unit_price * guest_count, 2)
+                service_items.append(
+                    ServiceItemAvailability(
+                        service_type=raw_st,
+                        airport_code=apt_code,
+                        airport_name=airport.airport_name,
+                        city=airport.city,
+                        country=airport.country,
+                        is_airport_supported=True,
+                        status="AVAILABLE",
+                        status_reason="Available for online booking and instant dispatch.",
+                        package_slug=pkg_svc.slug if pkg_svc else None,
+                        package_name=pkg_svc.name if pkg_svc else None,
+                        flight_type=flight_type,
+                        terminal=target_mapping.terminal,
+                        unit_price=unit_price,
+                        total_price=tot,
+                        currency=currency,
+                        is_bookable_online=True,
+                        available_packages=pkg_items,
+                        notice_hours_required=notice_hours,
+                        hours_remaining=hours_rem,
+                        urgent_assistance=urgent,
                     )
+                )
 
         all_avail = bool(service_items) and all(s.status == "AVAILABLE" for s in service_items)
         any_avail = any(s.status == "AVAILABLE" for s in service_items)
