@@ -336,11 +336,12 @@ class BookingService:
             if not cutoff.allowed:
                 raise HTTPException(status_code=400, detail=cutoff.customer_message)
 
-        if dep_time is not None and arr_time is not None and arr_time < dep_time:
-            raise HTTPException(
-                status_code=400,
-                detail="Flight arrival time must be after departure time."
-            )
+        if early_jt != "TRANSIT":
+            if dep_time is not None and arr_time is not None and arr_time < dep_time:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Flight arrival time must be after departure time."
+                )
 
         # 4. Resolve valid profile_id against profiles table
         valid_profile_id = None
@@ -537,6 +538,10 @@ class BookingService:
         metadata_json["billable_pax"] = billable_pax
         # Unit price the catalog charged (so invoices / retries never re-inflate).
         metadata_json["unit_price"] = round(float(subtotal) / billable_pax, 2) if billable_pax else float(subtotal)
+
+        if getattr(payload, "flight_num_2", None) and journey_type == "TRANSIT":
+            metadata_json["flight_number_2"] = payload.flight_num_2
+            metadata_json["connecting_flight_number"] = payload.flight_num_2
 
         # Guard: never silently charge more than the client showed without an
         # explicit catalog reason. Log when the trusted DB total differs from
@@ -1083,6 +1088,7 @@ class BookingService:
 
     @classmethod
     def format_booking_dict(cls, booking: Booking) -> Dict[str, Any]:
+        meta = booking.metadata_json or {}
         return {
             "id": str(booking.id),
             "bookingRef": booking.booking_ref,
@@ -1092,13 +1098,14 @@ class BookingService:
             "serviceCategory": getattr(booking, "service_category", "Airport Assistance"),
             "serviceType": booking.service_type,
             "flightNum": booking.flight_num,
+            "flightNum2": getattr(booking, "flight_num_2", None) or meta.get("flight_number_2") or meta.get("connecting_flight_number"),
             "originCode": booking.origin_code,
             "destCode": booking.dest_code,
             "departureTime": booking.departure_time.isoformat() if booking.departure_time else None,
             "arrivalTime": booking.arrival_time.isoformat() if booking.arrival_time else None,
             "selectedServices": booking.selected_services or {},
             "serviceOptions": getattr(booking, "service_options", booking.selected_services or {}),
-            "metadataJson": getattr(booking, "metadata_json", {}),
+            "metadataJson": meta,
             "totalAmount": booking.total_amount,
             "currency": booking.currency,
             "status": booking.status.value if isinstance(booking.status, BookingStatus) else str(booking.status),

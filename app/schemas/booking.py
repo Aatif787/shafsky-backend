@@ -15,10 +15,13 @@ class BookingCreate(BaseModel):
 
     # Flight details (optional for non-flight services, required for Airport Assistance)
     flight_num: Optional[str] = Field(default=None, alias="flightNum")
+    flight_num_2: Optional[str] = Field(default=None, alias="flightNum2")
     origin_code: Optional[str] = Field(default=None, alias="originCode")
     dest_code: Optional[str] = Field(default=None, alias="destCode")
     departure_time: Optional[datetime] = Field(default=None, alias="departureTime")
     arrival_time: Optional[datetime] = Field(default=None, alias="arrivalTime")
+    departure_time_2: Optional[datetime] = Field(default=None, alias="departureTime2")
+    arrival_time_2: Optional[datetime] = Field(default=None, alias="arrivalTime2")
 
     # Service options / selected services
     selected_services: Dict[str, Any] = Field(default_factory=dict, alias="selectedServices")
@@ -42,14 +45,14 @@ class BookingCreate(BaseModel):
             raise ValueError("Airport code must be a valid 3-letter uppercase IATA code (e.g. DEL, BOM, LHR)")
         return v
 
-    @field_validator("flight_num")
+    @field_validator("flight_num", "flight_num_2")
     @classmethod
     def validate_flight_num(cls, v: Optional[str]) -> Optional[str]:
         if v is None:
             return None
         v = v.strip().upper()
         if not v:
-            raise ValueError("Flight number cannot be empty")
+            return None
         return v
 
 class BookingResponseData(BaseModel):
@@ -63,6 +66,7 @@ class BookingResponseData(BaseModel):
     serviceCategory: Optional[str] = "Airport Assistance"
     serviceType: str
     flightNum: Optional[str] = None
+    flightNum2: Optional[str] = None
     originCode: Optional[str] = None
     destCode: Optional[str] = None
     departureTime: Optional[str] = None
