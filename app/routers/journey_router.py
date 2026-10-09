@@ -37,6 +37,10 @@ from app.schemas.journey_schemas import (
     BookingWindowCheckRequest,
     BookingWindowCheckResponse,
     BookingValidationRequest,
+    MultiServiceAvailabilityRequest,
+    MultiServiceAvailabilityResponse,
+    ServiceQueryCreate,
+    ServiceQueryResponse,
 )
 
 
@@ -416,3 +420,47 @@ def validate_booking(
             pass
 
     return ServiceConfigService.validate_authoritative_booking(db, payload)
+
+
+# ─── Multi-Service Itinerary & Availability Endpoints ───
+
+@router.post(
+    "/multi-service/availability",
+    response_model=MultiServiceAvailabilityResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Multi-Service Itinerary Availability",
+    description=(
+        "Evaluates service availability for any combination of services (Departure, Arrival, Transit) "
+        "across a multi-leg or direct itinerary. Returns itemized status (AVAILABLE / REQUEST_REQUIRED) "
+        "and sums authoritative prices for available services."
+    ),
+)
+def check_multi_service_availability_endpoint(
+    request: MultiServiceAvailabilityRequest,
+    db: Session = Depends(get_db),
+):
+    return JourneyDetectionEngine.check_multi_service_availability(
+        db=db,
+        request=request,
+    )
+
+
+@router.post(
+    "/multi-service/query",
+    response_model=ServiceQueryResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Submit Consolidated Service Query",
+    description=(
+        "Registers a consolidated inquiry for unavailable services, preserving passenger details, "
+        "itinerary legs, and service intent without requiring duplicate submissions."
+    ),
+)
+def create_service_query_endpoint(
+    payload: ServiceQueryCreate,
+    db: Session = Depends(get_db),
+):
+    return JourneyDetectionEngine.create_service_query(
+        db=db,
+        payload=payload,
+    )
+

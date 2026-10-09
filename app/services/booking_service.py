@@ -1,7 +1,7 @@
 import uuid
 import secrets
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import StaleDataError
@@ -213,8 +213,11 @@ class BookingService:
         # 3. Handle Flight Datetimes if present
         dep_time = payload.departure_time
         arr_time = payload.arrival_time
-        import zoneinfo
-        ist_tz = zoneinfo.ZoneInfo("Asia/Kolkata")
+        try:
+            import zoneinfo
+            ist_tz = zoneinfo.ZoneInfo("Asia/Kolkata")
+        except Exception:
+            ist_tz = timezone(timedelta(hours=5, minutes=30))
         if dep_time is not None and dep_time.tzinfo is None:
             dep_time = dep_time.replace(tzinfo=ist_tz)
         if arr_time is not None and arr_time.tzinfo is None:
@@ -431,20 +434,31 @@ class BookingService:
                             target_airport = cand
                             break
 
-        if not target_airport:
-            raise HTTPException(
-                status_code=400,
-                detail="Unable to resolve a supported airport for this booking.",
-            )
-
-        supported_row = db.scalar(
-            select(SupportedAirport).where(SupportedAirport.iata_code == target_airport)
+        is_multi_service = bool(
+            (meta or {}).get("multi_service")
+            or (selected_services or {}).get("multi_service")
+            or isinstance((selected_services or {}).get("services"), list)
+            or isinstance((meta or {}).get("services"), list)
         )
-        if not supported_row or not supported_row.is_supported or not supported_row.is_active:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Shafsky does not currently operate at {target_airport}.",
+
+        available_service_charges: List[Dict[str, Any]] = []
+        unavailable_service_items: List[Dict[str, Any]] = []
+
+        if not is_multi_service:
+            if not target_airport:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Unable to resolve a supported airport for this booking.",
+                )
+
+            supported_row = db.scalar(
+                select(SupportedAirport).where(SupportedAirport.iata_code == target_airport)
             )
+            if not supported_row or not supported_row.is_supported or not supported_row.is_active:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Shafsky does not currently operate at {target_airport}.",
+                )
 
         # Derive authoritative flight_type from actual route countries.
         # Client-supplied flight_type is NOT trusted for pricing/package selection.
@@ -477,7 +491,8 @@ class BookingService:
         # Strict consistency safeguard: reject mismatched travel type vs verified route for any booking
         client_ft = (meta or {}).get("travel_type") or (meta or {}).get("flight_type")
         if (
-            journey_type != "TRANSIT"
+            not is_multi_service
+            and journey_type != "TRANSIT"
             and eff_origin
             and eff_dest
             and derived_ft in ("DOMESTIC", "INTERNATIONAL")
@@ -493,19 +508,134 @@ class BookingService:
                     ),
                 )
 
-        target_service = cls.normalize_package_slug(payload.service_type or "silver")
+        if is_multi_service:
+            raw_svcs = (
+                (meta or {}).get("services")
+                or (selected_services or {}).get("services")
+                or []
+            )
+            multi_authoritative_price = 0.0
 
-        authoritative_price = cls.calculate_authoritative_price(
-            db=db,
-            airport_code=target_airport,
-            service_tier_or_slug=target_service,
-            journey_type=journey_type,
-            flight_type=flight_type,
-            pax_count=billable_pax
-        )
+            for svc_item in raw_svcs:
+                s_jt = normalize_journey_type(
+                    svc_item.get("service_type") or svc_item.get("journey_type") or "DEPARTURE"
+                )
+                s_apt = (
+                    svc_item.get("airport_code")
+                    or svc_item.get("airport")
+                    or target_airport
+                )
+                s_apt = normalize_iata(s_apt)
+                s_slug = cls.normalize_package_slug(
+                    svc_item.get("package") or svc_item.get("package_slug") or svc_item.get("service_type") or "silver"
+                )
 
-        # All catalog prices are GST-inclusive (do not add extra tax)
-        subtotal = round(float(authoritative_price), 2)
+                # Check airport support
+                apt_row = db.scalar(
+                    select(SupportedAirport).where(SupportedAirport.iata_code == s_apt)
+                ) if s_apt else None
+                if not apt_row or not apt_row.is_supported or not apt_row.is_active:
+                    unavailable_service_items.append({
+                        "service_type": s_jt,
+                        "airport_code": s_apt or "N/A",
+                        "package": s_slug,
+                        "status": "REQUEST_REQUIRED",
+                        "reason": f"Airport '{s_apt}' is currently not supported for instant online booking.",
+                    })
+                    continue
+
+                # Determine flight type for this specific service item
+                s_ft = svc_item.get("flight_type")
+                if not s_ft:
+                    if s_jt == "DEPARTURE":
+                        try:
+                            s_ft = derive_flight_type_from_route(db, s_apt, payload.dest_code, "DEPARTURE")
+                        except Exception:
+                            s_ft = "DOMESTIC"
+                    elif s_jt == "ARRIVAL":
+                        try:
+                            s_ft = derive_flight_type_from_route(db, payload.origin_code, s_apt, "ARRIVAL")
+                        except Exception:
+                            s_ft = "DOMESTIC"
+                    elif s_jt == "TRANSIT":
+                        from app.services.service_airport_rules import derive_transit_type_from_route
+                        try:
+                            s_ft = derive_transit_type_from_route(db, payload.origin_code, payload.dest_code)
+                        except Exception:
+                            s_ft = "DOMESTIC_DOMESTIC"
+                s_ft = normalize_flight_type(s_ft) or "DOMESTIC"
+
+                try:
+                    single_price = cls.calculate_authoritative_price(
+                        db=db,
+                        airport_code=s_apt,
+                        service_tier_or_slug=s_slug,
+                        journey_type=s_jt,
+                        flight_type=s_ft,
+                        pax_count=billable_pax,
+                    )
+                except HTTPException as exc:
+                    # Fallback to the first available package if the exact slug requested is not offered at this airport
+                    from app.services.journey_engine import JourneyDetectionEngine
+                    available_maps = JourneyDetectionEngine.get_services_for_airport(
+                        db, airport_iata=s_apt, journey_type=s_jt, flight_type=s_ft
+                    )
+                    if available_maps and available_maps[0].service:
+                        fallback_slug = available_maps[0].service.slug
+                        single_price = cls.calculate_authoritative_price(
+                            db=db,
+                            airport_code=s_apt,
+                            service_tier_or_slug=fallback_slug,
+                            journey_type=s_jt,
+                            flight_type=s_ft,
+                            pax_count=billable_pax,
+                        )
+                        s_slug = fallback_slug
+                    else:
+                        unavailable_service_items.append({
+                            "service_type": s_jt,
+                            "airport_code": s_apt,
+                            "package": s_slug,
+                            "status": "REQUEST_REQUIRED",
+                            "reason": exc.detail,
+                        })
+                        continue
+
+                multi_authoritative_price += single_price
+                available_service_charges.append({
+                    "service_type": s_jt,
+                    "airport_code": s_apt,
+                    "package": s_slug,
+                    "flight_type": s_ft,
+                    "unit_price": round(single_price / billable_pax, 2) if billable_pax else single_price,
+                    "total_price": round(single_price, 2),
+                    "status": "AVAILABLE",
+                })
+
+            # Requirement 6: If NONE of the selected services are available, do not create a payable booking!
+            if not available_service_charges:
+                raise HTTPException(
+                    status_code=400,
+                    detail="None of the selected services are currently available for online payment. Please submit a service query instead.",
+                )
+
+            authoritative_price = multi_authoritative_price
+            subtotal = round(float(authoritative_price), 2)
+            target_service = "multi_service"
+            if not target_airport and available_service_charges:
+                target_airport = available_service_charges[0]["airport_code"]
+        else:
+            target_service = cls.normalize_package_slug(payload.service_type or "silver")
+
+            authoritative_price = cls.calculate_authoritative_price(
+                db=db,
+                airport_code=target_airport,
+                service_tier_or_slug=target_service,
+                journey_type=journey_type,
+                flight_type=flight_type,
+                pax_count=billable_pax
+            )
+            subtotal = round(float(authoritative_price), 2)
         taxes = 0.0
 
         # Mumbai Airport Express Fee (effective 1 Oct 2026; live enabled for <24h bookings)
@@ -538,6 +668,15 @@ class BookingService:
         metadata_json["billable_pax"] = billable_pax
         # Unit price the catalog charged (so invoices / retries never re-inflate).
         metadata_json["unit_price"] = round(float(subtotal) / billable_pax, 2) if billable_pax else float(subtotal)
+
+        if is_multi_service:
+            metadata_json["multi_service"] = True
+            metadata_json["available_services"] = available_service_charges
+            metadata_json["unavailable_services"] = unavailable_service_items
+            metadata_json["services"] = available_service_charges + unavailable_service_items
+            selected_services = dict(selected_services or {})
+            selected_services["multi_service"] = True
+            selected_services["services"] = available_service_charges + unavailable_service_items
 
         if getattr(payload, "flight_num_2", None) and journey_type == "TRANSIT":
             metadata_json["flight_number_2"] = payload.flight_num_2
@@ -621,6 +760,35 @@ class BookingService:
                     })
                 except Exception:
                     logger.exception("Booking persisted but notification dispatch failed for %s", new_booking.booking_ref)
+
+                if is_multi_service and unavailable_service_items:
+                    try:
+                        from app.services.journey_engine import JourneyDetectionEngine
+                        from app.schemas.journey_schemas import ServiceQueryCreate
+                        created_query = JourneyDetectionEngine.create_service_query(
+                            db,
+                            ServiceQueryCreate(
+                                passenger_name=new_booking.passenger_name,
+                                passenger_email=new_booking.passenger_email,
+                                passenger_phone=new_booking.passenger_phone,
+                                flight_num=new_booking.flight_num,
+                                service_date=str(new_booking.departure_time or now).split("T")[0],
+                                booking_ref=new_booking.booking_ref,
+                                itinerary=metadata_json.get("itinerary") or {},
+                                requested_services=available_service_charges + unavailable_service_items,
+                                unavailable_services=unavailable_service_items,
+                                notes=f"Auto-generated inquiry for unavailable services accompanying booking {new_booking.booking_ref}",
+                            )
+                        )
+                        updated_meta = dict(new_booking.metadata_json or {})
+                        updated_meta["service_query_ref"] = created_query.query_ref
+                        new_booking.metadata_json = updated_meta
+                        db.add(new_booking)
+                        db.commit()
+                        db.refresh(new_booking)
+                    except Exception:
+                        logger.exception("Failed to auto-create service query for unavailable services on %s", new_booking.booking_ref)
+
                 return new_booking
             except IntegrityError as exc:
                 db.rollback()

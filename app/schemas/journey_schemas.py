@@ -1,8 +1,8 @@
-﻿"""
+"""
 Pydantic Schemas for Journey Detection Engine — Phase 1.
 """
 
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, computed_field
@@ -230,4 +230,106 @@ class BookingValidationResponse(BaseModel):
     is_airport_supported: bool = True
     validation_messages: List[str] = []
     price_breakdown: PriceBreakdown
+
+
+# ─── Multi-Service Itinerary & Availability Schemas ───
+
+class FlightLegInput(BaseModel):
+    leg_index: int = 0
+    flight_num: Optional[str] = None
+    origin_code: str = Field(..., min_length=3, max_length=3, description="3-letter IATA code")
+    dest_code: str = Field(..., min_length=3, max_length=3, description="3-letter IATA code")
+    departure_time: Optional[str] = None
+    arrival_time: Optional[str] = None
+    service_date: Optional[str] = None
+    terminal: Optional[str] = None
+
+
+class ServiceSelectionInput(BaseModel):
+    service_type: str = Field(..., description="DEPARTURE, ARRIVAL, or TRANSIT")
+    package_slug: Optional[str] = Field(None, description="Optional package slug e.g. silver, gold, elite, meet_greet")
+    airport_code: Optional[str] = Field(None, description="Optional override airport code if specific leg/transit is targeted")
+    terminal: Optional[str] = Field(None, description="Terminal name or number if applicable")
+
+
+class MultiServiceAvailabilityRequest(BaseModel):
+    # Itinerary definition: either explicit legs OR origin + dest + transit_codes OR flight_num + flight_date
+    legs: Optional[List[FlightLegInput]] = None
+    origin_code: Optional[str] = None
+    dest_code: Optional[str] = None
+    transit_codes: Optional[List[str]] = None
+    flight_num: Optional[str] = None
+    flight_date: Optional[str] = None
+    flight_type: Optional[str] = None  # user selected travel type if applicable
+
+    # Multi-service selection: any combination of DEPARTURE, ARRIVAL, TRANSIT
+    selected_services: List[ServiceSelectionInput] = Field(
+        ..., min_length=1, description="List of services to check"
+    )
+
+    guest_count: int = Field(1, ge=1, description="Number of passengers")
+    service_date: Optional[str] = Field(None, description="Default travel date YYYY-MM-DD")
+    service_time: Optional[str] = Field(None, description="Default travel time HH:MM")
+
+
+class ServiceItemAvailability(BaseModel):
+    service_type: str  # DEPARTURE, ARRIVAL, TRANSIT
+    airport_code: str
+    airport_name: Optional[str] = None
+    city: Optional[str] = None
+    country: Optional[str] = None
+    is_airport_supported: bool
+    status: str  # "AVAILABLE" or "REQUEST_REQUIRED"
+    status_reason: Optional[str] = None
+    package_slug: Optional[str] = None
+    package_name: Optional[str] = None
+    flight_type: Optional[str] = None
+    terminal: Optional[str] = None
+    unit_price: Optional[float] = None
+    total_price: Optional[float] = None  # unit_price * guest_count if AVAILABLE
+    currency: str = "INR"
+    is_bookable_online: bool = True
+    available_packages: List[AvailableServiceItem] = []
+    notice_hours_required: Optional[int] = None
+    hours_remaining: Optional[float] = None
+    urgent_assistance: Optional[UrgentAssistanceInfo] = None
+
+
+class MultiServiceAvailabilityResponse(BaseModel):
+    success: bool = True
+    itinerary: Dict[str, Any]
+    services: List[ServiceItemAvailability]
+    all_available: bool
+    any_available: bool
+    none_available: bool
+    guest_count: int = 1
+    available_subtotal: float
+    total_payable: float
+    currency: str = "INR"
+    unavailable_services_count: int = 0
+    unavailable_message: Optional[str] = None
+
+
+# ─── Service Query Schemas ───
+
+class ServiceQueryCreate(BaseModel):
+    passenger_name: str = Field(..., min_length=2, max_length=150)
+    passenger_email: str
+    passenger_phone: str = Field(..., min_length=7, max_length=50)
+    flight_num: Optional[str] = None
+    service_date: Optional[str] = None
+    booking_ref: Optional[str] = None
+    session_id: Optional[str] = None
+    itinerary: Dict[str, Any] = Field(default_factory=dict)
+    requested_services: List[Dict[str, Any]] = Field(default_factory=list)
+    unavailable_services: List[Dict[str, Any]] = Field(default_factory=list)
+    notes: Optional[str] = None
+
+
+class ServiceQueryResponse(BaseModel):
+    success: bool = True
+    query_ref: str
+    message: str
+    created_at: str
+    unavailable_services: List[Dict[str, Any]]
 

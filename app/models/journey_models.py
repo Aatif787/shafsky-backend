@@ -153,3 +153,50 @@ class AirportService(Base):
 
     def __repr__(self) -> str:
         return f"<AirportService airport={self.airport_id} service={self.service_id} type={self.journey_type}>"
+
+
+class ServiceQuery(Base):
+    """
+    Consolidated query/request record for services that cannot be booked online
+    (e.g., unsupported airport, unconfigured package, or lead time cutoff breached).
+    Preserves passenger, itinerary, and service intent without dropping customer selections.
+    """
+    __tablename__ = "service_queries"
+    __table_args__ = (
+        Index("ix_service_queries_query_ref", "query_ref", unique=True),
+        Index("ix_service_queries_passenger_email", "passenger_email"),
+        Index("ix_service_queries_booking_ref", "booking_ref"),
+        Index("ix_service_queries_status", "status"),
+        Index("ix_service_queries_created_at", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    query_ref: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    passenger_name: Mapped[str] = mapped_column(String(150), nullable=False)
+    passenger_email: Mapped[str] = mapped_column(String(255), nullable=False)
+    passenger_phone: Mapped[str] = mapped_column(String(50), nullable=False)
+
+    flight_num: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    service_date: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    booking_ref: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    session_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    itinerary: Mapped[Any] = mapped_column(JSON, default=dict, nullable=False)
+    requested_services: Mapped[Any] = mapped_column(JSON, default=list, nullable=False)
+    unavailable_services: Mapped[Any] = mapped_column(JSON, default=list, nullable=False)
+
+    status: Mapped[str] = mapped_column(String(50), default="PENDING", nullable=False)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(String(50), default="WEB", nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ServiceQuery {self.query_ref} passenger={self.passenger_name} status={self.status}>"
