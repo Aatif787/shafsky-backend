@@ -12,9 +12,12 @@ def test_rate_limiter_redis_integration():
     """Starts against a local Redis instance (docker-compose.redis.yml) and
     verifies that the Redis-backed rate limiter enforces limits.
     """
-    redis_url = os.getenv("REDIS_URL") or (
-        f"redis://{os.getenv('REDIS_HOST', 'localhost')}:{os.getenv('REDIS_PORT', '6379')}/0"
-    )
+    # Build the URL exactly like the application does (settings includes the
+    # Redis password) so this test also connects to password-protected local
+    # Redis instances; the previous hand-built URL silently failed there.
+    from app.config import settings as _settings
+
+    redis_url = os.getenv("REDIS_URL") or _settings.REDIS_URL
     r = redis.Redis.from_url(redis_url, decode_responses=True)
     r.ping()
 

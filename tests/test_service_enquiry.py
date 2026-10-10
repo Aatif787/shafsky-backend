@@ -368,4 +368,103 @@ def test_api_endpoint_ground_transport_enquiry():
         app.dependency_overrides.pop(get_db, None)
 
 
+# =====================================================================
+# TEST 9: Round Trip enquiry -> 201 Created, total_amount = 0.0, WhatsApp sent
+# =====================================================================
+def test_round_trip_enquiry_success_and_whatsapp():
+    db = _db_with_unique_ref()
+
+    with patch("app.integrations.whatsapp.client.whatsapp_client.send_text_message") as mock_wa:
+        mock_wa.return_value = {"success": True, "message_id": "wamid.rt_123"}
+
+        booking = BookingService.create_service_enquiry(
+            db,
+            passenger_name="Rahul Sharma",
+            passenger_email="rahul.sharma@customer-mail.test",
+            passenger_phone="+919876543220",
+            service_category="Round Trip",
+            service_type="Round Trip",
+            origin="Mumbai (BOM)",
+            destination="Dubai (DXB)",
+            service_date="2026-11-01",
+            notes="Vegetarian meals and window seats preferred",
+            details={
+                "origin": "Mumbai (BOM)",
+                "destination": "Dubai (DXB)",
+                "outbound_date": "2026-11-01",
+                "return_date": "2026-11-10",
+                "outbound_flight": "AI2424",
+                "return_flight": "AI2425",
+                "passenger_count": 2,
+            },
+        )
+
+        assert booking.service_category == "Round Trip"
+        assert booking.status == BookingStatus.PENDING
+        assert float(booking.total_amount) == 0.0
+        assert booking.metadata_json.get("enquiry") is True
+        assert booking.metadata_json.get("quote_only") is True
+        assert booking.booking_ref.startswith("SHF-")
+
+        # Verify WhatsApp notification was sent to officer
+        mock_wa.assert_called_once()
+        msg_text = mock_wa.call_args[0][1]
+        assert "NEW ROUND TRIP ENQUIRY" in msg_text
+        assert booking.booking_ref in msg_text
+        assert "Rahul Sharma" in msg_text
+        assert "Mumbai (BOM)" in msg_text
+        assert "Dubai (DXB)" in msg_text
+        assert "2026-11-01" in msg_text
+        assert "2026-11-10" in msg_text
+        assert "AI2424" in msg_text
+        assert "AI2425" in msg_text
+
+
+# =====================================================================
+# TEST 10: Ticketing enquiry -> 201 Created, total_amount = 0.0, WhatsApp sent
+# =====================================================================
+def test_ticketing_enquiry_success_and_whatsapp():
+    db = _db_with_unique_ref()
+
+    with patch("app.integrations.whatsapp.client.whatsapp_client.send_text_message") as mock_wa:
+        mock_wa.return_value = {"success": True, "message_id": "wamid.tkt_123"}
+
+        booking = BookingService.create_service_enquiry(
+            db,
+            passenger_name="Priya Patel",
+            passenger_email="priya.patel@customer-mail.test",
+            passenger_phone="+919876543221",
+            service_category="Ticketing",
+            service_type="Air Ticketing",
+            origin="Delhi (DEL)",
+            destination="London (LHR)",
+            service_date="2026-11-15",
+            notes="Business class enquiry",
+            details={
+                "origin": "Delhi (DEL)",
+                "destination": "London (LHR)",
+                "travel_date": "2026-11-15",
+                "passenger_count": 1,
+            },
+        )
+
+        assert booking.service_category == "Ticketing"
+        assert booking.status == BookingStatus.PENDING
+        assert float(booking.total_amount) == 0.0
+        assert booking.metadata_json.get("enquiry") is True
+        assert booking.metadata_json.get("quote_only") is True
+        assert booking.booking_ref.startswith("SHF-")
+
+        # Verify WhatsApp notification was sent to officer
+        mock_wa.assert_called_once()
+        msg_text = mock_wa.call_args[0][1]
+        assert "NEW TICKETING ENQUIRY" in msg_text
+        assert booking.booking_ref in msg_text
+        assert "Priya Patel" in msg_text
+        assert "Delhi (DEL)" in msg_text
+        assert "London (LHR)" in msg_text
+        assert "2026-11-15" in msg_text
+
+
+
 

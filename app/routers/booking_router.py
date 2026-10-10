@@ -202,6 +202,10 @@ async def get_booking_status(
 
     is_paid = booking.status == BookingStatus.CONFIRMED or bool(successful_tx)
 
+    # SECURITY: this endpoint is public polling. Only the fields the frontend
+    # pollers actually read (bookingRef / status / paymentStatus) are returned --
+    # amounts, currency, service type and timestamps were removed so an
+    # enumerated booking reference cannot reveal financial details.
     return BookingApiResponse(
         success=True,
         data={
@@ -212,11 +216,6 @@ async def get_booking_status(
                 if latest_tx and hasattr(latest_tx.status, "value")
                 else "PENDING"
             ),
-            "totalAmount": float(booking.total_amount or 0),
-            "currency": booking.currency,
-            # Intentionally omit passenger PII on this public polling endpoint (C4 remnant).
-            "serviceType": booking.service_type,
-            "createdAt": booking.created_at.isoformat() if booking.created_at else None
         }
     )
 

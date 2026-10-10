@@ -6,10 +6,13 @@ from pydantic import BaseModel, EmailStr, Field, ConfigDict, field_validator, mo
 
 EnquiryCategory = Literal[
     "Ground Transport",
+    "Transport",
     "Travel Support",
     "Medical Assistance",
     "Cargo & Logistics",
     "Private Charter",
+    "Round Trip",
+    "Ticketing",
 ]
 
 
@@ -17,6 +20,8 @@ class ServiceEnquiryCreate(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     passenger_name: str = Field(..., min_length=2, max_length=120, alias="passengerName")
+    first_name: Optional[str] = Field(None, max_length=60, alias="firstName")
+    last_name: Optional[str] = Field(None, max_length=60, alias="lastName")
     passenger_email: EmailStr = Field(..., alias="passengerEmail")
     passenger_phone: str = Field(..., min_length=7, max_length=40, alias="passengerPhone")
 
@@ -33,6 +38,13 @@ class ServiceEnquiryCreate(BaseModel):
     @classmethod
     def normalize_transport_fields(cls, data: Any) -> Any:
         if isinstance(data, dict):
+            # Synthesize passenger_name from first_name / last_name if omitted
+            if not data.get("passenger_name") and not data.get("passengerName"):
+                fn = str(data.get("first_name") or data.get("firstName") or "").strip()
+                ln = str(data.get("last_name") or data.get("lastName") or "").strip()
+                if fn or ln:
+                    data["passenger_name"] = f"{fn} {ln}".strip()
+
             # Normalize pickup/origin
             if not data.get("origin"):
                 pickup = data.get("pickup_location") or data.get("pickupLocation") or data.get("pickup")

@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Body, status
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.flight.csv_airports import search_global_csv_airports
+from app.security.dependencies import get_optional_user
 from app.services.journey_engine import JourneyDetectionEngine
 from app.services.service_config_service import ServiceConfigService
 from app.services.service_airport_rules import (
@@ -162,7 +163,13 @@ def get_services_at_airport(
     terminal: Optional[str] = Query(None, description="Filter by terminal e.g. Terminal 1 & 2, Terminal 3"),
     include_inactive: bool = Query(False, description="Whether to include inactive/draft services"),
     db: Session = Depends(get_db),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
 ):
+    # SECURITY: inactive/draft services are internal data. Public callers
+    # silently get active-only results; staff/admin JWT holders may opt in.
+    if include_inactive:
+        _role = (current_user or {}).get("role")
+        include_inactive = _role in ("SUPER_ADMIN", "ADMIN", "OPERATIONS_MANAGER")
     airport = JourneyDetectionEngine.get_airport_by_iata(db, iata_code)
     if not airport:
         raise HTTPException(

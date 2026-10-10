@@ -85,26 +85,19 @@ def _clear_refresh_cookie(response: Response) -> None:
 
 def _validate_cookie_request_origin(request: Request) -> None:
     """Reject cross-site browser requests to cookie-authenticated endpoints."""
-    import re
-
     origin = (request.headers.get("origin") or "").rstrip("/")
     if not origin:
         # Non-browser clients generally do not send Origin.
         return
-    allowed = {str(item).rstrip("/") for item in settings.ALLOWED_ORIGINS}
     request_origin = str(request.base_url).rstrip("/")
-    if origin == request_origin or origin in allowed:
+    if origin == request_origin:
         return
-    # Match production CORS regex so Shafsky Vercel deployments and production domains can refresh sessions.
-    origin_ok = re.match(
-        r"^https?://(localhost|127\.0\.0\.1|.*\.ngrok-free\.(dev|app)|.*\.ngrok\.io|"
-        r"(shafsky[a-zA-Z0-9_-]*|shafsky)\.vercel\.app|"
-        r"([a-zA-Z0-9_-]+\.)*shafskyaviation\.(in|com)|"
-        r"([a-zA-Z0-9_-]+\.)*shafsky\.(in|com)"
-        r")(:\d+)?$",
-        origin,
-    )
-    if origin_ok:
+    # Shared, environment-aware allowlist -- the same source as the CORS
+    # middleware: exact ALLOWED_ORIGINS entries first, then the HTTPS-only
+    # production regex (development keeps localhost/ngrok for local tooling).
+    from app.security.cors_origins import origin_is_trusted
+
+    if origin_is_trusted(origin):
         return
     raise HTTPException(status_code=403, detail="Untrusted request origin.")
 

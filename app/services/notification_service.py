@@ -127,12 +127,43 @@ class NotificationService:
 
     @classmethod
     async def send_whatsapp_meta(cls, recipient_phone: str, text_content: str) -> Dict[str, Any]:
-        # Meta Cloud API adapter stub / live dispatcher
+        """Live dispatch through the Meta Cloud API client.
+
+        Honest statuses only: DELIVERED is returned exclusively when Meta
+        accepted the message (message id from the gateway response). Failures
+        return FAILED so the record pipeline retries and reports truthfully;
+        an unconfigured integration returns BYPASSED.
+        """
         if not recipient_phone:
             return {"status": "BYPASSED", "reason": "No phone number provided"}
 
-        # Simulate Meta Cloud API dispatch
-        return {"status": "DELIVERED", "message_id": f"WA-{uuid.uuid4().hex[:8].upper()}"}
+        try:
+            from starlette.concurrency import run_in_threadpool
+
+            from app.integrations.whatsapp.client import whatsapp_client
+        except Exception as exc:
+            logger.error("WhatsApp client unavailable: %s", type(exc).__name__)
+            return {"status": "FAILED", "error": "whatsapp_client_unavailable"}
+
+        try:
+            # send_text_message is blocking httpx IO -- keep it off the event loop.
+            result = await run_in_threadpool(
+                whatsapp_client.send_text_message, recipient_phone, text_content
+            )
+        except Exception as exc:
+            logger.error("WhatsApp dispatch exception: %s", type(exc).__name__)
+            return {"status": "FAILED", "error": "whatsapp_dispatch_exception"}
+
+        if not isinstance(result, dict):
+            return {"status": "FAILED", "error": "whatsapp_invalid_response"}
+        if result.get("success"):
+            return {
+                "status": "DELIVERED",
+                "message_id": result.get("message_id") or "",
+            }
+        if result.get("status") == "unconfigured":
+            return {"status": "BYPASSED", "reason": "WhatsApp Cloud API not configured"}
+        return {"status": "FAILED", "error": str(result.get("error") or "whatsapp_send_failed")}
 
     @classmethod
     async def process_single_notification(cls, record_id_str: str, db_session_factory):
@@ -170,6 +201,8 @@ class NotificationService:
                     msg_ids.append(res.get("message_id", ""))
                 elif res.get("status") == "FAILED":
                     errors.append(f"WhatsApp: {res.get('error')}")
+                elif res.get("status") == "BYPASSED":
+                    errors.append(f"WhatsApp: bypassed ({res.get('reason') or 'not configured'})")
 
             # Update Record Status
             if delivered or channel == "BYPASSED":
@@ -542,14 +575,16 @@ class NotificationService:
         options = context.get("service_options") or {}
 
         officer_phone = (
-            getattr(settings, "WHATSAPP_OFFICER_NOTIFY_PHONE", None)
+            getattr(settings, "WHATSAPP_TRANSPORT_STAFF_PHONE", None)
+            or getattr(settings, "WHATSAPP_OFFICER_NOTIFY_PHONE", None)
+            or os.getenv("WHATSAPP_TRANSPORT_STAFF_PHONE", "")
             or os.getenv("WHATSAPP_OFFICER_NOTIFY_PHONE", "")
             or "919599087959"
         ).strip()
 
         if not officer_phone:
             logger.warning(
-                "Ground Transport enquiry WhatsApp skipped: WHATSAPP_OFFICER_NOTIFY_PHONE is not configured",
+                "Ground Transport enquiry WhatsApp skipped: staff phone is not configured",
                 extra={"booking_ref": booking_ref},
             )
             return {"status": "BYPASSED", "reason": "officer_phone_not_configured"}
@@ -559,7 +594,8 @@ class NotificationService:
         customer_email = str(context.get("passenger_email") or context.get("passengerEmail") or "N/A").strip()
 
         vehicle_name = (
-            details.get("vehicle_name")
+            details.get("vehicle_preference")
+            or details.get("vehicle_name")
             or details.get("vehicleName")
             or options.get("vehicle_name")
             or context.get("service_type")
@@ -694,10 +730,216 @@ class NotificationService:
             return {"status": "FAILED", "error": type(exc).__name__}
 
     @classmethod
+    def _dispatch_round_trip_enquiry_whatsapp(cls, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Dispatches an outbound WhatsApp notification to WHATSAPP_OFFICER_NOTIFY_PHONE
+        for a newly created Round Trip enquiry.
+        Never raises: all network and Meta API failures are caught and logged safely.
+        """
+        import os
+        booking_ref = str(context.get("booking_ref") or context.get("bookingRef") or "N/A")
+        details = context.get("details") or {}
+
+        officer_phone = (
+            getattr(settings, "WHATSAPP_ROUND_TRIP_STAFF_PHONE", None)
+            or getattr(settings, "WHATSAPP_FLIGHTS_STAFF_PHONE", None)
+            or getattr(settings, "WHATSAPP_OFFICER_NOTIFY_PHONE", None)
+            or os.getenv("WHATSAPP_ROUND_TRIP_STAFF_PHONE", "")
+            or os.getenv("WHATSAPP_FLIGHTS_STAFF_PHONE", "")
+            or os.getenv("WHATSAPP_OFFICER_NOTIFY_PHONE", "")
+            or "919599087959"
+        ).strip()
+
+        if not officer_phone:
+            logger.warning(
+                "Round Trip enquiry WhatsApp skipped: staff phone is not configured",
+                extra={"booking_ref": booking_ref},
+            )
+            return {"status": "BYPASSED", "reason": "officer_phone_not_configured"}
+
+        customer_name = str(context.get("passenger_name") or context.get("passengerName") or "N/A").strip()
+        customer_phone = str(context.get("passenger_phone") or context.get("passengerPhone") or "N/A").strip()
+        customer_email = str(context.get("passenger_email") or context.get("passengerEmail") or "N/A").strip()
+
+        origin = context.get("origin_code") or details.get("origin") or "N/A"
+        dest = context.get("dest_code") or details.get("destination") or "N/A"
+        outbound_date = (
+            details.get("departure_date")
+            or details.get("outbound_date")
+            or details.get("outboundDate")
+            or context.get("departure_time")
+            or context.get("service_date")
+            or "N/A"
+        )
+        return_date = details.get("return_date") or details.get("returnDate") or "N/A"
+        outbound_flight = details.get("outbound_flight") or details.get("outboundFlight") or context.get("flight_num")
+        return_flight = details.get("return_flight") or details.get("returnFlight")
+        pax_count = (
+            details.get("passenger_count")
+            or details.get("passengerCount")
+            or context.get("passenger_count")
+            or 1
+        )
+        notes = (
+            context.get("notes")
+            or details.get("additional_requirements")
+            or details.get("notes")
+        )
+
+        lines = [
+            "✈️ *NEW ROUND TRIP ENQUIRY*",
+            "",
+            f"• *Reference*: {booking_ref}",
+            f"• *Customer*: {customer_name}",
+            f"• *Phone*: {customer_phone}",
+            f"• *Email*: {customer_email}",
+            f"• *Origin*: {origin}",
+            f"• *Destination*: {dest}",
+            f"• *Outbound Date*: {outbound_date}",
+            f"• *Return Date*: {return_date}",
+        ]
+        if outbound_flight:
+            lines.append(f"• *Outbound Flight*: {outbound_flight}")
+        if return_flight:
+            lines.append(f"• *Return Flight*: {return_flight}")
+        lines.append(f"• *Passengers*: {pax_count}")
+        if notes and str(notes).strip():
+            lines.append(f"• *Additional Requirements*: {str(notes).strip()}")
+
+        lines.append("")
+        lines.append("⚡ *Action*: Team to contact customer manually for availability & quotation.")
+
+        message_body = "\n".join(lines)
+
+        try:
+            from app.integrations.whatsapp.client import whatsapp_client
+            logger.info("Dispatching Round Trip enquiry WhatsApp notification for %s", booking_ref)
+            result = whatsapp_client.send_text_message(officer_phone, message_body)
+            if result.get("success"):
+                logger.info(
+                    "Round Trip WhatsApp notification successfully dispatched for %s (msg id: %s)",
+                    booking_ref,
+                    result.get("message_id"),
+                )
+                return {"status": "DELIVERED", "message_id": result.get("message_id")}
+            else:
+                logger.warning(
+                    "Round Trip WhatsApp notification dispatch failed for %s: %s",
+                    booking_ref,
+                    result.get("error"),
+                )
+                return {"status": "FAILED", "error": result.get("error")}
+        except Exception as exc:
+            logger.warning(
+                "Round Trip WhatsApp notification encountered exception for %s: %s",
+                booking_ref,
+                type(exc).__name__,
+            )
+            return {"status": "FAILED", "error": type(exc).__name__}
+
+    @classmethod
+    def _dispatch_ticketing_enquiry_whatsapp(cls, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Dispatches an outbound WhatsApp notification to staff assigned to Ticketing
+        for a newly created Ticketing enquiry.
+        Never raises: all network and Meta API failures are caught and logged safely.
+        """
+        import os
+        booking_ref = str(context.get("booking_ref") or context.get("bookingRef") or "N/A")
+        details = context.get("details") or {}
+
+        officer_phone = (
+            getattr(settings, "WHATSAPP_TICKETING_STAFF_PHONE", None)
+            or getattr(settings, "WHATSAPP_OFFICER_NOTIFY_PHONE", None)
+            or os.getenv("WHATSAPP_TICKETING_STAFF_PHONE", "")
+            or os.getenv("WHATSAPP_OFFICER_NOTIFY_PHONE", "")
+            or "919599087959"
+        ).strip()
+
+        if not officer_phone:
+            logger.warning(
+                "Ticketing enquiry WhatsApp skipped: staff phone is not configured",
+                extra={"booking_ref": booking_ref},
+            )
+            return {"status": "BYPASSED", "reason": "officer_phone_not_configured"}
+
+        customer_name = str(context.get("passenger_name") or context.get("passengerName") or "N/A").strip()
+        customer_phone = str(context.get("passenger_phone") or context.get("passengerPhone") or "N/A").strip()
+        customer_email = str(context.get("passenger_email") or context.get("passengerEmail") or "N/A").strip()
+
+        origin = context.get("origin_code") or details.get("origin") or "N/A"
+        dest = context.get("dest_code") or details.get("destination") or "N/A"
+        travel_date = (
+            details.get("departure_date")
+            or details.get("travel_date")
+            or details.get("service_date")
+            or context.get("departure_time")
+            or context.get("service_date")
+            or "N/A"
+        )
+        pax_count = (
+            details.get("passenger_count")
+            or details.get("passengerCount")
+            or context.get("passenger_count")
+            or 1
+        )
+        notes = (
+            context.get("notes")
+            or details.get("additional_requirements")
+            or details.get("notes")
+        )
+
+        lines = [
+            "🎫 *NEW TICKETING ENQUIRY*",
+            "",
+            f"• *Reference*: {booking_ref}",
+            f"• *Customer*: {customer_name}",
+            f"• *Phone*: {customer_phone}",
+            f"• *Email*: {customer_email}",
+            f"• *Origin*: {origin}",
+            f"• *Destination*: {dest}",
+            f"• *Travel Date*: {travel_date}",
+            f"• *Passengers*: {pax_count}",
+        ]
+        if notes and str(notes).strip():
+            lines.append(f"• *Additional Requirements*: {str(notes).strip()}")
+
+        lines.append("")
+        lines.append("⚡ *Action*: Team to contact customer manually for availability & quotation.")
+
+        message_body = "\n".join(lines)
+
+        try:
+            from app.integrations.whatsapp.client import whatsapp_client
+            logger.info("Dispatching Ticketing enquiry WhatsApp notification for %s", booking_ref)
+            result = whatsapp_client.send_text_message(officer_phone, message_body)
+            if result.get("success"):
+                logger.info(
+                    "Ticketing WhatsApp notification successfully dispatched for %s (msg id: %s)",
+                    booking_ref,
+                    result.get("message_id"),
+                )
+                return {"status": "DELIVERED", "message_id": result.get("message_id")}
+            else:
+                logger.warning(
+                    "Ticketing WhatsApp notification dispatch failed for %s: %s",
+                    booking_ref,
+                    result.get("error"),
+                )
+                return {"status": "FAILED", "error": result.get("error")}
+        except Exception as exc:
+            logger.warning(
+                "Ticketing WhatsApp notification encountered exception for %s: %s",
+                booking_ref,
+                type(exc).__name__,
+            )
+            return {"status": "FAILED", "error": type(exc).__name__}
+
+    @classmethod
     def notify_booking_created(cls, db: Session, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         After a booking is persisted:
-        - For Ground Transport enquiries: dispatches WhatsApp notification to the Shafsky operations team.
+        - For Ground Transport, Round Trip, and Ticketing enquiries: dispatches WhatsApp notification to the Shafsky operations team.
         - For pending payments (airport assistance): suppresses customer email until payment confirmation.
         """
         booking_ref = str(context.get("booking_ref") or context.get("bookingRef") or "")
@@ -711,8 +953,8 @@ class NotificationService:
             context.get("service_category") or context.get("serviceCategory") or ""
         ).strip()
 
-        # Scoped specifically to Ground Transport enquiries
-        if service_category.lower() == "ground transport":
+        cat_lower = service_category.lower()
+        if cat_lower in ("ground transport", "transport"):
             try:
                 wa_res = cls._dispatch_ground_transport_enquiry_whatsapp(context)
                 summary["admin"].append({
@@ -723,6 +965,36 @@ class NotificationService:
             except Exception as err:
                 logger.warning(
                     "Ground transport WhatsApp notification failed for %s: %s",
+                    booking_ref,
+                    type(err).__name__,
+                )
+                summary["admin"].append({"channel": "WHATSAPP", "status": "FAILED"})
+        elif cat_lower in ("round trip", "round_trip", "roundtrip"):
+            try:
+                wa_res = cls._dispatch_round_trip_enquiry_whatsapp(context)
+                summary["admin"].append({
+                    "channel": "WHATSAPP",
+                    "status": wa_res.get("status", "DISPATCHED"),
+                    "details": wa_res,
+                })
+            except Exception as err:
+                logger.warning(
+                    "Round trip WhatsApp notification failed for %s: %s",
+                    booking_ref,
+                    type(err).__name__,
+                )
+                summary["admin"].append({"channel": "WHATSAPP", "status": "FAILED"})
+        elif cat_lower in ("ticketing", "air ticketing"):
+            try:
+                wa_res = cls._dispatch_ticketing_enquiry_whatsapp(context)
+                summary["admin"].append({
+                    "channel": "WHATSAPP",
+                    "status": wa_res.get("status", "DISPATCHED"),
+                    "details": wa_res,
+                })
+            except Exception as err:
+                logger.warning(
+                    "Ticketing WhatsApp notification failed for %s: %s",
                     booking_ref,
                     type(err).__name__,
                 )

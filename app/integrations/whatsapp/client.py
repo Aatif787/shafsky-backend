@@ -270,21 +270,21 @@ class WhatsAppClient:
                 return last_error
 
             except httpx.TimeoutException:
-                last_error = {
+                # A timeout is ambiguous: the request may have reached Meta and
+                # been dispatched. Blindly re-POSTing duplicates customer
+                # messages (no idempotency key exists on the Cloud API), so a
+                # timeout is surfaced immediately instead of retried.
+                logger.error(
+                    "[WhatsApp] Network timeout connecting to Meta Graph API at %s for %s "
+                    "(attempt %s/%s); NOT retrying to avoid duplicate delivery -- "
+                    "verify in the Meta manager before resending.",
+                    self.base_url, masked_phone, attempt, max_attempts
+                )
+                return {
                     "success": False,
-                    "error": "Timeout connecting to Meta WhatsApp API.",
-                    "status": "failed"
+                    "error": "Timeout connecting to Meta WhatsApp API; delivery state unknown.",
+                    "status": "timeout_unverified"
                 }
-                if attempt < max_attempts:
-                    delay = min(2 ** attempt, 8)
-                    logger.warning(
-                        "[WhatsApp] Graph API timeout for %s (attempt %s/%s); waiting %ss",
-                        masked_phone, attempt, max_attempts, delay
-                    )
-                    time.sleep(delay)
-                    continue
-                logger.error(f"[WhatsApp] Network timeout connecting to Meta Graph API at {self.base_url}")
-                return last_error
             except Exception as err:
                 logger.error(f"[WhatsApp] Exception during Graph API request: {err}")
                 return {

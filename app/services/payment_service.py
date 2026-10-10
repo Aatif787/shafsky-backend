@@ -1238,18 +1238,51 @@ class PaymentService:
                     # Capture / internal webhooks often supply a new payment_id while the
                     # pending row still stores the order_id. Prefer an active pending row
                     # for this booking instead of dropping the ledger correlation.
+                    #
+                    # SECURITY (cross-booking guard): this fallback must never attach a
+                    # payment that the gateway itself does not bind to this booking. For
+                    # the client verification endpoint the presented order_id must either
+                    # already be stored on the transaction (checked above) or its
+                    # gateway-side `receipt` must equal this booking_ref (orders are
+                    # created with receipt=booking_ref). If the gateway confirms a
+                    # different receipt, the signature belongs to someone else's payment.
                     if not transaction:
-                        transaction = next(
-                            (
-                                candidate
-                                for candidate in booking_transactions
-                                if candidate.status in (
-                                    PaymentStatus.PENDING,
-                                    PaymentStatus.PROCESSING,
-                                )
-                            ),
-                            None,
-                        )
+                        bind_pending_fallback = True
+                        if event_name == "VERIFY_ENDPOINT" and order_id and not str(order_id).startswith("order_sim_"):
+                            from app.providers.razorpay_provider import razorpay_provider as _rzp
+                            if _rzp.is_configured():
+                                _bind_res = _rzp.fetch_order(str(order_id))
+                                if _bind_res.get("success") and isinstance(_bind_res.get("order"), dict):
+                                    _receipt = str((_bind_res.get("order") or {}).get("receipt") or "")
+                                    if _receipt and booking_ref and _receipt != booking_ref:
+                                        logger.error(
+                                            f"[PaymentService] Cross-booking guard: order '{order_id}' "
+                                            f"receipt '{_receipt}' does not belong to booking '{booking_ref}'."
+                                        )
+                                        return {
+                                            "success": False,
+                                            "status": "REF_MISMATCH",
+                                            "reason": "Booking reference mismatch with order records.",
+                                            "booking_ref": booking_ref,
+                                        }
+                                else:
+                                    # Provider configured but the order could not be
+                                    # confirmed: fail closed instead of guessing in
+                                    # production. Dev/test keeps the legacy fallback so
+                                    # simulation flows with fake keys are unaffected.
+                                    bind_pending_fallback = not settings.is_production
+                        if bind_pending_fallback:
+                            transaction = next(
+                                (
+                                    candidate
+                                    for candidate in booking_transactions
+                                    if candidate.status in (
+                                        PaymentStatus.PENDING,
+                                        PaymentStatus.PROCESSING,
+                                    )
+                                ),
+                                None,
+                            )
                 else:
                     transaction = booking_transactions[0] if booking_transactions else None
             if booking_ref and transaction and transaction.status != PaymentStatus.SUCCESSFUL:
@@ -1443,15 +1476,41 @@ class PaymentService:
                     # For VERIFY_ENDPOINT, if amount or currency is not in payload, fetch from Razorpay API or transaction
                     if event_name == "VERIFY_ENDPOINT" and (received_amount_raw is None or not received_currency_raw):
                         from app.providers.razorpay_provider import razorpay_provider
+                        gateway_order_confirmed = False
                         if order_id and razorpay_provider.is_configured():
                             ord_res = razorpay_provider.fetch_order(order_id)
                             if ord_res.get("success") and ord_res.get("order"):
+                                gateway_order_confirmed = True
                                 ord_data = ord_res["order"]
                                 if received_amount_raw is None:
                                     received_amount_raw = ord_data.get("amount_paid") or ord_data.get("amount")
                                 if not received_currency_raw:
                                     received_currency_raw = ord_data.get("currency")
-
+                        if (
+                            settings.is_production
+                            and order_id
+                            and razorpay_provider.is_configured()
+                            and not gateway_order_confirmed
+                            and not str(order_id).startswith("order_sim_")
+                        ):
+                            # SECURITY: fail closed in production. When the gateway is
+                            # configured we must never validate a payment against the
+                            # transaction row's own self-asserted amount -- that would
+                            # make the amount check vacuous. Dev/test environments keep
+                            # the DB fallback below so simulation flows (fake keys, no
+                            # reachable gateway) still work; the primary cross-booking
+                            # defense is the order-receipt binding check above, which is
+                            # unconditional.
+                            logger.error(
+                                f"[PaymentService] PAYMENT_AMOUNT_CHECK: gateway order for '{order_id}' "
+                                f"could not be confirmed; rejecting verification for booking '{resolved_booking_ref}'."
+                            )
+                            return {
+                                "success": False,
+                                "status": "PAYMENT_DATA_INCOMPLETE",
+                                "reason": "Gateway order could not be confirmed for verification.",
+                                "booking_ref": resolved_booking_ref,
+                            }
                         if received_amount_raw is None and transaction and transaction.amount is not None:
                             received_amount_raw = round(float(transaction.amount) * 100)
                         if not received_currency_raw and transaction and transaction.currency:
@@ -2614,7 +2673,11 @@ class PaymentService:
         except Exception:
             raise ValueError("Invalid transaction UUID format.")
 
-        transaction = db.scalar(select(PaymentTransaction).where(PaymentTransaction.id == tx_uuid))
+        # Row lock: serialize concurrent refunds so the balance check below cannot
+        # race another in-flight refund (with_for_update is a no-op on SQLite).
+        transaction = db.scalar(
+            select(PaymentTransaction).where(PaymentTransaction.id == tx_uuid).with_for_update()
+        )
         if not transaction:
             raise ValueError(f"Transaction with ID '{payload.transaction_id}' not found.")
 
@@ -2638,6 +2701,14 @@ class PaymentService:
                 f"Refund amount (₹{payload.amount}) exceeds available refundable balance (₹{available_for_refund}). "
                 f"Total paid: ₹{transaction.amount}, already refunded: ₹{existing_refunds_total}."
             )
+
+        # Validate the state transition BEFORE any money moves at the gateway so a
+        # rejected transition can never leave funds refunded against an invalid
+        # ledger state.
+        new_total_refunded = existing_refunds_total + payload.amount
+        is_full_refund = round(new_total_refunded, 2) >= round(transaction.amount, 2)
+        new_tx_status = PaymentStatus.REFUNDED if is_full_refund else PaymentStatus.PARTIALLY_REFUNDED
+        PaymentStateMachine.validate_transition(transaction.status, new_tx_status)
 
         ref_id = f"REF-{uuid.uuid4().hex[:8].upper()}"
         gateway = (transaction.gateway_provider or "").strip().upper()
@@ -2688,11 +2759,6 @@ class PaymentService:
             gateway_refund_id = gateway_res.get("refund_id")
         else:
             raise ValueError(f"Unsupported payment gateway for refunds: '{gateway or 'UNKNOWN'}'.")
-
-        new_total_refunded = existing_refunds_total + payload.amount
-        is_full_refund = round(new_total_refunded, 2) >= round(transaction.amount, 2)
-        new_tx_status = PaymentStatus.REFUNDED if is_full_refund else PaymentStatus.PARTIALLY_REFUNDED
-        PaymentStateMachine.validate_transition(transaction.status, new_tx_status)
 
         refund = Refund(
             refund_ref=ref_id,

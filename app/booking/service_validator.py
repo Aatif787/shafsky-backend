@@ -22,7 +22,18 @@ class ServiceValidator:
             "Luxury Sedan",
             "SUV",
             "Executive Van",
-            "Ground Transport"
+            "Ground Transport",
+            "Transport"
+        ],
+        "Round Trip": [
+            "Round Trip",
+            "Round Trip Flights",
+            "Round Trip Journey"
+        ],
+        "Ticketing": [
+            "Ticketing",
+            "Air Ticketing",
+            "Flight Ticket"
         ],
         "Private Charter": [
             "Light Jet",
@@ -73,6 +84,10 @@ class ServiceValidator:
                 if child.lower() == st_lower:
                     return cat_name
 
+        if any(term in st_lower for term in ["round trip", "roundtrip"]):
+            return "Round Trip"
+        if any(term in st_lower for term in ["ticketing", "air ticket"]):
+            return "Ticketing"
         if any(term in st_lower for term in ["sedan", "suv", "van", "transfer", "driver", "ground"]):
             return "Ground Transport"
         if any(term in st_lower for term in ["jet", "charter", "helicopter", "turboprop"]):
@@ -109,8 +124,12 @@ class ServiceValidator:
 
         if category == "Airport Assistance":
             cls._validate_airport_assistance(payload, options)
-        elif category == "Ground Transport":
+        elif category in ("Ground Transport", "Transport"):
             cls._validate_ground_transport(payload, options)
+        elif category in ("Round Trip", "Round-Trip"):
+            cls._validate_round_trip(payload, options)
+        elif category in ("Ticketing", "Air Ticketing"):
+            cls._validate_ticketing(payload, options)
         elif category == "Private Charter":
             cls._validate_private_charter(payload, options)
         elif category == "Cargo & Logistics":
@@ -206,3 +225,22 @@ class ServiceValidator:
     def _validate_travel_support(cls, payload: Any, options: Dict[str, Any]) -> None:
         # Travel support validates basic common fields and options
         pass
+
+    @classmethod
+    def _validate_round_trip(cls, payload: Any, options: Dict[str, Any]) -> None:
+        origin = getattr(payload, "origin_code", None) or options.get("origin")
+        dest = getattr(payload, "dest_code", None) or options.get("destination")
+        if not origin:
+            raise HTTPException(status_code=400, detail="Round Trip enquiry requires an origin.")
+        if not dest:
+            raise HTTPException(status_code=400, detail="Round Trip enquiry requires a destination.")
+
+    @classmethod
+    def _validate_ticketing(cls, payload: Any, options: Dict[str, Any]) -> None:
+        origin = getattr(payload, "origin_code", None) or options.get("origin")
+        dest = getattr(payload, "dest_code", None) or options.get("destination")
+        if not origin:
+            raise HTTPException(status_code=400, detail="Ticketing enquiry requires an origin.")
+        if not dest:
+            raise HTTPException(status_code=400, detail="Ticketing enquiry requires a destination.")
+

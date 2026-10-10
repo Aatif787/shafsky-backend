@@ -64,6 +64,19 @@ def validate_secrets_on_startup():
         if not value or value.strip() == "" or "change-this" in value.lower() or "your_" in value.lower() or "secret" == value.lower():
             missing.append(name)
 
+    # Clerk hardening: warn when the Clerk exchange is enabled without
+    # audience/authorized-party pinning -- any token minted by the same Clerk
+    # instance would then be accepted (see app/security/clerk_jwt.py).
+    if str(getattr(settings, "CLERK_ISSUER", "") or "").strip():
+        if not str(getattr(settings, "CLERK_AUDIENCE", "") or "").strip() and not str(
+            getattr(settings, "CLERK_AUTHORIZED_PARTIES", "") or ""
+        ).strip():
+            logger.warning(
+                "CLERK_ISSUER is set without CLERK_AUDIENCE / CLERK_AUTHORIZED_PARTIES: "
+                "/api/auth/clerk-exchange will accept any token from this Clerk instance. "
+                "Set CLERK_AUDIENCE (or authorized parties), especially in production."
+            )
+
     # Validate RSA Key loading and key ID calculation
     active_kid = "unknown"
     try:

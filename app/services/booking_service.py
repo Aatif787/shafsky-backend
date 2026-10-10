@@ -161,7 +161,10 @@ class BookingService:
     @staticmethod
     def generate_booking_ref() -> str:
         date_str = datetime.now(timezone.utc).strftime("%Y%m%d")
-        rand_suffix = secrets.token_hex(2).upper()
+        # 4 random bytes (8 hex chars, 32 bits): the previous 2-byte suffix gave
+        # only 65,536 refs/day, making unauthenticated status polling enumerable.
+        # Same format, so existing refs and frontend handling stay compatible.
+        rand_suffix = secrets.token_hex(4).upper()
         return f"SHF-{date_str}-{rand_suffix}"
 
     @classmethod
@@ -894,6 +897,46 @@ class BookingService:
                 detail="Airport Assistance must be booked through the airport booking flow, not as an enquiry.",
             )
 
+        resolved_flight_num: Optional[str] = (
+            (details or {}).get("outbound_flight")
+            or (details or {}).get("flight_number")
+            or (details or {}).get("flight_num")
+            or options.get("flight_num")
+            or None
+        )
+        if resolved_flight_num:
+            resolved_flight_num = resolved_flight_num.strip().upper() or None
+
+        parsed_departure_time: Optional[datetime] = None
+        if resolved_date:
+            try:
+                clean_d = str(resolved_date).strip().replace("Z", "+00:00")
+                if "T" in clean_d:
+                    parsed_departure_time = datetime.fromisoformat(clean_d)
+                elif " " in clean_d:
+                    parsed_departure_time = datetime.strptime(clean_d, "%Y-%m-%d %H:%M")
+                else:
+                    parsed_departure_time = datetime.strptime(clean_d[:10], "%Y-%m-%d")
+                if parsed_departure_time and parsed_departure_time.tzinfo is None:
+                    parsed_departure_time = parsed_departure_time.replace(tzinfo=timezone.utc)
+            except Exception:
+                parsed_departure_time = None
+
+        enquiry_details = dict(details or {})
+        if notes and not enquiry_details.get("additional_requirements") and not enquiry_details.get("notes"):
+            enquiry_details["additional_requirements"] = notes
+
+        enquiry_pax = (
+            enquiry_details.get("passenger_count")
+            or enquiry_details.get("passengerCount")
+            or options.get("passenger_count")
+            or 1
+        )
+        try:
+            enquiry_pax = int(enquiry_pax)
+        except (ValueError, TypeError):
+            enquiry_pax = 1
+
         metadata_json: Dict[str, Any] = {
             "enquiry": True,
             "quote_only": True,
@@ -901,7 +944,8 @@ class BookingService:
             "origin_label": (resolved_origin or "").strip() or None,
             "destination_label": (resolved_dest or "").strip() or None,
             "service_date": (resolved_date or "").strip() or None,
-            "details": details or {},
+            "passenger_count": enquiry_pax,
+            "details": enquiry_details,
         }
 
         max_attempts = 5
@@ -918,10 +962,10 @@ class BookingService:
                 passenger_email=payload.passenger_email,
                 passenger_phone=payload.passenger_phone,
                 service_category=resolved_category,
-                flight_num=None,
+                flight_num=resolved_flight_num,
                 origin_code=resolved_origin,
                 dest_code=resolved_dest,
-                departure_time=None,
+                departure_time=parsed_departure_time,
                 arrival_time=None,
                 service_type=service_type.strip(),
                 selected_services=payload.selected_services,
@@ -942,19 +986,13 @@ class BookingService:
                 db.refresh(new_booking)
                 try:
                     from app.services.notification_service import NotificationService
-                    passenger_count = (
-                        (details or {}).get("passenger_count")
-                        or (details or {}).get("passengerCount")
-                        or options.get("passenger_count")
-                        or 1
-                    )
                     NotificationService.notify_booking_created(db, {
                         "booking_ref": new_booking.booking_ref,
                         "passenger_name": new_booking.passenger_name,
                         "passenger_email": new_booking.passenger_email,
                         "passenger_phone": new_booking.passenger_phone,
-                        "passenger_count": passenger_count,
-                        "flight_num": None,
+                        "passenger_count": enquiry_pax,
+                        "flight_num": resolved_flight_num,
                         "origin_code": resolved_origin,
                         "dest_code": resolved_dest,
                         "airport_code": None,
@@ -968,7 +1006,7 @@ class BookingService:
                         "currency": "INR",
                         "status": "PENDING",
                         "notes": notes,
-                        "details": details or {},
+                        "details": enquiry_details,
                         "service_options": options,
                     })
                 except Exception:

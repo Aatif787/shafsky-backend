@@ -190,6 +190,10 @@ class WhatsAppBookingStateMachine(
         Returns: (conversation_object, is_session_expired_flag)
         """
         clean_phone = "".join(filter(str.isdigit, phone_number))
+        # PII: logs must never carry full phone numbers.
+        masked_phone_for_log = (
+            clean_phone[:3] + "****" + clean_phone[-3:] if len(clean_phone) > 6 else "****"
+        )
         stmt = select(WhatsAppConversation).where(WhatsAppConversation.phone_number == clean_phone)
         conv = db.execute(stmt).scalar_one_or_none()
 
@@ -219,10 +223,10 @@ class WhatsAppBookingStateMachine(
                     raise
                 logger.info(
                     "[WhatsApp Session] Lost create race; using existing session for %s",
-                    clean_phone,
+                    masked_phone_for_log,
                 )
             else:
-                logger.info("[WhatsApp Session] New session for %s", clean_phone)
+                logger.info("[WhatsApp Session] New session for %s", masked_phone_for_log)
         else:
             # Use last_user_activity_at for timeout, falling back to updated_at
             last_act = conv.last_user_activity_at or conv.updated_at or conv.created_at
@@ -235,7 +239,7 @@ class WhatsAppBookingStateMachine(
                 ):
                     logger.info(
                         "[WhatsApp Session] Session expired for %s after %.0fs inactivity.",
-                        clean_phone,
+                        masked_phone_for_log,
                         inactivity_seconds,
                     )
                     conv = cls._reset_conversation_fields(conv, db)
@@ -247,13 +251,13 @@ class WhatsAppBookingStateMachine(
                 else:
                     logger.info(
                         "[WhatsApp Session] Existing session for %s (state: %s)",
-                        clean_phone,
+                        masked_phone_for_log,
                         conv.current_state,
                     )
             else:
                 logger.info(
                     "[WhatsApp Session] Existing session for %s (state: %s)",
-                    clean_phone,
+                    masked_phone_for_log,
                     conv.current_state,
                 )
 

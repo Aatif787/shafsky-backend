@@ -8,7 +8,6 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional
 import jwt
-from passlib.context import CryptContext
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
@@ -18,10 +17,11 @@ from app.security.jwt import SecurityJWT
 
 logger = logging.getLogger("shafsky.security.auth_service")
 
-try:
-    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-except Exception:
-    pwd_context = None
+# NOTE: password hashing uses raw `bcrypt` below (hash_password/verify_password)
+# with bcrypt's standard 72-byte input limit (inputs are truncated explicitly).
+# passlib was removed: it is unmaintained and hard-crashes with bcrypt>=4.1/5.x
+# (its backend self-test raises ValueError), and its CryptContext here was dead
+# code -- never referenced anywhere in the codebase.
 
 
 class AuthService:

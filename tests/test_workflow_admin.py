@@ -127,6 +127,10 @@ def test_02_workflow_search():
     ensure_test_definition(db, unique_service)
 
     pnr_tag = f"PNR-{uuid.uuid4().hex[:6].upper()}"
+    # Unique per run: a hardcoded flight number accumulates matches on a
+    # persistent test database and the newest instance eventually falls
+    # outside the search result page (limit=20), breaking repeatability.
+    flight_tag = f"EK-{uuid.uuid4().hex[:6].upper()}"
     inst = WorkflowEngine.create_instance(
         db,
         service_type=unique_service,
@@ -134,7 +138,7 @@ def test_02_workflow_search():
         initial_context={
             "pnr": pnr_tag,
             "passenger_name": "Captain Kirk",
-            "flight_number": "EK-202"
+            "flight_number": flight_tag
         }
     )
 
@@ -149,7 +153,7 @@ def test_02_workflow_search():
     assert any(r.id == inst.id for r in s_pax["results"])
 
     # Search by Flight #
-    s_flt = WorkflowAdminService.search_workflows(db, query_str="EK-202")
+    s_flt = WorkflowAdminService.search_workflows(db, query_str=flight_tag)
     assert s_flt["total"] >= 1
     assert any(r.id == inst.id for r in s_flt["results"])
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 import csv
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 
 def _csv_candidates() -> List[Path]:
@@ -52,7 +52,7 @@ def resolve_airports_csv_path() -> Path:
     )
 
 
-def _public_row(row: Dict[str, str]) -> Dict[str, str]:
+def _public_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "code": row["code"],
         "name": row["name"],
@@ -62,12 +62,20 @@ def _public_row(row: Dict[str, str]) -> Dict[str, str]:
     }
 
 
+POPULAR_GLOBAL_HUBS: Tuple[str, ...] = (
+    "DEL", "BOM", "DXB", "LHR", "SIN", "JFK", "DOH", "BLR", "HYD", "MAA",
+    "FRA", "CDG", "AMS", "IST", "BKK", "KUL", "HKG", "HND", "SYD", "LAX",
+    "ORD", "SFO", "YYZ", "ZRH", "AUH", "JED", "RUH", "MUC", "FCO", "BCN"
+)
+
+
 @lru_cache(maxsize=1)
-def load_global_airports() -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
-    """Returns (all IATA airports, large_airport subset). CSV only."""
+def load_global_airports() -> Tuple[List[Dict[str, str]], List[Dict[str, str]], Dict[str, Dict[str, str]]]:
+    """Returns (all IATA airports, large_airport subset, by_code index). CSV only."""
     path = resolve_airports_csv_path()
     rows: List[Dict[str, str]] = []
     large: List[Dict[str, str]] = []
+    by_code: Dict[str, Dict[str, str]] = {}
     with path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
         for raw in reader:
@@ -87,39 +95,53 @@ def load_global_airports() -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
                 "scheduled": scheduled,
             }
             rows.append(row)
+            if iata not in by_code:
+                by_code[iata] = row
             if kind == "large_airport" and scheduled == "yes":
                 large.append(row)
-    return rows, large
+    return rows, large, by_code
 
 
 def preload_global_airports() -> int:
-    rows, _large = load_global_airports()
+    rows, _large, _by_code = load_global_airports()
     return len(rows)
 
 
 def search_global_csv_airports(query: str, limit: int = 30) -> List[Dict[str, str]]:
     """Search CSV only. Does not consult the Shafsky supported-airport database."""
-    airports, large = load_global_airports()
+    airports, large, by_code = load_global_airports()
     q = (query or "").strip().upper()
     if not q:
-        return [_public_row(row) for row in large[:limit]]
+        hubs = [_public_row(by_code[c]) for c in POPULAR_GLOBAL_HUBS if c in by_code]
+        hub_codes = {h["code"] for h in hubs}
+        extras = [_public_row(row) for row in large if row["code"] not in hub_codes]
+        return (hubs + extras)[:limit]
 
     exact: List[Dict[str, str]] = []
-    starts: List[Dict[str, str]] = []
-    contains: List[Dict[str, str]] = []
+    starts_large: List[Dict[str, str]] = []
+    starts_other: List[Dict[str, str]] = []
+    contains_large: List[Dict[str, str]] = []
+    contains_other: List[Dict[str, str]] = []
 
     for row in airports:
         code = row["code"]
         name = row["name"].upper()
         city = row["city"].upper()
+        is_large = row.get("type") == "large_airport"
         if code == q:
             exact.append(row)
         elif code.startswith(q) or city.startswith(q) or name.startswith(q):
-            starts.append(row)
+            if is_large:
+                starts_large.append(row)
+            else:
+                starts_other.append(row)
         elif q in name or q in city or q in code:
-            contains.append(row)
+            if is_large:
+                contains_large.append(row)
+            else:
+                contains_other.append(row)
 
-    ranked = exact + starts + contains
+    ranked = exact + starts_large + starts_other + contains_large + contains_other
     seen = set()
     unique: List[Dict[str, str]] = []
     for row in ranked:

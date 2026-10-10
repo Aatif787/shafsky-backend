@@ -74,12 +74,18 @@ class RateLimiter:
         redis_client = cls._get_redis()
         if redis_client:
             try:
-                count = redis_client.incr(key)
-                if count == 1:
+                # Atomic window accounting: INCR + TTL in one MULTI/EXEC. The
+                # previous INCR/EXPIRE pair could be split by a crash, leaving
+                # the key without a TTL and that key permanently rate-limited.
+                pipe = redis_client.pipeline(transaction=True)
+                pipe.incr(key)
+                pipe.ttl(key)
+                count, ttl = pipe.execute()
+                if count == 1 or (ttl is not None and ttl < 0):
+                    # First hit in the window, or self-heal a lost EXPIRE.
                     redis_client.expire(key, window_seconds)
 
                 if count > max_requests:
-                    ttl = redis_client.ttl(key)
                     retry_after = int(ttl if ttl and ttl > 0 else window_seconds)
                     logger.warning(
                         "Rate limit exceeded for %s: count=%d > max=%d (window=%ds, retry_after=%ds)",

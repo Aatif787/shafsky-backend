@@ -261,7 +261,9 @@ class CrmService:
                 "flightNum": b.flight_num,
                 "originCode": b.origin_code,
                 "destCode": b.dest_code,
-                "departureTime": b.departure_time.isoformat(),
+                # departure_time is nullable (bookings created before the flight
+                # is known); isoformat() on None crashed the whole aggregation.
+                "departureTime": b.departure_time.isoformat() if b.departure_time else None,
                 "totalAmount": float(b.total_amount),
                 "status": b.status.value if isinstance(b.status, BookingStatus) else str(b.status)
             }
@@ -277,7 +279,10 @@ class CrmService:
                 cancelled_bookings.append(b_dict)
             else:
                 upcoming_count += 1
-                total_spent += float(b.total_amount)
+                # Only money that was actually paid counts as spent: PENDING
+                # (unpaid) bookings inflated travelStatistics.totalSpentINR.
+                if b.status == BookingStatus.CONFIRMED:
+                    total_spent += float(b.total_amount)
                 upcoming_bookings.append(b_dict)
 
         customer_dict = cls.format_customer_dict(profile)

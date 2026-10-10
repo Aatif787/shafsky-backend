@@ -210,11 +210,16 @@ async def create_order_endpoint(
 
     order_id = res["order_id"]
 
-    # Check if a pending transaction already exists for this order/booking
+    # Check if a pending transaction already exists for this order/booking.
+    # SECURITY: only reclaim a RAZORPAY pending row. An ICICI (or other gateway)
+    # pending row must never have its gateway_payment_id overwritten with a
+    # Razorpay order id -- that hijacks the ledger row and breaks the other
+    # gateway's callback matching.
     tx = db.scalar(
         select(PaymentTransaction).where(
             PaymentTransaction.entity_id == booking_ref,
             PaymentTransaction.status == PaymentStatus.PENDING,
+            PaymentTransaction.gateway_provider == "RAZORPAY",
         ).order_by(PaymentTransaction.created_at.desc())
     )
     if not tx:

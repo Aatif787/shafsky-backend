@@ -103,26 +103,29 @@ app = FastAPI(
 
 from app.middleware.idempotency import IdempotencyMiddleware
 
-# Observability, Security & Idempotency Middlewares
+# Observability, Security & Idempotency Middlewares.
+# Starlette: the LAST-added middleware is OUTERMOST. The desired chain is
+# CORS -> Security -> Idempotency -> Observability -> routes, so security
+# controls (rate limiting, security headers) also apply to idempotent cached
+# replays instead of being bypassed by them.
 app.add_middleware(ObservabilityMiddleware)
-app.add_middleware(SecurityMiddleware)
 app.add_middleware(IdempotencyMiddleware)
+app.add_middleware(SecurityMiddleware)
 
 # CORS Middleware MUST be added last so Starlette places it outermost.
 # This lets CORSMiddleware handle browser OPTIONS preflight requests before
 # they reach route/security/idempotency middleware.
 #
-# Production still allows *.vercel.app (admin portal + preview deploys) via regex;
-# explicit ALLOWED_ORIGINS remain required for non-Vercel frontends.
-_CORS_ORIGIN_REGEX = (
-    r"^https?://(localhost|127\.0\.0\.1|.*\.ngrok-free\.(dev|app)|.*\.ngrok\.io|"
-    r"(shafsky[a-zA-Z0-9_-]*|shafsky)\.vercel\.app|"
-    r"([a-zA-Z0-9_-]+\.)*shafskyaviation\.(in|com)|"
-    r"([a-zA-Z0-9_-]+\.)*shafsky\.(in|com)"
-    r")(:\d+)?$"
-)
+# Environment-aware origin allowlist shared with the cookie origin check:
+# production admits only HTTPS Shafsky domains / Vercel tenant hosts (no
+# localhost, no ngrok tunnels, no plain http), while development keeps the
+# permissive regex for local tooling. Explicit ALLOWED_ORIGINS entries always
+# take precedence. See app/security/cors_origins.py.
+from app.security.cors_origins import allowed_origins, browser_origin_regex
+
+_CORS_ORIGIN_REGEX = browser_origin_regex()
 _cors_kwargs = {
-    "allow_origins": getattr(settings, "ALLOWED_ORIGINS", []),
+    "allow_origins": allowed_origins(),
     "allow_credentials": getattr(settings, "CORS_ALLOW_CREDENTIALS", False),
     "allow_methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     "allow_headers": [

@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 from typing import Any
 from urllib.parse import quote
@@ -232,3 +233,11 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=True, extra="ignore")
 
 settings = Settings()
+
+# Warn when guest payment-session tokens silently fall back to the main JWT
+# signing key (one key shared across two security domains; invisible in ops).
+if not (os.getenv("PAYMENT_SESSION_SECRET") or "").strip():
+    logging.getLogger("shafsky.config").warning(
+        "PAYMENT_SESSION_SECRET is not set; guest payment-session tokens are "
+        "signed with the main JWT signing key. Set a dedicated value."
+    )
