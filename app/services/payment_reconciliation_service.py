@@ -41,8 +41,7 @@ class PaymentReconciliationService:
                     PaymentTransaction.status.in_([PaymentStatus.PENDING, PaymentStatus.PROCESSING]),
                     PaymentTransaction.created_at >= cutoff_start,
                     PaymentTransaction.created_at <= cutoff_end,
-                    PaymentTransaction.is_duplicate.isnot(True),
-                    PaymentTransaction.gateway_provider == "RAZORPAY"
+                    PaymentTransaction.is_duplicate.isnot(True)
                 )
             )
             .order_by(PaymentTransaction.created_at.desc())
