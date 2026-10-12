@@ -10,7 +10,7 @@ from sqlalchemy import select, desc, text
 from fastapi import HTTPException, BackgroundTasks
 
 from app.config import settings
-from app.models.schema import NotificationRecord, NotificationStatus
+from app.models.schema import NotificationRecord, NotificationStatus, UserNotification
 from app.schemas.notification import NotificationSendRequest
 from app.services.notification_templates import NotificationTemplateEngine
 
@@ -224,6 +224,58 @@ class NotificationService:
             db.rollback()
         finally:
             db.close()
+
+    @classmethod
+    def create_notification(
+        cls,
+        db: Session,
+        user_id: Optional[Any],
+        title: str,
+        message: str,
+        notification_type: str = "GENERAL",
+        channel: Optional[str] = None,
+        data: Optional[Dict[str, Any]] = None,
+        link: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Optional[UserNotification]:
+        """Creates an in-app UserNotification record for a user."""
+        if not user_id:
+            logger.warning("create_notification skipped: user_id is empty")
+            return None
+
+        try:
+            if isinstance(user_id, str):
+                u_uuid = uuid.UUID(user_id.strip())
+            elif isinstance(user_id, uuid.UUID):
+                u_uuid = user_id
+            else:
+                logger.warning("create_notification skipped: invalid user_id type %s", type(user_id))
+                return None
+        except (ValueError, TypeError, AttributeError) as ex:
+            logger.warning("create_notification skipped: cannot parse user_id %s: %s", user_id, ex)
+            return None
+
+        kind = (notification_type or channel or "GENERAL").upper()
+        now = datetime.now(timezone.utc)
+        record = UserNotification(
+            id=uuid.uuid4(),
+            user_id=u_uuid,
+            kind=kind,
+            title=title,
+            body=message,
+            link=link,
+            read_at=None,
+            created_at=now,
+        )
+        db.add(record)
+        try:
+            db.commit()
+            db.refresh(record)
+            return record
+        except Exception as ex:
+            db.rollback()
+            logger.warning("create_notification commit failed for user %s: %s", user_id, ex)
+            raise
 
     @classmethod
     def enqueue_notification(

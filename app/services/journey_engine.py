@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session, joinedload
 logger = logging.getLogger(__name__)
 
 from app.models.journey_models import AirportService, Service, SupportedAirport, ServiceQuery
+from app.models.schema import Booking, BookingStatus
 from app.services.booking_cutoff import airport_min_notice_hours
 from app.services.service_airport_rules import (
     derive_flight_type_from_route,
@@ -890,7 +891,7 @@ class JourneyDetectionEngine:
                             country=airport.country if airport else None,
                             is_airport_supported=False,
                             status="REQUEST_REQUIRED",
-                            status_reason=f"Airport '{apt_code}' is currently not supported for instant online booking. A concierge request is required.",
+                            status_reason=f"Airport '{apt_code}' is currently not supported for instant online booking. A service enquiry is required.",
                             is_bookable_online=False,
                             currency="INR",
                         )
@@ -966,8 +967,8 @@ class JourneyDetectionEngine:
                             additional_benefits=getattr(aps, "additional_benefits", []) or [],
                             icon=svc.icon,
                             journey_type=aps.journey_type,
-                            min_booking_notice_hours=aps.min_booking_notice_hours,
-                            display_priority=aps.display_priority,
+                            min_booking_notice_hours=getattr(aps, "min_booking_notice_hours", 6) or 6,
+                            display_priority=getattr(aps, "display_priority", 0) or 0,
                             price=float(aps.price),
                             currency=aps.currency or "INR",
                             is_bookable_online=True,
@@ -1053,7 +1054,7 @@ class JourneyDetectionEngine:
 
         unavail_msg = None
         if none_avail:
-            unavail_msg = "None of your selected services are currently available for instant online payment. You can submit an enquiry for VIP concierge assistance."
+            unavail_msg = "This airport is not currently serviceable. Submit your request and our team will check availability."
         elif unavail_count > 0:
             unavail_msg = f"{unavail_count} of your requested services require an operational request, while available services can be booked and paid for now."
 
@@ -1115,7 +1116,7 @@ class JourneyDetectionEngine:
             return ServiceQueryResponse(
                 success=True,
                 query_ref=existing.query_ref,
-                message="Your service enquiry has been registered. Our 24/7 VIP concierge desk will contact you promptly.",
+                message="Your service enquiry has been registered. Our team will review your request and contact you.",
                 created_at=existing.created_at.isoformat(),
                 unavailable_services=existing.unavailable_services or payload.unavailable_services,
             )
@@ -1145,6 +1146,35 @@ class JourneyDetectionEngine:
             notes=payload.notes,
             source="WEB",
         )
+
+        existing_booking = db.scalar(
+            select(Booking).where(Booking.booking_ref == query_ref)
+        )
+        if not existing_booking:
+            dep_apt = (payload.itinerary or {}).get("departure_airport") or (payload.itinerary or {}).get("origin")
+            arr_apt = (payload.itinerary or {}).get("arrival_airport") or (payload.itinerary or {}).get("destination")
+            booking_record = Booking(
+                id=uuid.uuid4(),
+                booking_ref=query_ref,
+                passenger_name=clean_name,
+                passenger_email=clean_email,
+                passenger_phone=clean_phone,
+                service_category="Airport Assistance",
+                flight_num=clean_flight,
+                origin_code=dep_apt,
+                dest_code=arr_apt,
+                departure_time=None,
+                arrival_time=None,
+                service_type="Service Enquiry",
+                selected_services={"services": payload.requested_services, "unavailable": payload.unavailable_services},
+                service_options={},
+                metadata_json={"itinerary": payload.itinerary, "source": "ENQUIRY_FLOW", "query_ref": query_ref},
+                total_amount=0.0,
+                currency="INR",
+                status=BookingStatus.PENDING,
+                notes=payload.notes or "Service enquiry submitted for non-serviceable airport availability check.",
+            )
+            db.add(booking_record)
 
         try:
             db.add(record)
@@ -1182,7 +1212,7 @@ class JourneyDetectionEngine:
         return ServiceQueryResponse(
             success=True,
             query_ref=record.query_ref,
-            message="Your service enquiry has been registered. Our 24/7 VIP concierge desk will contact you promptly.",
-            created_at=record.created_at.isoformat(),
+            message="Your service enquiry has been registered. Our team will review your request and contact you.",
+            created_at=(record.created_at or datetime.now(timezone.utc)).isoformat(),
             unavailable_services=payload.unavailable_services,
         )
