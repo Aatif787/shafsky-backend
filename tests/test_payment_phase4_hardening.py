@@ -8,6 +8,7 @@ import hmac
 import hashlib
 import json
 import uuid
+from typing import Optional
 from datetime import datetime, timezone, timedelta
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
@@ -59,7 +60,7 @@ def create_mock_admin_token() -> str:
     )
 
 
-def create_mock_customer_token(email: str = "customer@shafsky.com", user_id: str = None) -> str:
+def create_mock_customer_token(email: str = "customer@shafsky.com", user_id: Optional[str] = None) -> str:
     return AuthService.create_access_token(
         data={
             "sub": email,
@@ -157,9 +158,11 @@ def test_end_to_end_booking_payment_and_verification():
     db.close()
     db = TestingSessionLocal()
     booking = db.scalar(select(Booking).where(Booking.booking_ref == booking_ref))
+    assert booking is not None
     assert booking.status == BookingStatus.CONFIRMED
 
     tx = db.scalar(select(PaymentTransaction).where(PaymentTransaction.entity_id == booking_ref))
+    assert tx is not None
     assert tx.status == PaymentStatus.SUCCESSFUL
     assert tx.gateway_payment_id == payment_id
 
@@ -240,6 +243,7 @@ def test_double_payment_protection():
 
     dup_tx = [t for t in txs if t.is_duplicate][0]
     assert dup_tx.gateway_payment_id == "pay_second_222"
+    assert dup_tx.notes is not None
     assert "DUPLICATE_PAYMENT_DETECTED" in dup_tx.notes
 
     # Verify original booking remained unaffected
@@ -359,6 +363,7 @@ def test_refund_success_and_invoice_cancellation():
 
     inv = PaymentService.generate_invoice(db, tx, "Diana Prince", "diana@example.com")
     db.commit()
+    assert inv is not None
     assert inv.status == InvoiceStatus.PAID
 
     admin_token = create_mock_admin_token()

@@ -78,7 +78,7 @@ async def create_order_endpoint(
 
     booking_ref = (payload.receipt or (payload.notes.get("booking_ref") if payload.notes else None) or "").strip()
 
-    if payload.amount is not None and int(round(float(payload.amount))) < 100:
+    if payload.amount is not None and round(float(payload.amount)) < 100:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Amount must be at least 100 paise (INR 1.00)."
@@ -132,7 +132,7 @@ async def create_order_endpoint(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Payment session required. Provide a valid payment_token or sign in as staff.",
                 )
-            if str(apt_booking.status or "").upper() in {
+            if (apt_booking.status or "").upper() in {
                 "CONFIRMED",
                 "CANCELLED",
                 "REJECTED",
@@ -146,11 +146,11 @@ async def create_order_endpoint(
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Airport booking has no payable total amount.")
             authoritative_amount_rupees = float(apt_booking.total_price)
             authoritative_currency = apt_booking.currency or "INR"
-            customer_id = str(apt_booking.customer_id) if apt_booking.customer_id else None
+            customer_id = apt_booking.customer_id if apt_booking.customer_id else None
         else:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Booking '{booking_ref}' not found.")
 
-    authoritative_paise = int(round(authoritative_amount_rupees * 100))
+    authoritative_paise = round(authoritative_amount_rupees * 100)
     if authoritative_paise < 100:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -170,7 +170,7 @@ async def create_order_endpoint(
         )
         .order_by(PaymentTransaction.created_at.desc())
     )
-    existing_order_id = str(existing_tx.gateway_payment_id or "") if existing_tx else ""
+    existing_order_id = (existing_tx.gateway_payment_id or "") if existing_tx else ""
     if existing_order_id.startswith("order_") and not existing_order_id.startswith("order_sim_"):
         return RazorpayCreateOrderResponse(
             order_id=existing_order_id,
@@ -460,7 +460,7 @@ def get_transaction_endpoint(
         "MEET_AND_ASSIST_STAFF", "CONCIERGE_TEAM", "CUSTOMER_SUPPORT",
     )
     owns = False
-    if user_id and tx.customer_id and str(tx.customer_id) == user_id:
+    if user_id and tx.customer_id and tx.customer_id == user_id:
         owns = True
     gateway = tx.gateway_response or {}
     if email and str(gateway.get("customer_email", "")).lower() == email:
@@ -988,7 +988,7 @@ def customer_payment_history_endpoint(
     user_id = current_user.get("user_id") or current_user.get("userId")
     email = current_user.get("email") or current_user.get("sub")
 
-    if payload.userId and str(payload.userId) != str(user_id or ""):
+    if payload.userId and payload.userId != str(user_id or ""):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You may only view your own payment history.",

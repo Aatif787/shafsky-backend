@@ -286,6 +286,7 @@ def test_whatsapp_state_sends_verified_message(mock_verify, mock_buttons, mock_t
         assert res["status"] == "flight_verified"
         assert conv.current_state == "FLIGHT_CONFIRMATION"
         assert conv.flight_num is None
+        assert conv.flight_details_json is not None
         assert conv.flight_details_json["verification_status"] == "pending_confirmation"
         pending = conv.flight_details_json["_pending_verified_flight"]
         assert pending["origin_iata"] == "DEL"

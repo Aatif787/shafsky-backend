@@ -106,6 +106,7 @@ def test_whatsapp_future_date_booking_flow_allows_confirmation(mock_text, mock_l
         assert res_date["status"] == "passenger_count_prompt_sent"
         db.refresh(conv)
         assert travel.strftime("%B") in (conv.booking_date or "")
+        assert conv.flight_details_json is not None
         assert iso_day in conv.flight_details_json.get("departure_scheduled", "")
 
         # Step 2: Transition to review and confirm
@@ -128,6 +129,7 @@ def test_whatsapp_future_date_booking_flow_allows_confirmation(mock_text, mock_l
         from app.models.schema import Booking
         booking_row = db.query(Booking).filter(Booking.booking_ref == conv.booking_ref).first()
         assert booking_row is not None
+        assert booking_row.departure_time is not None
         assert booking_row.departure_time.date() == travel
         assert booking_row.passenger_name == "Farooqui"
         assert booking_row.total_amount == 6000.0

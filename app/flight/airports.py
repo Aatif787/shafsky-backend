@@ -49,6 +49,8 @@ AIRPORT_REGISTRY: Dict[str, Dict[str, str]] = {
     "IXA": {"name": "Maharaja Bir Bikram Airport", "city": "Agartala", "country": "India", "timezone": "Asia/Kolkata"},
     "IXZ": {"name": "Veer Savarkar International Airport", "city": "Port Blair", "country": "India", "timezone": "Asia/Kolkata"},
     "IMF": {"name": "Bir Tikendrajit International Airport", "city": "Imphal", "country": "India", "timezone": "Asia/Kolkata"},
+    "IXJ": {"name": "Jammu Airport", "city": "Jammu", "country": "India", "timezone": "Asia/Kolkata"},
+    "NAG": {"name": "Dr. Babasaheb Ambedkar International Airport", "city": "Nagpur", "country": "India", "timezone": "Asia/Kolkata"},
     "AYJ": {"name": "Maharishi Valmiki International Airport", "city": "Ayodhya", "country": "India", "timezone": "Asia/Kolkata"},
     "DXB": {"name": "Dubai International Airport", "city": "Dubai", "country": "United Arab Emirates", "timezone": "Asia/Dubai"},
     "DOH": {"name": "Doha Hamad International Airport", "city": "Doha", "country": "Qatar", "timezone": "Asia/Qatar"},

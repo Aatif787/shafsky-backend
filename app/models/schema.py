@@ -2,7 +2,7 @@ import uuid
 from typing import Optional
 from datetime import datetime, timezone
 from enum import Enum as PyEnum
-from sqlalchemy import String, Boolean, DateTime, Enum, ForeignKey, Numeric, JSON, Integer, Text, Index
+from sqlalchemy import String, Boolean, DateTime, Enum, ForeignKey, Numeric, JSON, Integer, Text, Index, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 from app.database import Base
@@ -691,3 +691,26 @@ class FlightAPICache(Base):
     response_data: Mapped[dict] = mapped_column(JSON, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class WebsiteContactSetting(Base):
+    """
+    Dynamic contact numbers for public website services.
+    Supports exactly two independently editable slots per canonical service.
+    """
+    __tablename__ = "website_contact_settings"
+    __table_args__ = (
+        UniqueConstraint("service_key", "slot_index", name="uq_website_contact_service_slot"),
+        Index("ix_website_contact_settings_service_key", "service_key"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    service_key: Mapped[str] = mapped_column(String(50), nullable=False)
+    service_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    slot_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    country_code: Mapped[Optional[str]] = mapped_column(String(10), nullable=True, default="")
+    phone_number: Mapped[Optional[str]] = mapped_column(String(30), nullable=True, default="")
+    full_phone_number: Mapped[Optional[str]] = mapped_column(String(40), nullable=True, default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))

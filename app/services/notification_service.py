@@ -1,16 +1,31 @@
-import uuid
-import re
-import httpx
+import base64
 import logging
+import os
+import re
+import uuid
 import zlib
 from datetime import datetime, timezone
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+from fastapi import BackgroundTasks, HTTPException
+import httpx
+from sqlalchemy import desc, select, text
 from sqlalchemy.orm import Session
-from sqlalchemy import select, desc, text
-from fastapi import HTTPException, BackgroundTasks
+from starlette.concurrency import run_in_threadpool
 
 from app.config import settings
-from app.models.schema import NotificationRecord, NotificationStatus
+from app.integrations.whatsapp import client as wa_client_module
+from app.integrations.whatsapp.client import whatsapp_client as _default_whatsapp_client
+
+
+class _WhatsAppClientProxy:
+    def __getattr__(self, name: str) -> Any:
+        client = getattr(wa_client_module, "whatsapp_client", None) or _default_whatsapp_client
+        return getattr(client, name)
+
+
+whatsapp_client = _WhatsAppClientProxy()
+from app.models.schema import NotificationRecord, NotificationStatus, UserNotification
 from app.schemas.notification import NotificationSendRequest
 from app.services.notification_templates import NotificationTemplateEngine
 
@@ -31,9 +46,8 @@ class NotificationService:
         raw = (settings.ADMIN_NOTIFICATION_EMAILS or "").strip()
         emails = [e.strip() for e in raw.split(",") if e.strip() and "@" in e]
         if not emails:
-            fallback = (getattr(settings, "ADMIN_EMAIL", None) or "") 
+            fallback = (getattr(settings, "ADMIN_EMAIL", None) or "")
             if not fallback:
-                import os
                 fallback = (os.getenv("ADMIN_EMAIL") or "").strip()
             if fallback and "@" in fallback:
                 emails = [fallback]
@@ -72,7 +86,6 @@ class NotificationService:
         if reply_to:
             body["reply_to"] = reply_to
         if attachments:
-            import base64
             encoded = []
             for item in attachments:
                 raw = item.get("content")
@@ -136,14 +149,6 @@ class NotificationService:
         """
         if not recipient_phone:
             return {"status": "BYPASSED", "reason": "No phone number provided"}
-
-        try:
-            from starlette.concurrency import run_in_threadpool
-
-            from app.integrations.whatsapp.client import whatsapp_client
-        except Exception as exc:
-            logger.error("WhatsApp client unavailable: %s", type(exc).__name__)
-            return {"status": "FAILED", "error": "whatsapp_client_unavailable"}
 
         try:
             # send_text_message is blocking httpx IO -- keep it off the event loop.
@@ -226,6 +231,59 @@ class NotificationService:
             db.close()
 
     @classmethod
+    def create_notification(
+        cls,
+        db: Session,
+        user_id: Optional[Any],
+        title: str,
+        message: str,
+        notification_type: str = "GENERAL",
+        channel: Optional[str] = None,
+        data: Optional[Dict[str, Any]] = None,
+        link: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Optional[UserNotification]:
+        """Creates an in-app UserNotification record for a user."""
+        _ = (data, kwargs)
+        if not user_id:
+            logger.warning("create_notification skipped: user_id is empty")
+            return None
+
+        try:
+            if isinstance(user_id, str):
+                u_uuid = uuid.UUID(user_id.strip())
+            elif isinstance(user_id, uuid.UUID):
+                u_uuid = user_id
+            else:
+                logger.warning("create_notification skipped: invalid user_id type %s", type(user_id))
+                return None
+        except (ValueError, TypeError, AttributeError) as ex:
+            logger.warning("create_notification skipped: cannot parse user_id %s: %s", user_id, ex)
+            return None
+
+        kind = (notification_type or channel or "GENERAL").upper()
+        now = datetime.now(timezone.utc)
+        record = UserNotification(
+            id=uuid.uuid4(),
+            user_id=u_uuid,
+            kind=kind,
+            title=title,
+            body=message,
+            link=link,
+            read_at=None,
+            created_at=now,
+        )
+        db.add(record)
+        try:
+            db.commit()
+            db.refresh(record)
+            return record
+        except Exception as ex:
+            db.rollback()
+            logger.warning("create_notification commit failed for user %s: %s", user_id, ex)
+            raise
+
+    @classmethod
     def enqueue_notification(
         cls,
         db: Session,
@@ -258,8 +316,8 @@ class NotificationService:
     def retry_notification(cls, db: Session, notification_id: str, background_tasks: BackgroundTasks, session_factory) -> NotificationRecord:
         try:
             n_uuid = uuid.UUID(notification_id)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid notification UUID format.")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid notification UUID format.") from exc
 
         record = db.scalar(select(NotificationRecord).where(NotificationRecord.id == n_uuid))
         if not record:
@@ -531,7 +589,6 @@ class NotificationService:
         wa_sent = False
         if recipient_phone:
             try:
-                from app.integrations.whatsapp.client import whatsapp_client
                 wa_res = whatsapp_client.send_text_message(recipient_phone, rendered["whatsapp_text"])
                 if wa_res.get("success"):
                     wa_sent = True
@@ -569,7 +626,6 @@ class NotificationService:
         for a newly created Ground Transport enquiry.
         Never raises: all network and Meta API failures are caught and logged safely.
         """
-        import os
         booking_ref = str(context.get("booking_ref") or context.get("bookingRef") or "N/A")
         details = context.get("details") or {}
         options = context.get("service_options") or {}
@@ -704,7 +760,6 @@ class NotificationService:
         message_body = "\n".join(lines)
 
         try:
-            from app.integrations.whatsapp.client import whatsapp_client
             logger.info("Dispatching Ground Transport enquiry WhatsApp notification for %s", booking_ref)
             result = whatsapp_client.send_text_message(officer_phone, message_body)
             if result.get("success"):
@@ -736,7 +791,6 @@ class NotificationService:
         for a newly created Round Trip enquiry.
         Never raises: all network and Meta API failures are caught and logged safely.
         """
-        import os
         booking_ref = str(context.get("booking_ref") or context.get("bookingRef") or "N/A")
         details = context.get("details") or {}
 
@@ -812,7 +866,6 @@ class NotificationService:
         message_body = "\n".join(lines)
 
         try:
-            from app.integrations.whatsapp.client import whatsapp_client
             logger.info("Dispatching Round Trip enquiry WhatsApp notification for %s", booking_ref)
             result = whatsapp_client.send_text_message(officer_phone, message_body)
             if result.get("success"):
@@ -844,7 +897,6 @@ class NotificationService:
         for a newly created Ticketing enquiry.
         Never raises: all network and Meta API failures are caught and logged safely.
         """
-        import os
         booking_ref = str(context.get("booking_ref") or context.get("bookingRef") or "N/A")
         details = context.get("details") or {}
 
@@ -910,7 +962,6 @@ class NotificationService:
         message_body = "\n".join(lines)
 
         try:
-            from app.integrations.whatsapp.client import whatsapp_client
             logger.info("Dispatching Ticketing enquiry WhatsApp notification for %s", booking_ref)
             result = whatsapp_client.send_text_message(officer_phone, message_body)
             if result.get("success"):
@@ -942,6 +993,7 @@ class NotificationService:
         - For Ground Transport, Round Trip, and Ticketing enquiries: dispatches WhatsApp notification to the Shafsky operations team.
         - For pending payments (airport assistance): suppresses customer email until payment confirmation.
         """
+        _ = db
         booking_ref = str(context.get("booking_ref") or context.get("bookingRef") or "")
         summary: Dict[str, Any] = {
             "booking_ref": booking_ref,
@@ -1157,7 +1209,6 @@ class NotificationService:
             return {"status": "FAILED", "error": "claim_failed"}
 
         try:
-            from app.integrations.whatsapp.client import whatsapp_client
             result = whatsapp_client.send_document_message(
                 phone,
                 filename=filename,
@@ -1190,4 +1241,3 @@ class NotificationService:
         except Exception:
             db.rollback()
         return {"status": "FAILED", "error": record.error_log}
-
