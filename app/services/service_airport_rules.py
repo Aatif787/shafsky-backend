@@ -122,7 +122,7 @@ _INDIA_IDENTIFIERS = frozenset({"INDIA", "IN", "IND", "BHARAT", "REPUBLIC OF IND
 def _csv_airport_country_map() -> Dict[str, str]:
     try:
         from app.flight.csv_airports import load_global_airports
-        rows, _ = load_global_airports()
+        rows, _, _ = load_global_airports()
         return {
             (r.get("code") or "").strip().upper(): (r.get("country") or "").strip().upper()
             for r in rows
@@ -207,7 +207,7 @@ def resolve_airport_country(db, iata_code: Optional[str]) -> str:
     try:
         from app.flight.airports import AIRPORT_REGISTRY
         if code in AIRPORT_REGISTRY and AIRPORT_REGISTRY[code].get("country"):
-            return str(AIRPORT_REGISTRY[code]["country"]).strip().upper()
+            return AIRPORT_REGISTRY[code]["country"].strip().upper()
     except Exception:
         pass
 

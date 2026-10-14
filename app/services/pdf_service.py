@@ -17,21 +17,27 @@ import uuid
 import zlib
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
 import httpx
-try:
+
+if TYPE_CHECKING:
     from reportlab.lib.colors import Color, white
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfgen import canvas
-except ImportError:
-    class _Color:
-        def __init__(self, r, g, b):
-            self.r, self.g, self.b = r, g, b
-    Color = _Color
-    white = "#ffffff"
-    A4 = (595.27, 841.89)
-    canvas = None
+else:
+    try:
+        from reportlab.lib.colors import Color, white
+        from reportlab.lib.pagesizes import A4
+        from reportlab.pdfgen import canvas
+    except ImportError:
+        class _Color:
+            def __init__(self, r, g, b):
+                self.r, self.g, self.b = r, g, b
+        Color = _Color
+        white = "#ffffff"
+        A4 = (595.27, 841.89)
+        canvas = None
 
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
@@ -210,6 +216,8 @@ def build_invoice_storage_path(booking_ref: str, invoice_number: str) -> str:
 
 def generate_tax_invoice_pdf(data: Dict[str, Any]) -> bytes:
     """Render a professional A4 TAX INVOICE matching the existing frontend document."""
+    if canvas is None:
+        raise RuntimeError("reportlab is required for PDF invoice generation but is not installed")
     buffer = io.BytesIO()
     page_w, page_h = A4
     c = canvas.Canvas(buffer, pagesize=A4)
@@ -652,7 +660,7 @@ def _fulfill_paid_invoice_inner(
     from app.services.notification_service import NotificationService
 
     try:
-        inv_uuid = uuid.UUID(str(invoice_id))
+        inv_uuid = uuid.UUID(invoice_id)
     except Exception:
         logger.error("[InvoicePDF] Invalid invoice id: %s", invoice_id)
         return {"success": False, "error": "invalid_invoice_id"}
@@ -703,7 +711,7 @@ def _fulfill_paid_invoice_inner(
         pdf_bytes: Optional[bytes] = None
         attached = False
         signed_url: Optional[str] = None
-        storage_path = invoice.pdf_url if invoice.pdf_url and not str(invoice.pdf_url).startswith("http") else None
+        storage_path = invoice.pdf_url if invoice.pdf_url and not invoice.pdf_url.startswith("http") else None
 
         if invoice.pdf_url:
             storage_path = storage_path or invoice.pdf_url
@@ -746,7 +754,7 @@ def _fulfill_paid_invoice_inner(
                 logger.exception("[InvoicePDF] Confirmation notification failed for invoice %s", invoice.invoice_number)
 
             wa_phone = resolve_whatsapp_invoice_recipient(db, booking, transaction)
-            if wa_phone and (pdf_bytes or (signed_url and str(signed_url).startswith("https://"))):
+            if wa_phone and (pdf_bytes or (signed_url and signed_url.startswith("https://"))):
                 try:
                     NotificationService.send_whatsapp_invoice_document(
                         db,
@@ -754,7 +762,7 @@ def _fulfill_paid_invoice_inner(
                         recipient_phone=wa_phone,
                         invoice_number=invoice.invoice_number,
                         pdf_bytes=pdf_bytes,
-                        document_url=signed_url if signed_url and str(signed_url).startswith("https://") else None,
+                        document_url=signed_url if signed_url and signed_url.startswith("https://") else None,
                     )
                 except Exception:
                     logger.exception("[InvoicePDF] WhatsApp invoice document failed for %s", invoice.invoice_number)
@@ -770,7 +778,7 @@ def _fulfill_paid_invoice_inner(
             "pdf_url": invoice.pdf_url,
             "attached": attached,
             "signed_url": bool(signed_url),
-            "notifications_sent": bool(send_notifications),
+            "notifications_sent": send_notifications,
         }
     finally:
         if is_pg and have_lock:
@@ -796,7 +804,7 @@ def schedule_invoice_fulfillment(invoice_id: str) -> None:
     """Do not block the webhook: run PDF/storage/email after payment is committed."""
     if not invoice_id:
         return
-    inv_key = str(invoice_id).strip()
+    inv_key = invoice_id.strip()
     with _ACTIVE_FULFILLMENT_LOCK:
         if inv_key in _ACTIVE_FULFILLMENT_INVOICES:
             logger.info("[InvoicePDF] Fulfillment thread already active for invoice %s; skipping duplicate thread start", inv_key)

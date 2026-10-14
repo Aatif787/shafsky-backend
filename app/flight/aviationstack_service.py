@@ -73,7 +73,7 @@ def normalize_flight_number_input(flight_num_input: str) -> Optional[str]:
     """Normalize user flight input and convert standard 3-letter ICAO codes to 2-letter IATA."""
     if not flight_num_input or not isinstance(flight_num_input, str):
         return None
-    clean = re.sub(r"[\s\-_]+", "", str(flight_num_input).strip().upper())
+    clean = re.sub(r"[\s\-_]+", "", flight_num_input.strip().upper())
     if not clean or len(clean) < 3 or len(clean) > 8:
         return None
     match = re.match(r"^([A-Z0-9]{2,3})(\d{1,4}[A-Z]?)$", clean)
@@ -272,7 +272,7 @@ def _select_best_record(
         matched = [item for item in normalized if _match_route(jt, svc, item)[0]]
 
     pool = list(matched)
-    date_clean = str(travel_date).strip()[:10] if travel_date else ""
+    date_clean = travel_date.strip()[:10] if travel_date else ""
     if date_clean and pool:
         dated = [item for item in pool if _flight_calendar_date(item) == date_clean]
         if dated:
