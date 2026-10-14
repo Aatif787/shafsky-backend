@@ -1,3 +1,9 @@
+"""
+Notification service managing multi-channel delivery, idempotency, advisory locking,
+and background execution for customer & admin notifications.
+"""
+# pylint: disable=too-many-lines
+
 import base64
 import logging
 import os
@@ -16,6 +22,9 @@ from starlette.concurrency import run_in_threadpool
 from app.config import settings
 from app.integrations.whatsapp import client as wa_client_module
 from app.integrations.whatsapp.client import whatsapp_client as _default_whatsapp_client
+from app.models.schema import NotificationRecord, NotificationStatus, UserNotification
+from app.schemas.notification import NotificationSendRequest
+from app.services.notification_templates import NotificationTemplateEngine
 
 
 class _WhatsAppClientProxy:
@@ -25,9 +34,6 @@ class _WhatsAppClientProxy:
 
 
 whatsapp_client = _WhatsAppClientProxy()
-from app.models.schema import NotificationRecord, NotificationStatus, UserNotification
-from app.schemas.notification import NotificationSendRequest
-from app.services.notification_templates import NotificationTemplateEngine
 
 logger = logging.getLogger("shafsky.notifications")
 
@@ -231,6 +237,7 @@ class NotificationService:
             db.close()
 
     @classmethod
+    # pylint: disable=too-many-positional-arguments,too-many-arguments,unused-argument
     def create_notification(
         cls,
         db: Session,
@@ -393,6 +400,7 @@ class NotificationService:
         return [cls._serialize_notification_record(r) for r in matched]
 
     @classmethod
+    # pylint: disable=too-many-positional-arguments,too-many-arguments,too-many-return-statements
     def _acquire_notification_claim(
         cls,
         db: Session,
@@ -419,7 +427,9 @@ class NotificationService:
         now = datetime.now(timezone.utc)
 
         # Database-level advisory lock to serialize concurrent claim attempts for the same notification identity
-        is_pg = getattr(db.bind, "dialect", None) and db.bind.dialect.name == "postgresql"
+        bind = db.bind
+        dialect = getattr(bind, "dialect", None) if bind is not None else None
+        is_pg = bool(dialect and getattr(dialect, "name", None) == "postgresql")
         lock_id = zlib.crc32(f"notif_claim:{template_type}:{ref_clean}:{rec_clean}".encode("utf-8"))
 
         if is_pg:
@@ -461,18 +471,17 @@ class NotificationService:
                 last_update = r.updated_at or r.created_at
                 if last_update and (now - last_update).total_seconds() < lease_seconds:
                     return None, "IN_PROGRESS"
-                else:
-                    # Stale lease recovery (worker crashed or timed out)
-                    r.attempts += 1
-                    r.updated_at = now
-                    r.status = NotificationStatus.SENDING
-                    r.payload = payload
-                    try:
-                        db.commit()
-                        db.refresh(r)
-                    except Exception:
-                        db.rollback()
-                    return r, "PROCEED"
+                # Stale lease recovery (worker crashed or timed out)
+                r.attempts += 1
+                r.updated_at = now
+                r.status = NotificationStatus.SENDING
+                r.payload = payload
+                try:
+                    db.commit()
+                    db.refresh(r)
+                except Exception:
+                    db.rollback()
+                return r, "PROCEED"
 
         # 3. If failed record exists, check if retryable
         for r in matching_records:
@@ -488,8 +497,7 @@ class NotificationService:
                     except Exception:
                         db.rollback()
                     return r, "PROCEED"
-                else:
-                    return None, "MAX_ATTEMPTS_EXCEEDED"
+                return None, "MAX_ATTEMPTS_EXCEEDED"
 
         # 4. No record exists yet: create initial SENDING claim and commit immediately
         new_record = NotificationRecord(
@@ -567,7 +575,7 @@ class NotificationService:
                 extra={"template": template_type, "booking_ref": booking_ref},
             )
             return {"status": "SKIPPED", "reason": "duplicate", "claim_status": action}
-        elif action == "MAX_ATTEMPTS_EXCEEDED":
+        if action == "MAX_ATTEMPTS_EXCEEDED":
             logger.warning(
                 "Max attempts exceeded for notification",
                 extra={"template": template_type, "booking_ref": booking_ref},
@@ -769,13 +777,12 @@ class NotificationService:
                     result.get("message_id"),
                 )
                 return {"status": "DELIVERED", "message_id": result.get("message_id")}
-            else:
-                logger.warning(
-                    "Ground Transport WhatsApp notification dispatch failed for %s: %s",
-                    booking_ref,
-                    result.get("error"),
-                )
-                return {"status": "FAILED", "error": result.get("error")}
+            logger.warning(
+                "Ground Transport WhatsApp notification dispatch failed for %s: %s",
+                booking_ref,
+                result.get("error"),
+            )
+            return {"status": "FAILED", "error": result.get("error")}
         except Exception as exc:
             logger.warning(
                 "Ground Transport WhatsApp notification encountered exception for %s: %s",
@@ -875,13 +882,12 @@ class NotificationService:
                     result.get("message_id"),
                 )
                 return {"status": "DELIVERED", "message_id": result.get("message_id")}
-            else:
-                logger.warning(
-                    "Round Trip WhatsApp notification dispatch failed for %s: %s",
-                    booking_ref,
-                    result.get("error"),
-                )
-                return {"status": "FAILED", "error": result.get("error")}
+            logger.warning(
+                "Round Trip WhatsApp notification dispatch failed for %s: %s",
+                booking_ref,
+                result.get("error"),
+            )
+            return {"status": "FAILED", "error": result.get("error")}
         except Exception as exc:
             logger.warning(
                 "Round Trip WhatsApp notification encountered exception for %s: %s",
@@ -971,13 +977,12 @@ class NotificationService:
                     result.get("message_id"),
                 )
                 return {"status": "DELIVERED", "message_id": result.get("message_id")}
-            else:
-                logger.warning(
-                    "Ticketing WhatsApp notification dispatch failed for %s: %s",
-                    booking_ref,
-                    result.get("error"),
-                )
-                return {"status": "FAILED", "error": result.get("error")}
+            logger.warning(
+                "Ticketing WhatsApp notification dispatch failed for %s: %s",
+                booking_ref,
+                result.get("error"),
+            )
+            return {"status": "FAILED", "error": result.get("error")}
         except Exception as exc:
             logger.warning(
                 "Ticketing WhatsApp notification encountered exception for %s: %s",
@@ -987,6 +992,7 @@ class NotificationService:
             return {"status": "FAILED", "error": type(exc).__name__}
 
     @classmethod
+    # pylint: disable=unused-argument
     def notify_booking_created(cls, db: Session, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         After a booking is persisted:
@@ -1201,7 +1207,7 @@ class NotificationService:
         if action in ("ALREADY_DELIVERED", "IN_PROGRESS"):
             logger.info("Skipping duplicate WhatsApp invoice PDF (%s)", action, extra={"booking_ref": booking_ref})
             return {"status": "SKIPPED", "reason": "duplicate", "claim_status": action}
-        elif action == "MAX_ATTEMPTS_EXCEEDED":
+        if action == "MAX_ATTEMPTS_EXCEEDED":
             logger.warning("Max attempts exceeded for WhatsApp invoice PDF", extra={"booking_ref": booking_ref})
             return {"status": "FAILED", "error": "max_attempts_exceeded"}
 

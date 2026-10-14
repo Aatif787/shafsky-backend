@@ -7,10 +7,11 @@ import logging
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
-from sqlalchemy import select
+from typing import Dict, List, cast
+from sqlalchemy import Table, inspect, select
 from sqlalchemy.orm import Session
 
+from app.database import Base
 from app.models.schema import WebsiteContactSetting
 from app.schemas.contact_settings import (
     CANONICAL_SERVICES,
@@ -35,11 +36,10 @@ class ContactSettingsService:
         """
         try:
             bind = db.get_bind()
-            from sqlalchemy import inspect
-            from app.database import Base
             inspector = inspect(bind)
             if "website_contact_settings" not in inspector.get_table_names():
-                Base.metadata.create_all(bind=bind, tables=[WebsiteContactSetting.__table__], checkfirst=True)
+                table_obj = cast(Table, WebsiteContactSetting.__table__)
+                Base.metadata.create_all(bind=bind, tables=[table_obj], checkfirst=True)
         except Exception as e:
             logger.warning("Could not verify/create WebsiteContactSetting table: %s", e)
 
@@ -143,7 +143,7 @@ class ContactSettingsService:
 
         rows = db.scalars(
             select(WebsiteContactSetting)
-            .where(WebsiteContactSetting.is_active == True)  # noqa: E712
+            .where(WebsiteContactSetting.is_active.is_(True))
             .order_by(WebsiteContactSetting.service_key, WebsiteContactSetting.slot_index)
         ).all()
 
