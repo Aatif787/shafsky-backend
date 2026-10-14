@@ -122,11 +122,12 @@ _INDIA_IDENTIFIERS = frozenset({"INDIA", "IN", "IND", "BHARAT", "REPUBLIC OF IND
 def _csv_airport_country_map() -> Dict[str, str]:
     try:
         from app.flight.csv_airports import load_global_airports
-        rows, _, _ = load_global_airports()
+        res = load_global_airports()
+        rows = res[0] if isinstance(res, (tuple, list)) else res
         return {
             (r.get("code") or "").strip().upper(): (r.get("country") or "").strip().upper()
             for r in rows
-            if r.get("code") and r.get("country")
+            if isinstance(r, dict) and r.get("code") and r.get("country")
         }
     except Exception:
         return {}

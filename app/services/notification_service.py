@@ -14,7 +14,17 @@ from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from app.config import settings
-from app.integrations.whatsapp.client import whatsapp_client
+from app.integrations.whatsapp import client as wa_client_module
+from app.integrations.whatsapp.client import whatsapp_client as _default_whatsapp_client
+
+
+class _WhatsAppClientProxy:
+    def __getattr__(self, name: str) -> Any:
+        client = getattr(wa_client_module, "whatsapp_client", None) or _default_whatsapp_client
+        return getattr(client, name)
+
+
+whatsapp_client = _WhatsAppClientProxy()
 from app.models.schema import NotificationRecord, NotificationStatus, UserNotification
 from app.schemas.notification import NotificationSendRequest
 from app.services.notification_templates import NotificationTemplateEngine
