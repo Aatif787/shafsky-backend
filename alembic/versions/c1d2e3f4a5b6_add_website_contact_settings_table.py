@@ -5,6 +5,7 @@ Revises: a2b3c4d5e6f7
 Create Date: 2026-10-14 14:00:00.000000
 """
 
+from datetime import datetime, timezone
 import uuid
 from alembic import op
 import sqlalchemy as sa
@@ -50,8 +51,15 @@ def upgrade() -> None:
             "website_contact_settings",
             ["service_key"],
         )
+    else:
+        try:
+            op.alter_column("website_contact_settings", "created_at", server_default=sa.func.now())
+            op.alter_column("website_contact_settings", "updated_at", server_default=sa.func.now())
+        except Exception:
+            pass
 
     # Seed the 6 services x 2 slots = 12 records if not already populated
+    now = datetime.now(timezone.utc)
     contact_table = sa.table(
         "website_contact_settings",
         sa.column("id", postgresql.UUID(as_uuid=True)),
@@ -62,6 +70,8 @@ def upgrade() -> None:
         sa.column("phone_number", sa.String),
         sa.column("full_phone_number", sa.String),
         sa.column("is_active", sa.Boolean),
+        sa.column("created_at", sa.DateTime(timezone=True)),
+        sa.column("updated_at", sa.DateTime(timezone=True)),
     )
 
     for service_key, service_name in CANONICAL_SERVICES:
@@ -83,6 +93,8 @@ def upgrade() -> None:
                         phone_number="",
                         full_phone_number="",
                         is_active=True,
+                        created_at=now,
+                        updated_at=now,
                     )
                 )
 
