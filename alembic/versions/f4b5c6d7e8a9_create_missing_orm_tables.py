@@ -35,7 +35,12 @@ def upgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
     existing = set(inspector.get_table_names())
-    missing = [table for table in Base.metadata.sorted_tables if table.name not in existing]
+    later_migration_tables = {"service_queries", "website_contact_settings"}
+    missing = [
+        table
+        for table in Base.metadata.sorted_tables
+        if table.name not in existing and table.name not in later_migration_tables
+    ]
     if missing:
         Base.metadata.create_all(bind=bind, tables=missing)
 

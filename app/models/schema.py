@@ -2,7 +2,7 @@ import uuid
 from typing import Optional
 from datetime import datetime, timezone
 from enum import Enum as PyEnum
-from sqlalchemy import String, Boolean, DateTime, Enum, ForeignKey, Numeric, JSON, Integer, Text, Index, UniqueConstraint
+from sqlalchemy import String, Boolean, DateTime, Enum, ForeignKey, Numeric, JSON, Integer, Text, Index, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 from app.database import Base
@@ -712,5 +712,5 @@ class WebsiteContactSetting(Base):
     phone_number: Mapped[Optional[str]] = mapped_column(String(30), nullable=True, default="")
     full_phone_number: Mapped[Optional[str]] = mapped_column(String(40), nullable=True, default="")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
