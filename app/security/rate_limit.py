@@ -38,12 +38,15 @@ class RateLimiter:
     _storage: Dict[str, Tuple[int, float]] = {}
     _lock = threading.Lock()
     _redis = None
+    _last_fallback_warning_time: float = 0.0
+    _FALLBACK_WARN_INTERVAL: float = 600.0  # Log warning at most once every 10 minutes
 
     @classmethod
     def clear(cls) -> None:
         """Clear in-memory storage (primarily for testing)."""
         with cls._lock:
             cls._storage.clear()
+            cls._last_fallback_warning_time = 0.0
 
     @classmethod
     def _get_redis(cls):
@@ -112,17 +115,18 @@ class RateLimiter:
                     )
                     raise HTTPException(
                         status_code=503,
-                        detail="Rate limiting unavailable. Please retry shortly.",
+                        detail="Rate limiting unavailable. Please retry shortly.", headers={"Retry-After": "5"},
                     ) from e
                 logger.warning("Redis rate limiter failed; falling back to local limiter: %s", e)
 
         if getattr(settings, "REQUIRE_REDIS", False):
             raise HTTPException(
                 status_code=503,
-                detail="Rate limiting unavailable (Redis required).",
+                detail="Rate limiting unavailable (Redis required).", headers={"Retry-After": "5"},
             )
 
-        if getattr(settings, "is_production", False) and cls._redis is None:
+        if getattr(settings, "is_production", False) and cls._redis is None and (now - cls._last_fallback_warning_time) > cls._FALLBACK_WARN_INTERVAL:
+            cls._last_fallback_warning_time = now
             logger.warning(
                 "RateLimiter using in-memory fallback in production — "
                 "set REQUIRE_REDIS=true and ElastiCache for multi-instance safety."

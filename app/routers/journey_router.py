@@ -11,7 +11,15 @@ Public endpoints (no authentication required for browsing):
 """
 
 import re
+import time
+import logging
+
 from typing import Optional, Dict, Any, List
+
+logger = logging.getLogger("shafsky.routers.journey")
+
+_SERVICES_CATALOG_CACHE: Dict[str, Any] = {}
+_SERVICES_CATALOG_CACHE_TTL: float = 60.0
 from fastapi import APIRouter, Depends, HTTPException, Query, Body, status
 from sqlalchemy.orm import Session
 from app.database import get_db
@@ -170,6 +178,13 @@ def get_services_at_airport(
     if include_inactive:
         _role = (current_user or {}).get("role")
         include_inactive = _role in ("SUPER_ADMIN", "ADMIN", "OPERATIONS_MANAGER")
+
+    now_ts = time.time()
+    cache_key = f"{(iata_code or '').strip().upper()}:{journey_type or ''}:{flight_type or ''}:{origin or ''}:{destination or ''}:{terminal or ''}"
+    if not include_inactive:
+        cached = _SERVICES_CATALOG_CACHE.get(cache_key)
+        if cached and (now_ts - cached[0]) < _SERVICES_CATALOG_CACHE_TTL:
+            return cached[1]
     airport = JourneyDetectionEngine.get_airport_by_iata(db, iata_code)
     if not airport:
         raise HTTPException(
@@ -213,7 +228,7 @@ def get_services_at_airport(
                 item.service.description = _clean_text(item.service.description)
         data.append(item)
 
-    return AirportServiceListResponse(
+    response_data = AirportServiceListResponse(
         success=True,
         airport_iata=airport.iata_code,
         airport_name=airport.airport_name,
@@ -222,6 +237,9 @@ def get_services_at_airport(
         total=len(data),
         data=data,
     )
+    if not include_inactive:
+        _SERVICES_CATALOG_CACHE[cache_key] = (now_ts, response_data)
+    return response_data
 
 
 # ─── Journey Detection Endpoint ───
@@ -446,10 +464,24 @@ def check_multi_service_availability_endpoint(
     request: MultiServiceAvailabilityRequest,
     db: Session = Depends(get_db),
 ):
-    return JourneyDetectionEngine.check_multi_service_availability(
-        db=db,
-        request=request,
-    )
+    try:
+        return JourneyDetectionEngine.check_multi_service_availability(
+            db=db,
+            request=request,
+        )
+    except ValueError as ve:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(ve),
+        ) from ve
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(f"Unexpected error in check_multi_service_availability: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unable to evaluate service availability. Please check the requested itinerary parameters.",
+        ) from exc
 
 
 @router.post(

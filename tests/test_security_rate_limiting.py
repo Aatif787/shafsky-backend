@@ -194,3 +194,40 @@ def test_health_check_unthrottled():
     for _ in range(50):
         res = client.get("/health", headers={"X-Forwarded-For": "203.0.113.99"})
         assert res.status_code == 200
+
+
+def test_rate_limiter_in_memory_warning_throttled(monkeypatch, caplog):
+    """Verify that in production, in-memory fallback warning is throttled and not spammed."""
+    import logging
+    from app.config import settings
+
+    monkeypatch.setattr(type(settings), "is_production", property(lambda self: True))
+    monkeypatch.setattr(settings, "REQUIRE_REDIS", False)
+    RateLimiter.clear()
+    RateLimiter._redis = None
+
+    with caplog.at_level(logging.WARNING, logger="shafsky.security.rate_limit"):
+        # Fire 20 requests in production
+        for i in range(20):
+            RateLimiter.check_rate_limit(f"test_throttle:{i}", max_requests=100, window_seconds=60)
+
+    # Must log warning exactly ONCE, not 20 times!
+    warn_msgs = [r.message for r in caplog.records if "RateLimiter using in-memory fallback in production" in r.message]
+    assert len(warn_msgs) == 1
+
+
+def test_rate_limiter_require_redis_raises_503_with_retry_after(monkeypatch):
+    """Verify that when REQUIRE_REDIS=True, unreachable Redis raises 503 with Retry-After header."""
+    from fastapi import HTTPException
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "REQUIRE_REDIS", True)
+    RateLimiter.clear()
+    RateLimiter._redis = None
+
+    with pytest.raises(HTTPException) as exc_info:
+        RateLimiter.check_rate_limit("test_key:require_redis", max_requests=10, window_seconds=60)
+
+    assert exc_info.value.status_code == 503
+    assert "Rate limiting unavailable" in exc_info.value.detail
+    assert (exc_info.value.headers or {}).get("Retry-After") == "5"

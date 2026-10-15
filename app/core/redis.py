@@ -35,6 +35,12 @@ def get_redis_client() -> Optional[redis.Redis]:
         except Exception as err:
             logger.warning(f"Redis connection dropped ({err}). Reconnecting...")
             _redis_client = None
+            if _redis_pool is not None:
+                try:
+                    _redis_pool.disconnect()
+                except Exception:
+                    pass
+                _redis_pool = None
             _last_failure_time = now
 
     # If recent connection attempt failed, do not block the thread with retries on every single call
@@ -43,6 +49,9 @@ def get_redis_client() -> Optional[redis.Redis]:
 
     host = getattr(settings, "REDIS_HOST", "localhost")
     port = int(getattr(settings, "REDIS_PORT", 6379))
+    socket_timeout = float(getattr(settings, "REDIS_SOCKET_TIMEOUT", 1.5))
+    socket_connect_timeout = float(getattr(settings, "REDIS_CONNECT_TIMEOUT", 2.0))
+    health_check_interval = int(getattr(settings, "REDIS_HEALTH_CHECK_INTERVAL", 30))
 
     try:
         redis_url = getattr(settings, "REDIS_URL", None)
@@ -52,8 +61,9 @@ def get_redis_client() -> Optional[redis.Redis]:
                     redis_url,
                     decode_responses=True,
                     max_connections=20,
-                    socket_timeout=0.5,
-                    socket_connect_timeout=0.5,
+                    socket_timeout=socket_timeout,
+                    socket_connect_timeout=socket_connect_timeout,
+                    health_check_interval=health_check_interval,
                     retry_on_timeout=False,
                 )
             else:
@@ -64,8 +74,9 @@ def get_redis_client() -> Optional[redis.Redis]:
                     password=password,
                     decode_responses=True,
                     max_connections=20,
-                    socket_timeout=0.5,
-                    socket_connect_timeout=0.5,
+                    socket_timeout=socket_timeout,
+                    socket_connect_timeout=socket_connect_timeout,
+                    health_check_interval=health_check_interval,
                     retry_on_timeout=False,
                 )
 
@@ -79,6 +90,12 @@ def get_redis_client() -> Optional[redis.Redis]:
         _last_failure_time = now
         logger.warning(f"Redis connection failed ({err}). Graceful fallback active (cooldown {_FAILURE_COOLDOWN_SECONDS}s).")
         _redis_client = None
+        if _redis_pool is not None:
+            try:
+                _redis_pool.disconnect()
+            except Exception:
+                pass
+            _redis_pool = None
         return None
 
 
@@ -127,11 +144,17 @@ def check_redis_health() -> Dict[str, Any]:
 
 def reset_redis_client() -> None:
     """Reset cached connection pool and client instance (useful for unit tests/reconnects)."""
-    global _redis_client, _redis_pool
+    global _redis_client, _redis_pool, _last_failure_time
     if _redis_client:
         try:
             _redis_client.close()
         except Exception:
             pass
+    if _redis_pool:
+        try:
+            _redis_pool.disconnect()
+        except Exception:
+            pass
     _redis_client = None
     _redis_pool = None
+    _last_failure_time = 0.0
