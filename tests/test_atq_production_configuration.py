@@ -55,7 +55,7 @@ def test_atq_exact_service_inclusions(db):
     # 4. International Arrival
     int_arr = get_atq_service(db, "ARRIVAL", "INTERNATIONAL")
     assert "WELCOME GUEST FROM POST IMMIGRATION." in int_arr.features
-    assert "ASSIST GUEST TILL THE PARKING AREA." in int_arr.features
+    assert "ASSIST GUEST TILL THE CAR PARKING AREA" in int_arr.features
 
 def test_atq_no_transit(db):
     atq = db.query(SupportedAirport).filter_by(iata_code="ATQ").first()

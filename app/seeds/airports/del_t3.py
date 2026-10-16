@@ -46,7 +46,7 @@ DEL_T3_DOMESTIC_ARRIVAL_SILVER_FEATURES = [
     "PORTER SERVICE WITH DEDICATED STAFF AT ARRIVALS.",
     "BUGGY SERVICE AVAILABLE. (AS PER THE AVAILABLITY).",
     "ASSIST IN BAGGAGE BELT AREA.",
-    "ASSIST GUEST TILL THE CAR PARKING AREA.",
+    "ASSIST GUEST TILL THE CAR PARKING AREA",
 ]
 
 DEL_T3_DOMESTIC_ARRIVAL_GOLD_FEATURES = [
@@ -56,7 +56,7 @@ DEL_T3_DOMESTIC_ARRIVAL_GOLD_FEATURES = [
     "BUGGY SERVICE AVAILABLE. (AS PER THE AVAILABLITY).",
     "ASSIST IN BAGGAGE BELT AREA.",
     "LOUNGE ACCESS FOR 2 HOURS.",
-    "ASSIST GUEST TILL THE CAR PARKING AREA.",
+    "ASSIST GUEST TILL THE CAR PARKING AREA",
 ]
 
 DEL_T3_DOMESTIC_ARRIVAL_ELITE_FEATURES = [
@@ -66,7 +66,7 @@ DEL_T3_DOMESTIC_ARRIVAL_ELITE_FEATURES = [
     "BUGGY SERVICE AVAILABLE. (AS PER THE AVAILABLITY).",
     "ASSIST IN BAGGAGE BELT AREA.",
     "LOUNGE ACCESS FOR 2 HOURS.",
-    "ASSIST GUEST TILL THE CAR PARKING AREA.",
+    "ASSIST GUEST TILL THE CAR PARKING AREA",
 ]
 
 
@@ -191,7 +191,7 @@ def seed_del_production_packages(db: Session, del_airport: SupportedAirport, ser
                 "Dedicated Staff with Placard",
                 "Dedicated Porter Service at Arrivals",
                 "Assist at the Baggage Belt Area",
-                "Escort to the Car Parking Area",
+                "ASSIST GUEST TILL THE CAR PARKING AREA",
             ],
             additional_benefits=[],
             min_booking_notice_hours=6,
@@ -215,7 +215,7 @@ def seed_del_production_packages(db: Session, del_airport: SupportedAirport, ser
                 "Dedicated Staff with Placard",
                 "Dedicated Porter Service at Arrivals",
                 "Assist at the Baggage Belt Area",
-                "Escort to the Car Parking Area",
+                "ASSIST GUEST TILL THE CAR PARKING AREA",
             ],
             additional_benefits=[
                 "Unlimited Rescheduling (with at least 12 hours' prior notice)",
@@ -453,7 +453,7 @@ def seed_del_production_packages(db: Session, del_airport: SupportedAirport, ser
                 "Assist at the Duty Free Shop",
                 "Assist at the Baggage Belt Area",
                 "Assist through Customs Clearance",
-                "Escort to the Car Parking Area",
+                "ASSIST GUEST TILL THE CAR PARKING AREA",
             ],
             additional_benefits=[],
             min_booking_notice_hours=6,
@@ -482,7 +482,7 @@ def seed_del_production_packages(db: Session, del_airport: SupportedAirport, ser
                 "Assist at the Baggage Belt Area",
                 "Complimentary Lounge Access (up to 2 hours)",
                 "Assist through Customs Clearance",
-                "Escort to the Car Parking Area",
+                "ASSIST GUEST TILL THE CAR PARKING AREA",
             ],
             additional_benefits=[],
             min_booking_notice_hours=6,
@@ -511,7 +511,7 @@ def seed_del_production_packages(db: Session, del_airport: SupportedAirport, ser
                 "Assist at the Baggage Belt Area",
                 "Complimentary Lounge Access (up to 2 hours)",
                 "Assist through Customs Clearance",
-                "Escort to the Car Parking Area",
+                "ASSIST GUEST TILL THE CAR PARKING AREA",
             ],
             additional_benefits=[
                 "Unlimited Rescheduling (with at least 12 hours' prior notice)",

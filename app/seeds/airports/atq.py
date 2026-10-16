@@ -114,7 +114,7 @@ def seed_atq_production_packages(db: Session, atq_airport: SupportedAirport, ser
                 "ASSIST IN BAGGAGE BELT AREA.",
                 "ASSIST IN CUSTOMS.",
                 "COORDINATION WITH RECEIVING PARTY.",
-                "ASSIST GUEST TILL THE PARKING AREA.",
+                "ASSIST GUEST TILL THE CAR PARKING AREA",
             ],
             additional_benefits=[],
             min_booking_notice_hours=6,

@@ -255,7 +255,7 @@ def test_ixc_exact_inclusion_texts_and_quirks():
         "PORTER SERVICE WITH DEDICATED STAFF. (UP TO 3 BAGS PER PASSENGERS).",
         "ASSIST AT BAGGAGE BELT AREA.",
         "COORDINATION TO THE RECEIVING PERSON.",
-        "DROP OFF CAR PARKING AREA",
+        "ASSIST GUEST TILL THE CAR PARKING AREA",
     ]
 
     # Specific wording checks
