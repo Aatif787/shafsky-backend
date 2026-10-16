@@ -41,7 +41,7 @@ DEL_T3_DOMESTIC_DEPARTURE_ELITE_FEATURES = [
 ]
 
 DEL_T3_DOMESTIC_ARRIVAL_SILVER_FEATURES = [
-    "WELCOME GUEST FROM AEROBRIDGE.",
+    "WELCOME IN THE END OF THE AEROBRIDGE.",
     "DEDICATED STAFF WITH PLACARD.",
     "PORTER SERVICE WITH DEDICATED STAFF AT ARRIVALS.",
     "BUGGY SERVICE AVAILABLE. (AS PER THE AVAILABLITY).",
@@ -50,7 +50,7 @@ DEL_T3_DOMESTIC_ARRIVAL_SILVER_FEATURES = [
 ]
 
 DEL_T3_DOMESTIC_ARRIVAL_GOLD_FEATURES = [
-    "WELCOME GUEST FROM AEROBRIDGE.",
+    "WELCOME IN THE END OF THE AEROBRIDGE.",
     "DEDICATED STAFF WITH PLACARD.",
     "PORTER SERVICE WITH DEDICATED STAFF AT ARRIVALS.",
     "BUGGY SERVICE AVAILABLE. (AS PER THE AVAILABLITY).",
@@ -60,7 +60,7 @@ DEL_T3_DOMESTIC_ARRIVAL_GOLD_FEATURES = [
 ]
 
 DEL_T3_DOMESTIC_ARRIVAL_ELITE_FEATURES = [
-    "WELCOME GUEST FROM AEROBRIDGE.",
+    "WELCOME IN THE END OF THE AEROBRIDGE.",
     "DEDICATED STAFF WITH PLACARD.",
     "PORTER SERVICE WITH DEDICATED STAFF AT ARRIVALS.",
     "BUGGY SERVICE AVAILABLE. (AS PER THE AVAILABLITY).",
@@ -563,7 +563,7 @@ def seed_del_production_packages(db: Session, del_airport: SupportedAirport, ser
             flight_type="DOMESTIC_INTERNATIONAL",
             short_description="Premium transit assist for passengers connecting from a domestic flight to an international flight.",
             features=[
-                "WELCOME GUEST FROM AEROBRIDGE .",
+                "WELCOME IN THE END OF THE AEROBRIDGE.",
                 "BAGGAGE ASSISTANT FOR BAGGAGE.",
                 "BUGGY SERVICE AVIALABLE (ONLY AT T3).",
                 "ASSIST IN BAGGAGE BELT AREA (IF REQUIRED).",
@@ -590,7 +590,7 @@ def seed_del_production_packages(db: Session, del_airport: SupportedAirport, ser
             flight_type="INTERNATIONAL_DOMESTIC",
             short_description="Premium transit assist for passengers connecting from an international flight to a domestic flight.",
             features=[
-                "WELCOME GUEST FROM AEROBRIDGE .",
+                "WELCOME IN THE END OF THE AEROBRIDGE.",
                 "BAGGAGE ASSISTANT FOR BAGGAGE.",
                 "BUGGY SERVICE AVIALABLE (ONLY AT T3).",
                 "ASSIST IN BAGGAGE BELT AREA.",
@@ -616,7 +616,7 @@ def seed_del_production_packages(db: Session, del_airport: SupportedAirport, ser
             flight_type="INTERNATIONAL_INTERNATIONAL",
             short_description="Premium international-to-international transit assist.",
             features=[
-                "WELCOME GUEST FROM AEROBRIDGE .",
+                "WELCOME IN THE END OF THE AEROBRIDGE.",
                 "BAGGAGE ASSISTANT FOR BAGGAGE.",
                 "BUGGY SERVICE AVIALABLE..",
                 "ASSIST IN AIRLINE COUNTERS.(IN TRANSIT AREA)",

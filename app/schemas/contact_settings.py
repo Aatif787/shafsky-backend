@@ -9,7 +9,7 @@ import re
 
 
 CANONICAL_SERVICES = [
-    ("meet_greet_lounge", "Meet & Greet & Lounge"),
+    ("meet_greet_lounge", "Meet & Greet Lounge"),
     ("transport", "Transport"),
     ("hotel", "Hotel"),
     ("private_charter", "Private Charter"),

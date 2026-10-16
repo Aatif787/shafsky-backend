@@ -176,7 +176,10 @@ class AuthService:
 
         # 3. Check Expiration
         now = datetime.now(timezone.utc)
-        if record.expires_at < now:
+        exp = record.expires_at
+        if exp is not None and exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        if exp is not None and exp < now:
             record.revoked = True
             try:
                 db.add(record)

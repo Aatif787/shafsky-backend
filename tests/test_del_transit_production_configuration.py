@@ -104,7 +104,7 @@ def test_del_transit_verbatim_features_and_quirks(db_session):
     # 2. Domestic-International
     di = rows["DOMESTIC_INTERNATIONAL"]
     assert di.features == [
-        "WELCOME GUEST FROM AEROBRIDGE .",
+        "WELCOME IN THE END OF THE AEROBRIDGE.",
         "BAGGAGE ASSISTANT FOR BAGGAGE.",
         "BUGGY SERVICE AVIALABLE (ONLY AT T3).",
         "ASSIST IN BAGGAGE BELT AREA (IF REQUIRED).",
@@ -114,13 +114,13 @@ def test_del_transit_verbatim_features_and_quirks(db_session):
         "ASSIST IN S.H.A (SECURITY HOLD AREA).",
         "ASSIST TILL BOARDING AREA.",
     ]
-    assert "AEROBRIDGE ." in di.features[0]
+    assert "AEROBRIDGE" in di.features[0]
     assert "T2-T3" in di.features[4]
 
     # 3. International-International
     ii = rows["INTERNATIONAL_INTERNATIONAL"]
     assert ii.features == [
-        "WELCOME GUEST FROM AEROBRIDGE .",
+        "WELCOME IN THE END OF THE AEROBRIDGE.",
         "BAGGAGE ASSISTANT FOR BAGGAGE.",
         "BUGGY SERVICE AVIALABLE..",
         "ASSIST IN AIRLINE COUNTERS.(IN TRANSIT AREA)",
@@ -133,7 +133,7 @@ def test_del_transit_verbatim_features_and_quirks(db_session):
     # 4. International-Domestic
     id_row = rows["INTERNATIONAL_DOMESTIC"]
     assert id_row.features == [
-        "WELCOME GUEST FROM AEROBRIDGE .",
+        "WELCOME IN THE END OF THE AEROBRIDGE.",
         "BAGGAGE ASSISTANT FOR BAGGAGE.",
         "BUGGY SERVICE AVIALABLE (ONLY AT T3).",
         "ASSIST IN BAGGAGE BELT AREA.",

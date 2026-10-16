@@ -25,7 +25,7 @@ from app.models.journey_models import SupportedAirport
 def test_three_tier_inheritance_display():
     """Test 3-tier inheritance: Silver, Gold, Elite."""
     silver_features = [
-        "WELCOME GUEST FROM AEROBRIDGE.",
+        "WELCOME IN THE END OF THE AEROBRIDGE.",
         "DEDICATED STAFF WITH PLACARD.",
         "PORTER SERVICE WITH DEDICATED STAFF AT ARRIVALS.",
         "BUGGY SERVICE AVAILABLE. (AS PER THE AVAILABLITY).",
@@ -62,7 +62,7 @@ def test_three_tier_inheritance_display():
     assert "+ LOUNGE ACCESS FOR 2 HOURS (TERMINAL 3)." in body
     # Gold should NOT repeat Silver's 6 individual bullet points
     gold_part = body.split("2. *Gold Service*")[1].split("3. *Elite Service*")[0]
-    assert "WELCOME GUEST FROM AEROBRIDGE" not in gold_part
+    assert "WELCOME IN THE END OF THE AEROBRIDGE" not in gold_part
     assert "PORTER SERVICE WITH DEDICATED STAFF" not in gold_part
 
     # 3. Elite section
@@ -73,7 +73,7 @@ def test_three_tier_inheritance_display():
     assert "+ FREE CANCELLATION UPTO 6 HOURS." in body
     # Elite should NOT repeat Silver or Gold's earlier bullet points
     elite_part = body.split("3. *Elite Service*")[1]
-    assert "WELCOME GUEST FROM AEROBRIDGE" not in elite_part
+    assert "WELCOME IN THE END OF THE AEROBRIDGE" not in elite_part
     assert "LOUNGE ACCESS FOR 2 HOURS" not in elite_part
 
 

@@ -150,6 +150,7 @@ app.add_middleware(CORSMiddleware, **_cors_kwargs)
 
 @app.exception_handler(SQLAlchemyError)
 async def sqlalchemy_exception_handler(_request, _exc: SQLAlchemyError):
+    structured_logger.error(f"Database error on {_request.method} {_request.url.path}: {_exc}")
     return JSONResponse(
         status_code=500,
         content={

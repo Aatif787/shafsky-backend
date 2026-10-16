@@ -192,7 +192,7 @@ def test_ixr_exact_service_inclusions_arrival(db: Session):
     assert len(arr_svc.features) == 6
 
     expected_arrival = [
-        "WELCOME GUEST FROM AEROBRIDGE",
+        "WELCOME IN THE END OF THE AEROBRIDGE",
         "DEDICATED STAFF WITH PLACARD",
         "PORTER SERVICE WITH DEDICATED STAFF AT ARRIVALS",
         "WHEELCHAIR SERVICE AVAILABLE WITH DEDICATED STAFF (Through Airlines)",
@@ -382,7 +382,7 @@ def test_ixr_journey_detection_arrival(db: Session):
     assert svc.price == 2500.00
     assert svc.currency == "INR"
     assert len(svc.features) == 6
-    assert "WELCOME GUEST FROM AEROBRIDGE" in svc.features
+    assert "WELCOME IN THE END OF THE AEROBRIDGE" in svc.features
 
 
 # ==============================================================================

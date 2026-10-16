@@ -58,7 +58,7 @@ def seed_atq_production_packages(db: Session, atq_airport: SupportedAirport, ser
             flight_type="DOMESTIC",
             short_description="Domestic arrival assist from the aerobridge to the car parking area.",
             features=[
-                "WELCOME GUEST FROM AEROBRIDGE",
+                "WELCOME IN THE END OF THE AEROBRIDGE",
                 "DEDICATED STAFF WITH PLACARD",
                 "PORTER SERVICE WITH DEDICATED STAFF AT ARRIVALS",
                 "WHEELCHAIR SERVICE AVAILABLE (Through Airlines)",

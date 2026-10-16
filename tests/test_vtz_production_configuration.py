@@ -83,7 +83,7 @@ def test_vtz_verbatim_features_and_counts(db: Session):
     )
     assert arr_svc is not None
     assert len(arr_svc.features) == 6
-    assert "WELCOME GUEST FROM AEROBRIDGE" in arr_svc.features
+    assert "WELCOME IN THE END OF THE AEROBRIDGE" in arr_svc.features
 
 
 def test_vtz_meet_greet_inactive(db: Session):

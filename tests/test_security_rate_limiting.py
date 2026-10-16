@@ -203,6 +203,7 @@ def test_rate_limiter_in_memory_warning_throttled(monkeypatch, caplog):
 
     monkeypatch.setattr(type(settings), "is_production", property(lambda self: True))
     monkeypatch.setattr(settings, "REQUIRE_REDIS", False)
+    monkeypatch.setattr(RateLimiter, "_get_redis", classmethod(lambda cls: None))
     RateLimiter.clear()
     RateLimiter._redis = None
 
@@ -222,6 +223,7 @@ def test_rate_limiter_require_redis_raises_503_with_retry_after(monkeypatch):
     from app.config import settings
 
     monkeypatch.setattr(settings, "REQUIRE_REDIS", True)
+    monkeypatch.setattr(RateLimiter, "_get_redis", classmethod(lambda cls: None))
     RateLimiter.clear()
     RateLimiter._redis = None
 
