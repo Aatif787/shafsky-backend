@@ -422,8 +422,6 @@ def seed_del_production_packages(db: Session, del_airport: SupportedAirport, ser
                 "Complimentary Lounge Access (up to 2 hours)",
                 "Buggy Service to the Boarding Gate (subject to availability)",
                 "ASSIST GUEST TILL THE BOARDING GATE",
-                "Unlimited Rescheduling (with at least 12 hours' prior notice)",
-                "Free Cancellation up to 12 hours before the scheduled service time",
             ],
             additional_benefits=[
                 "Unlimited Rescheduling (with at least 12 hours' prior notice)",
@@ -514,8 +512,6 @@ def seed_del_production_packages(db: Session, del_airport: SupportedAirport, ser
                 "Complimentary Lounge Access (up to 2 hours)",
                 "Assist through Customs Clearance",
                 "ASSIST GUEST TILL THE CAR PARKING AREA",
-                "Unlimited Rescheduling (with at least 12 hours' prior notice)",
-                "Free Cancellation up to 12 hours before the scheduled service time",
             ],
             additional_benefits=[
                 "Unlimited Rescheduling (with at least 12 hours' prior notice)",

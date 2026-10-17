@@ -845,7 +845,9 @@ class AirportFlowMixin(BaseFlowMixin):
 
         available_services = []
         for aps, svc in rows:
-            features = aps.features if isinstance(getattr(aps, "features", None), list) else []
+            features = list(aps.features if isinstance(getattr(aps, "features", None), list) else [])
+            addl = list(aps.additional_benefits if isinstance(getattr(aps, "additional_benefits", None), list) else [])
+            combined_features = features + [b for b in addl if b not in features]
             raw_p = aps.price
             price_flt = float(raw_p) if isinstance(raw_p, (int, float, str, Decimal)) else 0.0
             available_services.append({
@@ -853,7 +855,7 @@ class AirportFlowMixin(BaseFlowMixin):
                 "title": svc.name,
                 "price": price_flt,
                 "description": aps.short_description or svc.description or "Airport service",
-                "features": features,
+                "features": combined_features,
             })
 
         body_text = wa_copy.airport_packages_body(

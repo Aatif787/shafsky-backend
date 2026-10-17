@@ -259,11 +259,14 @@ def test_database_seeded_airports_inheritance():
                             if svc.name in seen:
                                 continue
                             seen.add(svc.name)
+                            features_list = list(aps.features if isinstance(aps.features, list) else [])
+                            addl_list = list(aps.additional_benefits if isinstance(aps.additional_benefits, list) else [])
+                            combined_feats = features_list + [b for b in addl_list if b not in features_list]
                             available_services.append({
                                 "id": str(svc.id),
                                 "title": svc.name,
                                 "price": float(aps.price),
-                                "features": aps.features if isinstance(aps.features, list) else [],
+                                "features": combined_feats,
                             })
 
                         if not available_services:
