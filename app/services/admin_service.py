@@ -710,25 +710,34 @@ class AdminService:
             db.rollback()
             logger.warning("[AdminService] Audit log write failed: %s", audit_err)
 
+        try:
+            from app.routers.journey_router import clear_services_catalog_cache
+            clear_services_catalog_cache()
+        except Exception:
+            pass
+
         apt = db.scalar(select(SupportedAirport).where(SupportedAirport.id == mapping.airport_id))
         svc = db.scalar(select(Service).where(Service.id == mapping.service_id))
 
         return {
             "id": str(mapping.id),
+            "airport_id": str(apt.id) if apt else "",
             "airport_code": apt.iata_code if apt else "",
             "airport_name": apt.airport_name if apt else "",
+            "city": apt.city if apt else "",
+            "service_id": str(svc.id) if svc else "",
             "service_name": svc.name if svc else "",
             "service_slug": svc.slug if svc else "",
-            "price": mapping.price,
-            "currency": mapping.currency,
+            "price": float(mapping.price) if mapping.price is not None else 0.0,
+            "currency": mapping.currency or "INR",
             "journey_type": mapping.journey_type,
             "flight_type": mapping.flight_type,
-            "terminal": mapping.terminal,
+            "terminal": mapping.terminal or "All",
             "is_available": mapping.is_available,
             "features": mapping.features if isinstance(mapping.features, list) else [],
             "short_description": mapping.short_description or "",
-            "min_booking_notice_hours": mapping.min_booking_notice_hours,
-            "updated_at": mapping.updated_at.isoformat(),
+            "min_booking_notice_hours": mapping.min_booking_notice_hours or 0,
+            "updated_at": mapping.updated_at.isoformat() if mapping.updated_at else None,
         }
 
     @classmethod
@@ -889,6 +898,12 @@ class AdminService:
             raise HTTPException(status_code=500, detail="Database transaction failed during recycling.")
 
         try:
+            from app.routers.journey_router import clear_services_catalog_cache
+            clear_services_catalog_cache()
+        except Exception:
+            pass
+
+        try:
             cls.log_audit_action(
                 db=db,
                 actor_email=admin_email,
@@ -942,6 +957,12 @@ class AdminService:
             db.rollback()
             logger.error("[AdminService] Failed to restore airport service %s: %s", mapping_id, err)
             raise HTTPException(status_code=500, detail="Database transaction failed during restoration.")
+
+        try:
+            from app.routers.journey_router import clear_services_catalog_cache
+            clear_services_catalog_cache()
+        except Exception:
+            pass
 
         try:
             cls.log_audit_action(
@@ -1053,6 +1074,12 @@ class AdminService:
                 status_code=409,
                 detail="Cannot permanently delete service due to database integrity constraints."
             )
+
+        try:
+            from app.routers.journey_router import clear_services_catalog_cache
+            clear_services_catalog_cache()
+        except Exception:
+            pass
 
         try:
             cls.log_audit_action(

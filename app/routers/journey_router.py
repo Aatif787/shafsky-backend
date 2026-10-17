@@ -20,6 +20,11 @@ logger = logging.getLogger("shafsky.routers.journey")
 
 _SERVICES_CATALOG_CACHE: Dict[str, Any] = {}
 _SERVICES_CATALOG_CACHE_TTL: float = 60.0
+
+
+def clear_services_catalog_cache() -> None:
+    """Clears in-memory catalog cache so admin status and price updates take effect immediately."""
+    _SERVICES_CATALOG_CACHE.clear()
 from fastapi import APIRouter, Depends, HTTPException, Query, Body, status
 from sqlalchemy.orm import Session
 from app.database import get_db

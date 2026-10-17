@@ -401,12 +401,14 @@ from app.services.service_config_service import ServiceConfigService
 
 @router.get("/api/services/catalog", response_model=AdminApiResponse)
 @router.get("/api/services/categories", response_model=AdminApiResponse)
+@router.get("/api/services-config/active", response_model=AdminApiResponse)
 async def get_public_service_catalog(db: Session = Depends(get_db)):
     catalog = ServiceConfigService.get_public_catalog(db)
     return AdminApiResponse(success=True, data=catalog)
 
 
 @router.get("/api/admin/services/config", response_model=AdminApiResponse)
+@router.get("/api/admin/services-config", response_model=AdminApiResponse)
 async def get_admin_services_config(
     db: Session = Depends(get_db),
     _admin = Depends(get_required_admin)
@@ -416,7 +418,9 @@ async def get_admin_services_config(
 
 
 @router.patch("/api/admin/services/config/{service_id}", response_model=AdminApiResponse)
+@router.patch("/api/admin/services-config/{service_id}", response_model=AdminApiResponse)
 @router.post("/api/admin/services/config", response_model=AdminApiResponse)
+@router.post("/api/admin/services-config", response_model=AdminApiResponse)
 async def patch_admin_service_config(
     service_id: Optional[str] = None,
     payload: Dict[str, Any] = Body(...),
@@ -444,4 +448,20 @@ async def patch_admin_service_config(
             "optionsSchema": updated_sc.options_schema
         }
     )
+
+
+@router.delete("/api/admin/services/config/{service_id}", response_model=AdminApiResponse)
+@router.delete("/api/admin/services-config/{service_id}", response_model=AdminApiResponse)
+async def delete_admin_service_config(
+    service_id: str,
+    db: Session = Depends(get_db),
+    _admin = Depends(get_required_admin)
+):
+    from app.models.schema import ServicesConfig
+    sc = db.scalar(select(ServicesConfig).where(ServicesConfig.id == service_id))
+    if sc:
+        sc.is_active = False
+        sc.updated_at = datetime.now(timezone.utc)
+        db.commit()
+    return AdminApiResponse(success=True, data={"id": service_id, "deleted": True})
 
