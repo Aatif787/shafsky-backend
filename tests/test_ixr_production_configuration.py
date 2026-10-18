@@ -152,7 +152,7 @@ def test_ixr_exact_service_inclusions_departure(db: Session):
     expected_departure = [
         "WELCOME GUEST FROM CURBSIDE AREA",
         "PORTER SERVICE WITH DEDICATED STAFF",
-        "WHEELCHAIR SERVICE AVAILABLE (Through Airlines)",
+        "WHEELCHAIR SERVICE AVAILABLE (THROUGH AIRLINES)",
         "ASSIST FROM SEPARATE ENTRY GATE",
         "ASSIST TO BAGGAGE WRAPPING FACILITIES",
         "ASSIST AT SEPARATE CHECKIN PROCESS AT COUNTERS",
@@ -195,7 +195,7 @@ def test_ixr_exact_service_inclusions_arrival(db: Session):
         "WELCOME IN THE END OF THE AEROBRIDGE",
         "DEDICATED STAFF WITH PLACARD",
         "PORTER SERVICE WITH DEDICATED STAFF AT ARRIVALS",
-        "WHEELCHAIR SERVICE AVAILABLE WITH DEDICATED STAFF (Through Airlines)",
+        "WHEELCHAIR SERVICE AVAILABLE WITH DEDICATED STAFF (THROUGH AIRLINES)",
         "ASSIST IN BAGGAGE BELT AREA",
         "ASSIST GUEST TILL THE CAR PARKING AREA",
     ]
@@ -203,7 +203,7 @@ def test_ixr_exact_service_inclusions_arrival(db: Session):
     assert arr_svc.features == IXR_DOMESTIC_ARRIVAL_FEATURES
 
     # Word preservation checks
-    assert "WHEELCHAIR SERVICE AVAILABLE WITH DEDICATED STAFF (Through Airlines)" in arr_svc.features
+    assert "WHEELCHAIR SERVICE AVAILABLE WITH DEDICATED STAFF (THROUGH AIRLINES)" in arr_svc.features
     assert "ASSIST IN BAGGAGE BELT AREA" in arr_svc.features
     assert "ASSIST GUEST TILL THE CAR PARKING AREA" in arr_svc.features
     for f in arr_svc.features:
