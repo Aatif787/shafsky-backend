@@ -130,9 +130,9 @@ def test_hyd_transit_wording_differences(db: Session):
     di = db.query(AirportService).filter_by(airport_id=hyd.id, journey_type="TRANSIT", flight_type="DOMESTIC_INTERNATIONAL", is_available=True).first()
 
     # Wheelchair wording
-    assert "WHEELCHAIR SERVICE AVAILABLE (Through Airlines)" in dd.features
+    assert "WHEELCHAIR SERVICE AVAILABLE (THROUGH AIRLINES)" in dd.features
     assert "WHEELCHAIR SERVICE AVAILABLE" in di.features
-    assert "WHEELCHAIR SERVICE AVAILABLE (Through Airlines)" not in di.features
+    assert "WHEELCHAIR SERVICE AVAILABLE (THROUGH AIRLINES)" not in di.features
 
     # SHA wording
     assert "ASSIST IN S.H.A.(TRANSIT AREA)" in dd.features
