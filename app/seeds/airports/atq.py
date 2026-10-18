@@ -33,7 +33,7 @@ def seed_atq_production_packages(db: Session, atq_airport: SupportedAirport, ser
             features=[
                 "WELCOME GUEST FROM CURBSIDE AREA",
                 "PORTER SERVICE WITH DEDICATED STAFF",
-                "WHEELCHAIR SERVICE AVAILABLE (Through Airlines)",
+                "WHEELCHAIR SERVICE AVAILABLE (THROUGH AIRLINES)",
                 "ASSIST FROM SEPARATE ENTRY GATE",
                 "ASSIST TO BAGGAGE WRAPPING FACILITIES",
                 "ASSIST AT SEPARATE CHECKIN PROCESS AT COUNTERS",
@@ -61,7 +61,7 @@ def seed_atq_production_packages(db: Session, atq_airport: SupportedAirport, ser
                 "WELCOME IN THE END OF THE AEROBRIDGE",
                 "DEDICATED STAFF WITH PLACARD",
                 "PORTER SERVICE WITH DEDICATED STAFF AT ARRIVALS",
-                "WHEELCHAIR SERVICE AVAILABLE (Through Airlines)",
+                "WHEELCHAIR SERVICE AVAILABLE (THROUGH AIRLINES)",
                 "ASSIST IN BAGGAGE BELT AREA",
                 "ASSIST GUEST TILL THE CAR PARKING AREA",
             ],
@@ -84,7 +84,7 @@ def seed_atq_production_packages(db: Session, atq_airport: SupportedAirport, ser
             features=[
                 "WELCOME GUEST FROM CURBSIDE AREA",
                 "PORTER SERVICE WITH DEDICATED STAFF",
-                "WHEELCHAIR SERVICE AVAILABLE (Through Airlines)",
+                "WHEELCHAIR SERVICE AVAILABLE (THROUGH AIRLINES)",
                 "ASSIST FROM SEPARATE ENTRY GATE",
                 "ASSIST TO BAGGAGE WRAPPING FACILITIES",
                 "ASSIST AT SEPARATE CHECK IN PROCESS AT COUNTERS",
