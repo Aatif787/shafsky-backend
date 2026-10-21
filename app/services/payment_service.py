@@ -32,16 +32,30 @@ class PaymentService:
     """Core payment domain service."""
 
     @classmethod
-    def active_payment_gateway(cls) -> str:
-        """RAZORPAY (default) or ICICI when selected and credentials are present.
+    def active_payment_gateway(cls, preferred: Optional[str] = None) -> str:
+        """RAZORPAY (primary/default) or ICICI when selected and credentials are present.
 
         Reads process env on every call so a restarted process / updated env is honored
         without relying on a stale Settings singleton.
         """
         from app.providers.icici_provider import icici_provider
+        from app.providers.razorpay_provider import razorpay_provider
+
+        if preferred:
+            pref = preferred.strip().upper()
+            if pref == "RAZORPAY":
+                return "RAZORPAY"
+            if pref == "ICICI":
+                icici_provider.reload()
+                if icici_provider.is_configured():
+                    return "ICICI"
+                raise ValueError(
+                    "PAYMENT_GATEWAY=ICICI requested but ICICI_MID / ICICI_KEY / ICICI_AGG_ID are not configured."
+                )
 
         requested = (
-            os.getenv("PAYMENT_GATEWAY")
+            os.getenv("PRIMARY_PAYMENT_GATEWAY")
+            or os.getenv("PAYMENT_GATEWAY")
             or getattr(settings, "PAYMENT_GATEWAY", None)
             or "RAZORPAY"
         )
@@ -120,18 +134,13 @@ class PaymentService:
 
     @classmethod
     def assert_gateway_exclusive(cls, db: Session, booking, requested_gateway: str) -> None:
-        """Reject dual Razorpay+ICICI sessions and env/gateway mismatches for new initiates."""
+        """Reject dual Razorpay+ICICI sessions for new initiates on the same pending booking."""
         requested = (requested_gateway or "").strip().upper()
         frozen = cls.frozen_gateway_for_booking(db, booking)
-        active = cls.active_payment_gateway()
         if frozen and frozen != requested:
             raise ValueError(
                 f"Booking already has an active {frozen} payment session. "
                 f"Cannot start a {requested} checkout for the same booking."
-            )
-        if not frozen and requested != active:
-            raise ValueError(
-                f"Active payment gateway is {active}. Cannot initiate {requested} checkout."
             )
 
     @classmethod
@@ -162,10 +171,16 @@ class PaymentService:
         payload: PaymentInitiateRequest,
         provider: Optional[PaymentProvider] = None
     ) -> PaymentTransaction:
-        """Initiates a payment transaction with the active gateway (Razorpay or ICICI)."""
+        """Initiates a payment transaction with the requested/active gateway (Razorpay as primary or ICICI)."""
         from app.models.schema import Booking
 
-        gateway = cls.active_payment_gateway()
+        preferred = getattr(payload, "preferred_gateway", None)
+        if not preferred and payload.metadata:
+            preferred = payload.metadata.get("preferred_gateway") or payload.metadata.get("payment_gateway")
+        if not preferred and provider:
+            preferred = provider.value if hasattr(provider, "value") else str(provider)
+
+        gateway = cls.active_payment_gateway(preferred=preferred)
         booking = db.scalar(select(Booking).where(Booking.booking_ref == payload.entity_id))
         if booking:
             cls.assert_gateway_exclusive(db, booking, gateway)
@@ -2104,7 +2119,8 @@ class PaymentService:
         db: Session,
         booking_ref: str,
         customer_email: Optional[str] = None,
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        preferred_gateway: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Retries payment on an existing PENDING booking without duplicating the booking.
@@ -2123,7 +2139,9 @@ class PaymentService:
         if booking.status in (BookingStatus.CANCELLED, BookingStatus.REJECTED):
             raise ValueError(f"Booking '{booking_ref}' is cancelled/rejected and cannot be paid.")
 
-        if cls.active_payment_gateway() == "ICICI":
+        frozen = cls.frozen_gateway_for_booking(db, booking)
+        gateway_to_use = frozen or cls.active_payment_gateway(preferred=preferred_gateway)
+        if gateway_to_use == "ICICI":
             return cls._retry_icici_payment(db, booking, user_id=user_id)
 
         cls.assert_gateway_exclusive(db, booking, "RAZORPAY")

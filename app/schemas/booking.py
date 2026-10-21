@@ -34,6 +34,7 @@ class BookingCreate(BaseModel):
     total_amount: float = Field(..., gt=0, alias="totalAmount")
     currency: Optional[str] = Field(default="INR")
     notes: Optional[str] = Field(default=None)
+    preferred_gateway: Optional[str] = Field(default="RAZORPAY", alias="preferredGateway")
 
     @field_validator("origin_code", "dest_code")
     @classmethod

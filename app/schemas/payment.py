@@ -1,4 +1,4 @@
-﻿"""
+"""
 Pydantic Schemas for Payment & Invoicing API.
 """
 
@@ -18,6 +18,7 @@ class PaymentInitiateRequest(BaseModel):
     currency: str = Field("INR", min_length=3, max_length=3)
     payment_method: PaymentMethod = PaymentMethod.CREDIT_CARD
     metadata: Optional[Dict[str, Any]] = None
+    preferred_gateway: Optional[str] = Field(default="RAZORPAY", alias="preferredGateway")
 
 
 class PaymentTransactionResponse(BaseModel):
@@ -95,6 +96,7 @@ class PaymentRetryRequest(BaseModel):
         None,
         description="Signed payment session token issued at booking create (required for guests)",
     )
+    preferred_gateway: Optional[str] = Field(default="RAZORPAY", alias="preferredGateway")
 
 
 class PaymentLedgerFilterRequest(BaseModel):

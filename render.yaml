@@ -81,7 +81,9 @@ services:
       - key: RAZORPAY_WEBHOOK_SECRET
         sync: false
       - key: PAYMENT_GATEWAY
-        sync: false
+        value: RAZORPAY
+      - key: PRIMARY_PAYMENT_GATEWAY
+        value: RAZORPAY
       - key: PAYMENT_SESSION_SECRET
         sync: false
       - key: PUBLIC_BACKEND_URL

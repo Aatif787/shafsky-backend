@@ -70,10 +70,16 @@ async def create_order_endpoint(
     from app.models.airport import AirportBooking
     from app.models.payment import PaymentTransaction, PaymentStatus, PaymentMethod
 
-    if PaymentService.active_payment_gateway() == "ICICI":
+    # Razorpay is the primary gateway for standard web checkout
+    if not razorpay_provider.is_configured():
+        if PaymentService.active_payment_gateway() == "ICICI":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Active payment gateway is ICICI. Use /api/payments/retry or /api/payments/icici/initiate.",
+            )
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Active payment gateway is ICICI. Use /api/payments/retry or /api/payments/icici/initiate.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Razorpay is not configured for payments.",
         )
 
     booking_ref = (payload.receipt or (payload.notes.get("booking_ref") if payload.notes else None) or "").strip()
@@ -820,6 +826,7 @@ def retry_payment_endpoint(
             booking_ref=payload.booking_ref,
             customer_email=(current_user.get("email") if current_user else None),
             user_id=str(current_user.get("user_id")) if current_user and current_user.get("user_id") else None,
+            preferred_gateway=getattr(payload, "preferred_gateway", None),
         )
         return PaymentApiResponse(success=True, data=data)
     except ValueError as err:

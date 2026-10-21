@@ -99,6 +99,12 @@ async def create_booking(
     from app.services.payment_service import PaymentService
     from app.schemas.payment import PaymentInitiateRequest, PaymentMethod
     
+    gw_choice = (
+        getattr(payload, "preferred_gateway", None)
+        or (payload.metadata_json.get("preferred_gateway") if payload.metadata_json else None)
+        or (payload.metadata_json.get("payment_gateway") if payload.metadata_json else None)
+        or "RAZORPAY"
+    )
     init_request = PaymentInitiateRequest(
         entity_type="AIRPORT_BOOKING",
         entity_id=booking.booking_ref,
@@ -107,7 +113,8 @@ async def create_booking(
         amount=float(booking.total_amount),
         currency=booking.currency or "INR",
         payment_method=PaymentMethod.CREDIT_CARD,
-        customer_id=str(profile_id) if profile_id else None
+        customer_id=str(profile_id) if profile_id else None,
+        preferred_gateway=gw_choice,
     )
     
     try:
