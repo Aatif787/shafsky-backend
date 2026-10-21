@@ -126,32 +126,46 @@ def validate_amount_and_currency(
 
         # For VERIFY_ENDPOINT, if amount or currency is not in payload, fetch from Razorpay API or transaction
         if event_name == "VERIFY_ENDPOINT" and (received_amount_raw is None or not received_currency_raw):
-            if order_id and not str(order_id).startswith("order_sim_"):
-                from app.providers.razorpay_provider import razorpay_provider
-                fetch_res = razorpay_provider.fetch_order(str(order_id))
-                if fetch_res.get("success") and isinstance(fetch_res.get("order"), dict):
-                    order_data = fetch_res.get("order")
-                    if received_amount_raw is None and order_data.get("amount") is not None:
-                        received_amount_raw = order_data.get("amount")
-                    if not received_currency_raw and order_data.get("currency"):
-                        received_currency_raw = order_data.get("currency")
-            if (received_amount_raw is None or not received_currency_raw) and not str(order_id or "").startswith("order_sim_"):
-                from app.providers.razorpay_provider import razorpay_provider as _rzp
-                if _rzp.is_configured():
-                    logger.error(
-                        f"[PaymentService] PAYMENT_AMOUNT_CHECK: gateway order for '{order_id}' "
-                        f"could not be confirmed; rejecting verification for booking '{resolved_booking_ref}'."
-                    )
-                    return False, {
-                        "success": False,
-                        "status": "PAYMENT_DATA_INCOMPLETE",
-                        "reason": "Gateway order could not be confirmed for verification.",
-                        "booking_ref": resolved_booking_ref,
-                    }, None
-                if received_amount_raw is None and transaction and transaction.amount is not None:
-                    received_amount_raw = round(float(transaction.amount) * 100)
-                if not received_currency_raw and transaction and transaction.currency:
-                    received_currency_raw = transaction.currency
+            from app.providers.razorpay_provider import razorpay_provider
+            gateway_order_confirmed = False
+            if order_id and razorpay_provider.is_configured():
+                ord_res = razorpay_provider.fetch_order(order_id)
+                if ord_res.get("success") and ord_res.get("order"):
+                    gateway_order_confirmed = True
+                    ord_data = ord_res["order"]
+                    if received_amount_raw is None:
+                        received_amount_raw = ord_data.get("amount_paid") or ord_data.get("amount")
+                    if not received_currency_raw:
+                        received_currency_raw = ord_data.get("currency")
+            if (
+                settings.is_production
+                and order_id
+                and razorpay_provider.is_configured()
+                and not gateway_order_confirmed
+                and not str(order_id).startswith("order_sim_")
+            ):
+                # SECURITY: fail closed in production. When the gateway is
+                # configured we must never validate a payment against the
+                # transaction row's own self-asserted amount -- that would
+                # make the amount check vacuous. Dev/test environments keep
+                # the DB fallback below so simulation flows (fake keys, no
+                # reachable gateway) still work; the primary cross-booking
+                # defense is the order-receipt binding check above, which is
+                # unconditional.
+                logger.error(
+                    f"[PaymentService] PAYMENT_AMOUNT_CHECK: gateway order for '{order_id}' "
+                    f"could not be confirmed; rejecting verification for booking '{resolved_booking_ref}'."
+                )
+                return False, {
+                    "success": False,
+                    "status": "PAYMENT_DATA_INCOMPLETE",
+                    "reason": "Gateway order could not be confirmed for verification.",
+                    "booking_ref": resolved_booking_ref,
+                }, None
+            if received_amount_raw is None and transaction and transaction.amount is not None:
+                received_amount_raw = round(float(transaction.amount) * 100)
+            if not received_currency_raw and transaction and transaction.currency:
+                received_currency_raw = transaction.currency
 
         if event_name == "VERIFY_ENDPOINT" or raw_payload is None:
             if received_amount_raw is None and transaction and transaction.amount is not None:
