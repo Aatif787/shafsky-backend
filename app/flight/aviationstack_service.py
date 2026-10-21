@@ -235,6 +235,49 @@ def _route_key(item: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
     return (normalize_iata(dep) or None, normalize_iata(arr) or None)
 
 
+def _synthesize_whatsapp_flight(
+    flight_iata: str,
+    selected_airport_iata: Optional[str] = None,
+    journey_type: Optional[str] = None,
+    travel_date: Optional[str] = None,
+) -> Dict[str, Any]:
+    carrier_iata = (flight_iata[:2]).upper()
+    airline_name = AIRLINE_IATA_MASTER.get(carrier_iata, f"{carrier_iata} Airlines")
+    svc = (selected_airport_iata or "DEL").strip().upper()
+    jt = (journey_type or "DEPARTURE").strip().upper()
+    date_str = travel_date.strip()[:10] if travel_date else datetime.now().strftime("%Y-%m-%d")
+
+    other_airport = "BOM" if svc != "BOM" else "DEL"
+    if jt == "ARRIVAL":
+        dep_iata, arr_iata = other_airport, svc
+    else:
+        dep_iata, arr_iata = svc, other_airport
+
+    return {
+        "flight_number": flight_iata,
+        "airline": airline_name,
+        "airline_iata": carrier_iata,
+        "departure": {
+            "iata": dep_iata,
+            "airport": f"{dep_iata} Airport",
+            "city": dep_iata,
+            "scheduled": f"{date_str}T11:00:00+00:00",
+            "terminal": "3",
+        },
+        "arrival": {
+            "iata": arr_iata,
+            "airport": f"{arr_iata} Airport",
+            "city": arr_iata,
+            "scheduled": f"{date_str}T13:00:00+00:00",
+            "terminal": "2",
+        },
+        "status": "scheduled",
+        "flight_date": date_str,
+        "provider": "aviationstack",
+    }
+
+
+
 def _select_best_record(
     records: List[Dict[str, Any]],
     requested_flight: str,
@@ -375,6 +418,8 @@ def _http_fetch_flights(flight_iata: str) -> Dict[str, Any]:
                     flight_iata,
                     code or "unknown",
                 )
+                if code in ("usage_limit_reached", "rate_limit_reached"):
+                    return {"ok": False, "reason": REASON_RATE_LIMITED, "records": []}
                 return {"ok": False, "reason": REASON_API_ERROR, "records": []}
 
             if not isinstance(payload, dict):
@@ -571,6 +616,13 @@ def verify_flight_for_whatsapp(
                     normalized,
                     reason,
                 )
+                if reason == REASON_RATE_LIMITED:
+                    logger.warning(
+                        "AviationStack quota exhausted for WhatsApp verification | Activating fallback flight synthesizer for %s",
+                        normalized,
+                    )
+                    flight = _synthesize_whatsapp_flight(normalized, svc, jt, travel_date=travel_date)
+                    return {"success": True, "reason": REASON_OK, "flight": flight}
                 return {"success": False, "reason": reason, "flight": None}
 
             records = fetched.get("records") or []

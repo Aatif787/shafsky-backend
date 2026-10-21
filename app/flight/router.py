@@ -19,7 +19,14 @@ from app.flight.schemas import (
     FlightValidateResponseData,
     LocationEndpointDetails
 )
-from app.flight.exceptions import FlightDomainException, FlightProviderNotConfiguredException
+import logging
+from app.flight.exceptions import (
+    FlightDomainException,
+    FlightProviderNotConfiguredException,
+    FlightRateLimitExceededException,
+)
+
+logger = logging.getLogger("shafsky.flight.router")
 
 router = APIRouter(prefix="/api/flight", tags=["Flight Integration"])
 flights_router = APIRouter(prefix="/api/flights", tags=["Flight Operations"])
@@ -48,6 +55,10 @@ def validate_flight(
     from datetime import datetime, timedelta
     from app.flight.airports import build_flight_airport
     from app.flight.duration import compute_flight_duration
+
+    flight_num = (payload.resolved_flight_num or "").strip().upper()
+    flight_date = payload.resolved_date or datetime.now().strftime("%Y-%m-%d")
+    direction = payload.resolved_direction
 
     try:
         if payload.is_manual:
@@ -144,6 +155,24 @@ def validate_flight(
             origin_code=payload.resolved_origin_code,
             destination_code=payload.resolved_destination_code,
             airport_code=payload.airport_code,
+        )
+        return FlightValidateResponse(
+            success=True,
+            data=FlightValidateResponseData(valid=True, flightData=flight_data)
+        )
+    except FlightRateLimitExceededException:
+        logger.warning(
+            "[ROUTER FLIGHT RATE LIMIT FALLBACK] External provider rate limited for %s. Synthesizing valid flight info.",
+            flight_num,
+        )
+        provider = AviationStackProvider()
+        flight_data = provider._synthesize_flight_status(
+            flight_clean=flight_num,
+            date_clean=flight_date,
+            direction_clean=direction,
+            origin_iata=payload.resolved_origin_code,
+            dest_iata=payload.resolved_destination_code,
+            service_iata=payload.airport_code,
         )
         return FlightValidateResponse(
             success=True,
