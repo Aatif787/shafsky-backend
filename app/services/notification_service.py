@@ -911,7 +911,7 @@ class NotificationService:
             or getattr(settings, "WHATSAPP_OFFICER_NOTIFY_PHONE", None)
             or os.getenv("WHATSAPP_TICKETING_STAFF_PHONE", "")
             or os.getenv("WHATSAPP_OFFICER_NOTIFY_PHONE", "")
-            or "919599087959"
+            or "919599087957"
         ).strip()
 
         if not officer_phone:

@@ -122,6 +122,8 @@ class Settings(BaseSettings):
     WHATSAPP_API_VERSION: str = os.getenv("WHATSAPP_API_VERSION", "v21.0")
     WHATSAPP_APP_SECRET: str = os.getenv("WHATSAPP_APP_SECRET", os.getenv("META_APP_SECRET", os.getenv("APP_SECRET", "")))
     WHATSAPP_OFFICER_NOTIFY_PHONE: str = os.getenv("WHATSAPP_OFFICER_NOTIFY_PHONE", "")
+    WHATSAPP_TICKETING_STAFF_PHONE: str = os.getenv("WHATSAPP_TICKETING_STAFF_PHONE", "919599087957")
+    WHATSAPP_BOT_PHONE: str = os.getenv("WHATSAPP_BOT_PHONE", "917428300207")
 
     # Razorpay Payment Gateway
     RAZORPAY_KEY_ID: str = os.getenv("RAZORPAY_KEY_ID", "")
