@@ -10,14 +10,19 @@ from typing import Dict, Any, Optional, Tuple
 from decimal import Decimal
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
-from sqlalchemy import select, or_
+from sqlalchemy import select
 
 from app.models.payment import (
-    PaymentTransaction, Invoice, PaymentStatus, InvoiceStatus, PaymentMethod, PaymentStateMachine
+    PaymentTransaction, PaymentStatus, InvoiceStatus, PaymentMethod, PaymentStateMachine
 )
+from app.models.schema import BookingStatus
+from app.models.whatsapp_models import WhatsAppConversation
+from app.providers.razorpay_provider import razorpay_provider
 from app.services.timeline_service import TimelineService
 from app.services.admin_service import AdminService
 from app.services.notification_service import NotificationService
+from app.services.pdf_service import schedule_invoice_fulfillment
+from app.services.payments.whatsapp_links import mark_payment_link_terminal
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -126,7 +131,6 @@ def validate_amount_and_currency(
 
         # For VERIFY_ENDPOINT, if amount or currency is not in payload, fetch from Razorpay API or transaction
         if event_name == "VERIFY_ENDPOINT" and (received_amount_raw is None or not received_currency_raw):
-            from app.providers.razorpay_provider import razorpay_provider
             gateway_order_confirmed = False
             if order_id and razorpay_provider.is_configured():
                 ord_res = razorpay_provider.fetch_order(order_id)
@@ -142,7 +146,7 @@ def validate_amount_and_currency(
                 and order_id
                 and razorpay_provider.is_configured()
                 and not gateway_order_confirmed
-                and not str(order_id).startswith("order_sim_")
+                and not order_id.startswith("order_sim_")
             ):
                 # SECURITY: fail closed in production. When the gateway is
                 # configured we must never validate a payment against the
@@ -273,7 +277,6 @@ def dispatch_payment_fulfillment_side_effects(db: Session, booking, invoice_id_t
     """Trigger PDF generation and notifications after commit. Never blocks webhook."""
     if invoice_id_to_fulfill:
         try:
-            from app.services.pdf_service import schedule_invoice_fulfillment
             schedule_invoice_fulfillment(invoice_id_to_fulfill)
         except Exception as pdf_err:
             logger.error("[PaymentService] Invoice fulfillment scheduling failed: %s", type(pdf_err).__name__)
@@ -327,7 +330,6 @@ def dispatch_payment_fulfillment_side_effects(db: Session, booking, invoice_id_t
 def sync_whatsapp_conversation_on_payment(db: Session, resolved_booking_ref: Optional[str], booking) -> None:
     """Update WhatsApp Conversation State if relevant."""
     try:
-        from app.models.whatsapp_models import WhatsAppConversation
         conv = None
         if resolved_booking_ref:
             conv = db.scalar(
@@ -411,8 +413,6 @@ def handle_payment_link_expired_cancelled(
     raw_payload: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """Payment Link expired/cancelled – booking stays PENDING and recoverable."""
-    from app.services.payments.whatsapp_links import mark_payment_link_terminal
-
     terminal_status = (
         PaymentStatus.EXPIRED if "expired" in event_name else PaymentStatus.CANCELLED
     )
@@ -425,7 +425,6 @@ def handle_payment_link_expired_cancelled(
             transaction.gateway_response = existing
 
     try:
-        from app.models.whatsapp_models import WhatsAppConversation
         conv = None
         if resolved_booking_ref:
             conv = db.scalar(
@@ -460,8 +459,6 @@ def handle_payment_failed(
     raw_payload: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """Payment failed event. Keep booking PENDING to allow retry."""
-    from app.models.schema import BookingStatus
-
     if transaction and transaction.status != PaymentStatus.SUCCESSFUL:
         transaction.status = PaymentStatus.FAILED
         if raw_payload:
@@ -502,8 +499,6 @@ def handle_payment_refund(
     raw_payload: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """Refund events: refund.created, refund.processed, payment.refunded, etc."""
-    from app.models.schema import BookingStatus
-
     if not transaction:
         return {
             "success": False,
