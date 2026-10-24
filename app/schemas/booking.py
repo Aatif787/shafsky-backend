@@ -14,7 +14,7 @@ class BookingCreate(BaseModel):
     @classmethod
     def validate_passenger_name(cls, value: str) -> str:
         name = " ".join((value or "").split())
-        if len(name) < 2 or not re.fullmatch(r"[^\W\d_]+(?:[ '\u2019.-][^\W\d_]+)*", name, flags=re.UNICODE):
+        if len(name) < 2 or not re.fullmatch(r"[^\W\d_]+(?:(?:[ '\u2019-]+|\. ?)[^\W\d_]+)*", name, flags=re.UNICODE):
             raise ValueError("Please enter a valid passenger name using letters only.")
         return name
 
