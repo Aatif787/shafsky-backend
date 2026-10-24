@@ -10,6 +10,8 @@ from app.schemas.lounge import (
     LoungeEnquiryListApiResponse,
     LoungeEnquiryAdminUpdate,
     LoungeOptionsApiResponse,
+    LoungeEligibilityCheckRequest,
+    LoungeEligibilityApiResponse,
 )
 from app.services.lounge_service import LoungeService
 from app.security.dependencies import get_required_admin, get_optional_user, STAFF_OR_ADMIN_ROLES
@@ -24,6 +26,7 @@ def _format_enquiry_data(enquiry) -> Dict[str, Any]:
         "id": str(enquiry.id),
         "enquiry_reference": enquiry.enquiry_reference,
         "airport": enquiry.airport,
+        "lounge_category": getattr(enquiry, "lounge_category", "Domestic"),
         "lounge_type": enquiry.lounge_type,
         "travel_date": enquiry.travel_date,
         "preferred_time": enquiry.preferred_time,
@@ -97,6 +100,25 @@ async def get_lounge_options_endpoint(
 ):
     options = LoungeService.get_options(db)
     return LoungeOptionsApiResponse(success=True, data=options)
+
+
+@router.post(
+    "/api/v1/lounges/check-eligibility",
+    response_model=LoungeEligibilityApiResponse,
+    summary="Check Real-Time Lounge Booking Cutoff Eligibility",
+    description="Authoritatively evaluates notice periods (12h domestic, 24h international) and 1h grace period against server time.",
+)
+@router.post(
+    "/api/lounges/check-eligibility",
+    response_model=LoungeEligibilityApiResponse,
+    include_in_schema=False,
+)
+async def check_lounge_eligibility_endpoint(
+    payload: LoungeEligibilityCheckRequest,
+    db: Session = Depends(get_db),
+):
+    eligibility = LoungeService.check_eligibility(payload, db=db)
+    return LoungeEligibilityApiResponse(success=True, data=eligibility)
 
 
 @router.get(

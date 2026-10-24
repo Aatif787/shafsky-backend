@@ -212,11 +212,69 @@ def test_get_lounge_options_endpoint():
     data = body["data"]
     assert "airports" in data
     assert "lounge_types" in data
+    assert "domestic_lounge_types" in data
+    assert "international_lounge_types" in data
     assert "preferred_times" in data
+    assert "server_time" in data
+    assert "cutoff_rules" in data
     assert len(data["lounge_types"]) >= 4
     assert "VIP / First Class Lounge" in data["lounge_types"]
-    assert "Business Class Lounge" in data["lounge_types"]
+    assert "Domestic Departure Lounge" in data["domestic_lounge_types"]
+    assert "International Departure Lounge" in data["international_lounge_types"]
+    assert data["cutoff_rules"]["Domestic"]["notice_hours"] == 12
+    assert data["cutoff_rules"]["International"]["notice_hours"] == 24
     assert any(a["code"] == "DEL" for a in data["airports"])
+
+
+def test_check_lounge_eligibility_and_cutoff_rules():
+    # 1. Far future date (> 12h & > 24h): Eligible
+    future_date = (date.today() + timedelta(days=5)).isoformat()
+    res = client.post(
+        "/api/v1/lounges/check-eligibility",
+        json={
+            "lounge_category": "Domestic",
+            "travel_date": future_date,
+            "preferred_time": "Afternoon (12:00 – 18:00)",
+            "airport": "DEL",
+        },
+    )
+    assert res.status_code == 200
+    el_data = res.json()["data"]
+    assert el_data["eligible"] is True
+    assert el_data["is_grace_period"] is False
+    assert el_data["required_notice_hours"] == 12
+
+    # 2. Past date: Ineligible
+    past_date = (date.today() - timedelta(days=2)).isoformat()
+    res_past = client.post(
+        "/api/v1/lounges/check-eligibility",
+        json={
+            "lounge_category": "Domestic",
+            "travel_date": past_date,
+            "preferred_time": "Morning (06:00 – 12:00)",
+            "airport": "DEL",
+        },
+    )
+    assert res_past.status_code == 200
+    el_past = res_past.json()["data"]
+    assert el_past["eligible"] is False
+    assert "past" in el_past["message"].lower()
+
+    # 3. Submission with past date rejected by server with 422
+    past_payload = {
+        "full_name": "Marcus Aurelius",
+        "mobile_number": "+919876543210",
+        "email_address": "marcus.aurelius@stoic.org",
+        "airport": "DEL",
+        "lounge_category": "Domestic",
+        "lounge_type": "VIP / First Class Lounge",
+        "travel_date": past_date,
+        "preferred_time": "Morning (06:00 – 12:00)",
+        "number_of_passengers": 1,
+    }
+    submit_past_res = client.post("/api/v1/lounges/enquiries", json=past_payload)
+    assert submit_past_res.status_code == 422
+
 
 
 def test_public_enquiry_lookup_with_pii_masking():

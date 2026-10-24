@@ -26,6 +26,7 @@ def upgrade() -> None:
             sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
             sa.Column("enquiry_reference", sa.String(100), nullable=False),
             sa.Column("airport", sa.String(255), nullable=False),
+            sa.Column("lounge_category", sa.String(50), nullable=False, server_default="Domestic"),
             sa.Column("lounge_type", sa.String(100), nullable=False),
             sa.Column("travel_date", sa.String(50), nullable=False),
             sa.Column("preferred_time", sa.String(100), nullable=False),

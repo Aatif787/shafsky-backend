@@ -10,6 +10,7 @@ class LoungeEnquiryCreate(BaseModel):
     email_address: EmailStr = Field(..., description="Customer email address")
     whatsapp_number: Optional[str] = Field(None, max_length=50, description="Optional WhatsApp number")
     airport: str = Field(..., min_length=2, max_length=255, description="Airport name or IATA code")
+    lounge_category: Optional[str] = Field(default="Domestic", max_length=50, description="'Domestic' or 'International'")
     lounge_type: str = Field(..., min_length=2, max_length=100, description="Requested lounge category")
     travel_date: str = Field(..., min_length=8, max_length=50, description="Travel date in YYYY-MM-DD format")
     preferred_time: str = Field(..., min_length=2, max_length=100, description="Preferred arrival / departure time window")
@@ -43,6 +44,14 @@ class LoungeEnquiryCreate(BaseModel):
             raise ValueError("Field cannot be empty or whitespace only.")
         return trimmed
 
+    @field_validator("lounge_category")
+    @classmethod
+    def validate_category(cls, v: Optional[str]) -> str:
+        trimmed = (v or "Domestic").strip().capitalize()
+        if trimmed not in ("Domestic", "International"):
+            return "Domestic"
+        return trimmed
+
     @field_validator("flight_number")
     @classmethod
     def format_flight_number(cls, v: Optional[str]) -> Optional[str]:
@@ -55,6 +64,7 @@ class LoungeEnquiryResponseData(BaseModel):
     id: str
     enquiry_reference: str
     airport: str
+    lounge_category: Optional[str] = "Domestic"
     lounge_type: str
     travel_date: str
     preferred_time: str
@@ -96,14 +106,50 @@ class AirportOptionItem(BaseModel):
     name: str
     city: str
     country: str
+    timezone: Optional[str] = "Asia/Kolkata"
+
+
+class CutoffRuleItem(BaseModel):
+    notice_hours: int
+    grace_period_hours: int
+    notice_text: str
 
 
 class LoungeOptionsData(BaseModel):
     airports: List[AirportOptionItem]
     lounge_types: List[str]
+    domestic_lounge_types: List[str]
+    international_lounge_types: List[str]
     preferred_times: List[str]
+    server_time: str
+    cutoff_rules: Dict[str, CutoffRuleItem]
 
 
 class LoungeOptionsApiResponse(BaseModel):
     success: bool = True
     data: LoungeOptionsData
+
+
+class LoungeEligibilityCheckRequest(BaseModel):
+    lounge_category: str = Field(..., description="'Domestic' or 'International'")
+    travel_date: str = Field(..., description="Travel date in YYYY-MM-DD format")
+    preferred_time: str = Field(..., description="Preferred time slot or HH:MM")
+    airport: Optional[str] = Field(None, description="Airport IATA code or name")
+
+
+class LoungeEligibilityData(BaseModel):
+    eligible: bool
+    is_grace_period: bool
+    lead_time_hours: float
+    required_notice_hours: int
+    grace_period_hours: int
+    min_required_hours: int
+    airport_timezone: str
+    server_time: str
+    scheduled_time: str
+    message: str
+
+
+class LoungeEligibilityApiResponse(BaseModel):
+    success: bool = True
+    data: LoungeEligibilityData

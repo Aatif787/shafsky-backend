@@ -37,6 +37,7 @@ class LoungeEnquiry(Base):
 
     # Service Details
     airport: Mapped[str] = mapped_column(String, index=True, nullable=False)
+    lounge_category: Mapped[str] = mapped_column(String, default="Domestic", nullable=False)
     lounge_type: Mapped[str] = mapped_column(String, index=True, nullable=False)
     travel_date: Mapped[str] = mapped_column(String, nullable=False)
     preferred_time: Mapped[str] = mapped_column(String, nullable=False)
