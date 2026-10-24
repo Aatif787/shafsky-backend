@@ -10,6 +10,27 @@ class BookingCreate(BaseModel):
     passenger_email: EmailStr = Field(..., alias="passengerEmail")
     passenger_phone: str = Field(..., min_length=7, max_length=25, alias="passengerPhone")
 
+    @field_validator("passenger_name")
+    @classmethod
+    def validate_passenger_name(cls, value: str) -> str:
+        name = " ".join((value or "").split())
+        if len(name) < 2 or not re.fullmatch(r"[^\W\d_]+(?:[ '\u2019.-][^\W\d_]+)*", name, flags=re.UNICODE):
+            raise ValueError("Please enter a valid passenger name using letters only.")
+        return name
+
+    @field_validator("passenger_email", mode="before")
+    @classmethod
+    def normalize_passenger_email(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("passenger_phone")
+    @classmethod
+    def validate_passenger_phone(cls, value: str) -> str:
+        phone = re.sub(r"[\s().-]", "", (value or "").strip())
+        if not re.fullmatch(r"\+?\d{7,15}", phone):
+            raise ValueError("Please enter a valid phone number.")
+        return phone
+
     service_category: Optional[str] = Field(default=None, alias="serviceCategory")
     service_type: str = Field(..., min_length=2, max_length=100, alias="serviceType")
 
