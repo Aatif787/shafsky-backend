@@ -831,10 +831,10 @@ class BookingService:
         now = datetime.now(timezone.utc)
 
         p_name = (passenger_name or "").strip()
-        if not p_name or len(p_name) < 2 or not re.match(r"^[A-Za-z\s]+$", p_name):
+        if not p_name or len(p_name) < 2 or not re.match(r"^[^\W\d_]+(?:[ '\u2019.-][^\W\d_]+)*$", p_name, flags=re.UNICODE):
             raise HTTPException(
                 status_code=422,
-                detail="Please enter a valid passenger name using letters only."
+                detail="Please enter a valid passenger name."
             )
 
         email_ok, email_reason = is_acceptable_customer_email(passenger_email or "")
