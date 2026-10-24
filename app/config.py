@@ -168,6 +168,13 @@ class Settings(BaseSettings):
     EMAIL_REPLY_TO: str = os.getenv("EMAIL_REPLY_TO", "")
     ADMIN_NOTIFICATION_EMAILS: str = os.getenv("ADMIN_NOTIFICATION_EMAILS", "")
 
+    # SMTP Direct Mail (Hostinger / custom SMTP)
+    SMTP_HOST: str = os.getenv("SMTP_HOST", "")
+    SMTP_PORT: int = int(os.getenv("SMTP_PORT", "465") or "465")
+    SMTP_USER: str = os.getenv("SMTP_USER", "")
+    SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
+    SMTP_FROM: str = os.getenv("SMTP_FROM", "")
+
     ALLOWED_ORIGINS_STR: str = os.getenv(
         "ALLOWED_ORIGINS",
         "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,"

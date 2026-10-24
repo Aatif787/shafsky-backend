@@ -41,11 +41,87 @@ logger = logging.getLogger("shafsky.notifications")
 class NotificationService:
     @classmethod
     def _from_address(cls) -> str:
-        return (settings.EMAIL_FROM or settings.RESEND_FROM_EMAIL or "").strip()
+        addr = (settings.EMAIL_FROM or settings.RESEND_FROM_EMAIL or "bookings@shafskyaviation.com").strip()
+        if addr and "<" not in addr and ">" not in addr:
+            return f"Shafsky Aviation <{addr}>"
+        return addr or "Shafsky Aviation <bookings@shafskyaviation.com>"
 
     @classmethod
     def _resend_configured(cls) -> bool:
         return bool((settings.RESEND_API_KEY or "").strip() and cls._from_address())
+
+    @classmethod
+    def _smtp_configured(cls) -> bool:
+        host = (os.getenv("SMTP_HOST") or getattr(settings, "SMTP_HOST", "") or "").strip()
+        user = (os.getenv("SMTP_USER") or getattr(settings, "SMTP_USER", "") or "").strip()
+        pwd = (os.getenv("SMTP_PASSWORD") or getattr(settings, "SMTP_PASSWORD", "") or "").strip()
+        return bool(host and user and pwd)
+
+    @classmethod
+    def send_email_smtp_sync(
+        cls,
+        recipient_email: str,
+        subject: str,
+        html_content: str,
+        attachments: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        import smtplib
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+        from email.mime.application import MIMEApplication
+
+        host = (os.getenv("SMTP_HOST") or getattr(settings, "SMTP_HOST", "") or "").strip()
+        port_raw = os.getenv("SMTP_PORT") or getattr(settings, "SMTP_PORT", "465") or "465"
+        try:
+            port = int(str(port_raw).strip())
+        except Exception:
+            port = 465
+        user = (os.getenv("SMTP_USER") or getattr(settings, "SMTP_USER", "") or "").strip()
+        pwd = (os.getenv("SMTP_PASSWORD") or getattr(settings, "SMTP_PASSWORD", "") or "").strip()
+        from_email = (os.getenv("SMTP_FROM") or "").strip() or cls._from_address()
+
+        msg = MIMEMultipart("mixed")
+        msg["Subject"] = subject
+        msg["From"] = from_email
+        msg["To"] = recipient_email
+        reply_to = (settings.EMAIL_REPLY_TO or "").strip()
+        if reply_to:
+            msg["Reply-To"] = reply_to
+
+        msg.attach(MIMEText(html_content, "html", "utf-8"))
+
+        if attachments:
+            for item in attachments:
+                raw = item.get("content")
+                name = str(item.get("filename") or "invoice.pdf")
+                if not raw:
+                    continue
+                if isinstance(raw, str):
+                    try:
+                        raw_bytes = base64.b64decode(raw)
+                    except Exception:
+                        raw_bytes = raw.encode("utf-8")
+                else:
+                    raw_bytes = bytes(raw)
+                part = MIMEApplication(raw_bytes, Name=name)
+                part["Content-Disposition"] = f'attachment; filename="{name}"'
+                msg.attach(part)
+
+        try:
+            if port == 465:
+                with smtplib.SMTP_SSL(host, port, timeout=25.0) as server:
+                    server.login(user, pwd)
+                    server.send_message(msg)
+            else:
+                with smtplib.SMTP(host, port, timeout=25.0) as server:
+                    server.starttls()
+                    server.login(user, pwd)
+                    server.send_message(msg)
+            logger.info("Email delivered via SMTP to %s", recipient_email)
+            return {"status": "DELIVERED", "message_id": f"SMTP-{uuid.uuid4().hex[:8]}"}
+        except Exception as smtp_err:
+            logger.error("SMTP delivery failed to %s: %s", recipient_email, smtp_err)
+            return {"status": "FAILED", "error": f"smtp_failed:{smtp_err}"}
 
     @classmethod
     def admin_notification_recipients(cls) -> List[str]:
@@ -71,6 +147,15 @@ class NotificationService:
         if not recipient:
             logger.warning("Email skipped: missing recipient")
             return {"status": "FAILED", "error": "missing_recipient"}
+
+        # 1. If SMTP is configured, attempt direct SMTP delivery
+        if cls._smtp_configured():
+            smtp_res = cls.send_email_smtp_sync(recipient, subject, html_content, attachments=attachments)
+            if smtp_res.get("status") == "DELIVERED":
+                return smtp_res
+            logger.warning("SMTP attempt failed, falling back to Resend API: %s", smtp_res.get("error"))
+
+        # 2. Resend API
         if not cls._resend_configured():
             logger.warning(
                 "Email skipped: Resend is not configured (RESEND_API_KEY and EMAIL_FROM / RESEND_FROM_EMAIL required)"
@@ -82,8 +167,9 @@ class NotificationService:
             "Authorization": f"Bearer {settings.RESEND_API_KEY}",
             "Content-Type": "application/json",
         }
+        from_header = cls._from_address()
         body: Dict[str, Any] = {
-            "from": cls._from_address(),
+            "from": from_header,
             "to": [recipient],
             "subject": subject,
             "html": html_content,
@@ -124,11 +210,44 @@ class NotificationService:
                     extra={"recipient_domain": recipient.split("@")[-1], "message_id": message_id, "http_status": resp.status_code},
                 )
                 return {"status": "DELIVERED", "message_id": message_id or "RESEND-OK"}
+
+            resp_text = resp.text or ""
+            is_unverified = (
+                resp.status_code in (400, 403)
+                and any(phrase in resp_text.lower() for phrase in ("domain is not verified", "not verified", "validation_error"))
+            )
+            # Automatic fallback to onboarding@resend.dev when custom domain is not yet verified
+            if is_unverified and not str(body.get("from", "")).endswith("<onboarding@resend.dev>"):
+                logger.warning(
+                    "Resend domain not yet verified for '%s'. Attempting fallback to 'Shafsky Aviation <onboarding@resend.dev>'...",
+                    body.get("from")
+                )
+                fallback_body = dict(body)
+                fallback_body["from"] = "Shafsky Aviation <onboarding@resend.dev>"
+                try:
+                    with httpx.Client(timeout=timeout) as client:
+                        fb_resp = client.post(url, json=fallback_body, headers=headers)
+                    if fb_resp.status_code in (200, 201):
+                        fb_msg_id = ""
+                        try:
+                            fb_msg_id = str((fb_resp.json() or {}).get("id") or "")
+                        except Exception:
+                            fb_msg_id = ""
+                        logger.info(
+                            "Resend accepted email via onboarding fallback",
+                            extra={"recipient_domain": recipient.split("@")[-1], "message_id": fb_msg_id},
+                        )
+                        return {"status": "DELIVERED", "message_id": fb_msg_id or "RESEND-FALLBACK-OK"}
+                    else:
+                        logger.error("Resend onboarding fallback rejected: %s", fb_resp.text[:300])
+                except Exception as fb_exc:
+                    logger.error("Resend fallback request error: %s", type(fb_exc).__name__)
+
             logger.error(
                 "Resend rejected email",
-                extra={"http_status": resp.status_code, "provider_error": (resp.text or "")[:400]},
+                extra={"http_status": resp.status_code, "provider_error": resp_text[:400]},
             )
-            raw = (resp.text or "")[:300]
+            raw = resp_text[:300]
             # Persist a safe truncated provider hint (no API keys / bearer tokens / emails).
             raw = re.sub(r"(?i)bearer\s+\S+", "Bearer ***", raw)
             raw = re.sub(r"re_[A-Za-z0-9_]+", "re_***", raw)
@@ -486,8 +605,10 @@ class NotificationService:
         # 3. If failed record exists, check if retryable
         for r in matching_records:
             if r.status in (NotificationStatus.FAILED, NotificationStatus.QUEUED):
-                if r.attempts < r.max_attempts:
+                if r.attempts < r.max_attempts or template_type == "BOOKING_CONFIRMATION":
                     r.attempts += 1
+                    if r.attempts > r.max_attempts:
+                        r.max_attempts = r.attempts + 2
                     r.updated_at = now
                     r.status = NotificationStatus.SENDING
                     r.payload = payload
