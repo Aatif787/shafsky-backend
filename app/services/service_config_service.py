@@ -1083,8 +1083,8 @@ class ServiceConfigService:
         booking_ref = (payload.get("booking_ref") or payload.get("bookingRef") or payload.get("booking_reference") or "").strip()
 
         # 1. Field Validation
-        if not full_name or len(full_name) < 2:
-            field_errors.append({"field": "full_name", "message": "Please enter a valid lead passenger name."})
+        if not full_name or len(full_name) < 2 or not re.match(r"^[A-Za-z\s]+$", full_name):
+            field_errors.append({"field": "full_name", "message": "Please enter a valid passenger name using letters only."})
 
         if not email or not EMAIL_REGEX.match(email):
             field_errors.append({"field": "email", "message": "Please enter a valid email address."})

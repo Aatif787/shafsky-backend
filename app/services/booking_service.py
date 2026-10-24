@@ -1,3 +1,4 @@
+import re
 import uuid
 import secrets
 import logging
@@ -828,6 +829,13 @@ class BookingService:
         Does not initiate payment or run airport catalog pricing.
         """
         now = datetime.now(timezone.utc)
+
+        p_name = (passenger_name or "").strip()
+        if not p_name or len(p_name) < 2 or not re.match(r"^[A-Za-z\s]+$", p_name):
+            raise HTTPException(
+                status_code=422,
+                detail="Please enter a valid passenger name using letters only."
+            )
 
         email_ok, email_reason = is_acceptable_customer_email(passenger_email or "")
         if not email_ok:

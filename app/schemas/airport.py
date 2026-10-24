@@ -1,11 +1,12 @@
-﻿"""
+"""
 Pydantic Schemas for Airport Meet & Assist Module — Phase C.1.
 """
 
+import re
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from uuid import UUID
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class PassengerCreate(BaseModel):
@@ -17,6 +18,14 @@ class PassengerCreate(BaseModel):
     contact_email: Optional[str] = None
     contact_phone: Optional[str] = None
     is_primary: bool = Field(default=False, description="Is primary contact passenger")
+
+    @field_validator("full_name", mode="before")
+    @classmethod
+    def validate_full_name(cls, v: Any) -> str:
+        v_str = (str(v) if v is not None else "").strip()
+        if not v_str or len(v_str) < 2 or not re.match(r"^[A-Za-z\s]+$", v_str):
+            raise ValueError("Please enter a valid passenger name using letters only.")
+        return v_str
 
 
 class PassengerResponse(BaseModel):

@@ -19,7 +19,7 @@ EnquiryCategory = Literal[
 class ServiceEnquiryCreate(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
-    passenger_name: str = Field(..., min_length=2, max_length=120, alias="passengerName")
+    passenger_name: str = Field(..., max_length=120, alias="passengerName")
     first_name: Optional[str] = Field(None, max_length=60, alias="firstName")
     last_name: Optional[str] = Field(None, max_length=60, alias="lastName")
     passenger_email: EmailStr = Field(..., alias="passengerEmail")
@@ -78,6 +78,14 @@ class ServiceEnquiryCreate(BaseModel):
                 if k in data and k not in details:
                     details[k] = data[k]
         return data
+
+    @field_validator("passenger_name", mode="before")
+    @classmethod
+    def validate_passenger_name(cls, v: Any) -> str:
+        v_str = (str(v) if v is not None else "").strip()
+        if not v_str or len(v_str) < 2 or not re.match(r"^[A-Za-z\s]+$", v_str):
+            raise ValueError("Please enter a valid passenger name using letters only.")
+        return v_str
 
     @field_validator("passenger_phone")
     @classmethod

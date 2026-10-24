@@ -6,7 +6,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator, ConfigDict
 class BookingCreate(BaseModel):
     model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
 
-    passenger_name: str = Field(..., min_length=2, max_length=100, alias="passengerName")
+    passenger_name: str = Field(..., max_length=100, alias="passengerName")
     passenger_email: EmailStr = Field(..., alias="passengerEmail")
     passenger_phone: str = Field(..., min_length=7, max_length=25, alias="passengerPhone")
 
@@ -35,6 +35,14 @@ class BookingCreate(BaseModel):
     currency: Optional[str] = Field(default="INR")
     notes: Optional[str] = Field(default=None)
     preferred_gateway: Optional[str] = Field(default="RAZORPAY", alias="preferredGateway")
+
+    @field_validator("passenger_name", mode="before")
+    @classmethod
+    def validate_passenger_name(cls, v: Any) -> str:
+        v_str = (str(v) if v is not None else "").strip()
+        if not v_str or len(v_str) < 2 or not re.match(r"^[A-Za-z\s]+$", v_str):
+            raise ValueError("Please enter a valid passenger name using letters only.")
+        return v_str
 
     @field_validator("origin_code", "dest_code")
     @classmethod
