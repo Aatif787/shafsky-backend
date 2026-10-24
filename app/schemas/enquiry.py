@@ -83,8 +83,8 @@ class ServiceEnquiryCreate(BaseModel):
     @classmethod
     def validate_passenger_name(cls, v: Any) -> str:
         v_str = (str(v) if v is not None else "").strip()
-        if not v_str or len(v_str) < 2 or not re.match(r"^[A-Za-z\s]+$", v_str):
-            raise ValueError("Please enter a valid passenger name using letters only.")
+        if not v_str or len(v_str) < 2 or not re.match(r"^[^\W\d_]+(?:[ '\u2019.-][^\W\d_]+)*$", v_str, flags=re.UNICODE):
+            raise ValueError("Please enter a valid passenger name.")
         return v_str
 
     @field_validator("passenger_phone")
