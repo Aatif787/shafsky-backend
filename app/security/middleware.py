@@ -124,9 +124,33 @@ def get_rate_limit_policy(method: str, path: str) -> Optional[Dict[str, Any]]:
 
 
 class SecurityMiddleware(BaseHTTPMiddleware):
+    ALLOWED_METHODS = {"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"}
+    MAX_BODY_SIZE = 5_242_880  # 5 MB maximum request payload guard
+
     async def dispatch(self, request: Request, call_next):
+        method = request.method.upper()
+        if method not in self.ALLOWED_METHODS:
+            return JSONResponse(
+                status_code=405,
+                content={"success": False, "code": "ERR_405", "error": f"Method {method} not allowed"},
+                headers=get_security_headers(),
+            )
+
+        # Content-Length safety check (prevent payload buffer exhaustion DoS)
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                if int(content_length) > self.MAX_BODY_SIZE:
+                    return JSONResponse(
+                        status_code=413,
+                        content={"success": False, "code": "ERR_413", "error": "Payload too large. Maximum allowed size is 5MB."},
+                        headers=get_security_headers(),
+                    )
+            except (ValueError, TypeError):
+                pass
+
         # Never rate-limit or delay CORS preflight; CORSMiddleware answers OPTIONS.
-        if request.method.upper() == "OPTIONS":
+        if method == "OPTIONS":
             return await call_next(request)
 
         client_ip = get_client_ip(request)
@@ -158,6 +182,11 @@ class SecurityMiddleware(BaseHTTPMiddleware):
 
         for key, val in get_security_headers().items():
             response.headers[key] = val
+
+        # Cloak backend tech stack fingerprinting
+        if "x-powered-by" in response.headers:
+            del response.headers["x-powered-by"]
+        response.headers["Server"] = "Shafsky-Shield"
 
         # Cache-Control Guardrails:
         # 1. State mutations (POST, PUT, PATCH, DELETE) must never be cached by intermediaries or browsers.
