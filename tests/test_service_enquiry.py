@@ -510,3 +510,50 @@ def test_valid_onboard_meal_arrangement_enquiry_success():
         assert booking.origin_code == "DEL"
         assert booking.dest_code == "LHR"
         assert booking.metadata_json["details"]["meal_count"] == 12
+
+
+# =====================================================================
+# TEST 14: Valid Lounge Enquiry
+# =====================================================================
+def test_valid_lounge_enquiry_success():
+    """Lounge enquiries should persist as quote_only enquiries with zero charge."""
+    db = _db_with_unique_ref()
+
+    with patch("app.integrations.whatsapp.client.whatsapp_client.send_text_message") as mock_wa:
+        mock_wa.return_value = {"success": True, "message_id": "wamid.lounge_123"}
+
+        booking = BookingService.create_service_enquiry(
+            db,
+            passenger_name="Priya Sharma",
+            passenger_email="priya@lounge-guest.test",
+            passenger_phone="+919876543210",
+            service_category="Lounge",
+            service_type="Lounge",
+            origin="DEL",
+            service_date="2026-11-25",
+            notes="Lounge: VIP / First Class Lounge | Airport: DEL | Pax: 2",
+            details={
+                "airport": "DEL",
+                "lounge_type": "VIP / First Class Lounge",
+                "travel_date": "2026-11-25",
+                "preferred_time": "Morning (06:00 – 12:00)",
+                "passengers_count": 2,
+                "flight_number": "AI 101",
+                "full_name": "Priya Sharma",
+                "mobile_number": "+919876543210",
+                "email_address": "priya@lounge-guest.test",
+                "whatsapp_number": "+919876543210",
+                "additional_requirements": "Quiet private pod requested",
+            },
+        )
+
+        assert booking.service_category == "Lounge"
+        assert booking.service_type == "Lounge"
+        assert booking.status == BookingStatus.PENDING
+        assert float(booking.total_amount) == 0.0
+        assert booking.metadata_json.get("enquiry") is True
+        assert booking.metadata_json.get("quote_only") is True
+        assert booking.booking_ref.startswith("SHF-")
+        assert booking.metadata_json["details"]["lounge_type"] == "VIP / First Class Lounge"
+        assert booking.metadata_json["details"]["passengers_count"] == 2
+

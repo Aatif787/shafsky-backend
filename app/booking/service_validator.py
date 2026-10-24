@@ -14,8 +14,17 @@ class ServiceValidator:
             "Meet & Greet",
             "Fast Track",
             "Lounge Access",
+            "Lounge",
             "Baggage Assistance",
             "Airport Assistance"
+        ],
+        "Lounge": [
+            "Lounge",
+            "Airport Lounge",
+            "VIP Lounge",
+            "Business Lounge",
+            "Executive Lounge",
+            "Arrival Lounge",
         ],
         "Ground Transport": [
             "Airport Transfer",

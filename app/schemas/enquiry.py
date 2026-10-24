@@ -13,6 +13,8 @@ EnquiryCategory = Literal[
     "Private Charter",
     "Round Trip",
     "Ticketing",
+    "Lounge",
+    "Airport Assistance",
 ]
 
 
