@@ -62,7 +62,11 @@ class ServiceValidator:
             "Travel Insurance",
             "Hotel Booking",
             "VIP Escort",
-            "Travel Support"
+            "Travel Support",
+            "On-board Meal Arrangements for Group Meet & Greet Bookings",
+            "On-board Meal Arrangement",
+            "Onboard Meal Arrangement",
+            "In-Flight Catering",
         ]
     }
 
@@ -96,7 +100,7 @@ class ServiceValidator:
             return "Cargo & Logistics"
         if any(term in st_lower for term in ["medical", "ambulance", "stretcher", "wheelchair"]):
             return "Medical Assistance"
-        if any(term in st_lower for term in ["visa", "insurance", "hotel", "escort"]):
+        if any(term in st_lower for term in ["visa", "insurance", "hotel", "escort", "meal", "onboard", "catering"]):
             return "Travel Support"
 
         # Default fallback for backward compatibility
