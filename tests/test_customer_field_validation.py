@@ -59,6 +59,12 @@ def test_enquiry_rejects_invalid_phone_numbers(phone):
         ServiceEnquiryCreate.model_validate(enquiry_payload(passengerPhone=phone))
 
 
+@pytest.mark.parametrize("name", ["Dr. Eleanor Medical", "O'Connor Smith", "Jean-Luc Picard"])
+def test_legitimate_names_with_titles_and_separators_are_accepted(name):
+    booking = BookingCreate.model_validate(booking_payload(passengerName=name))
+    assert booking.passenger_name == name
+
+
 def test_valid_customer_details_are_normalized_and_accepted():
     booking = BookingCreate.model_validate(
         booking_payload(passengerName="  Aariz   Farooqui  ", passengerPhone="+91 88649-31247")
