@@ -25,6 +25,19 @@ class ServiceEnquiryCreate(BaseModel):
     passenger_email: EmailStr = Field(..., alias="passengerEmail")
     passenger_phone: str = Field(..., min_length=7, max_length=40, alias="passengerPhone")
 
+    @field_validator("passenger_name")
+    @classmethod
+    def validate_passenger_name(cls, value: str) -> str:
+        name = " ".join((value or "").split())
+        if len(name) < 2 or not re.fullmatch(r"[^\W\d_]+(?:(?:[ '\u2019-]+|\. ?)[^\W\d_]+)*", name, flags=re.UNICODE):
+            raise ValueError("Please enter a valid passenger name using letters only.")
+        return name
+
+    @field_validator("passenger_email", mode="before")
+    @classmethod
+    def normalize_passenger_email(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
+
     service_category: EnquiryCategory = Field(..., alias="serviceCategory")
     service_type: str = Field(..., min_length=2, max_length=120, alias="serviceType")
 
@@ -81,12 +94,11 @@ class ServiceEnquiryCreate(BaseModel):
 
     @field_validator("passenger_phone")
     @classmethod
-    def validate_phone(cls, v: str) -> str:
-        clean = re.sub(r"[\s\-()]", "", v or "")
-        digits = re.sub(r"[^\d+]", "", clean)
-        if len(re.sub(r"\D", "", digits)) < 7:
+    def validate_phone(cls, value: str) -> str:
+        phone = re.sub(r"[\s().-]", "", (value or "").strip())
+        if not re.fullmatch(r"\+?\d{7,15}", phone):
             raise ValueError("Please provide a valid phone number.")
-        return clean
+        return phone
 
     @field_validator("service_type")
     @classmethod
