@@ -1,4 +1,5 @@
 import re
+from datetime import datetime
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from app.models.lounge_models import LoungeEnquiryStatus
@@ -50,6 +51,16 @@ class LoungeEnquiryCreate(BaseModel):
         trimmed = (v or "Domestic").strip().capitalize()
         if trimmed not in ("Domestic", "International"):
             return "Domestic"
+        return trimmed
+
+    @field_validator("travel_date")
+    @classmethod
+    def validate_travel_date_format(cls, v: str) -> str:
+        trimmed = (v or "").strip()
+        try:
+            datetime.strptime(trimmed, "%Y-%m-%d")
+        except ValueError:
+            raise ValueError("Travel date must be a valid calendar date in YYYY-MM-DD format.")
         return trimmed
 
     @field_validator("flight_number")
@@ -131,23 +142,37 @@ class LoungeOptionsApiResponse(BaseModel):
 
 
 class LoungeEligibilityCheckRequest(BaseModel):
-    lounge_category: str = Field(..., description="'Domestic' or 'International'")
+    lounge_category: str = Field(default="Domestic", description="'Domestic' or 'International'")
     travel_date: str = Field(..., description="Travel date in YYYY-MM-DD format")
     preferred_time: str = Field(..., description="Preferred time slot or HH:MM")
     airport: Optional[str] = Field(None, description="Airport IATA code or name")
 
+    @field_validator("lounge_category")
+    @classmethod
+    def validate_category(cls, v: Optional[str]) -> str:
+        trimmed = (v or "Domestic").strip().capitalize()
+        if trimmed not in ("Domestic", "International"):
+            return "Domestic"
+        return trimmed
+
 
 class LoungeEligibilityData(BaseModel):
-    eligible: bool
-    is_grace_period: bool
-    lead_time_hours: float
-    required_notice_hours: int
-    grace_period_hours: int
-    min_required_hours: int
-    airport_timezone: str
-    server_time: str
-    scheduled_time: str
-    message: str
+    eligible: bool = Field(..., description="Whether enquiry meets notice period requirements")
+    is_grace_period: bool = Field(..., description="Whether enquiry falls within 1-hour grace period")
+    lounge_category: str = Field(..., description="Selected category: 'Domestic' or 'International'")
+    normal_cutoff_datetime: Optional[str] = Field(None, description="ISO 8601 normal cutoff datetime in airport local timezone")
+    grace_period_end_datetime: Optional[str] = Field(None, description="ISO 8601 grace period end datetime in airport timezone")
+    server_datetime: str = Field(..., description="ISO 8601 server current datetime in airport local timezone")
+    travel_datetime: Optional[str] = Field(None, description="ISO 8601 selected travel datetime in airport local timezone")
+    lead_time_hours: float = Field(..., description="Hours remaining between server time and travel datetime")
+    required_notice_hours: int = Field(..., description="Advance notice hours required (12 for Domestic, 24 for International)")
+    grace_period_hours: int = Field(default=1, description="Grace period duration in hours")
+    min_required_hours: int = Field(..., description="Minimum notice hours with grace period applied (11 or 23)")
+    airport_timezone: str = Field(..., description="IANA timezone identifier for the selected airport")
+    message: str = Field(..., description="Human-readable explanation of eligibility and cutoff status")
+    ineligible_reason: Optional[str] = Field(None, description="Specific reason why enquiry is ineligible, if applicable")
+    server_time: Optional[str] = Field(None, description="Backward compatibility alias for server_datetime")
+    scheduled_time: Optional[str] = Field(None, description="Backward compatibility alias for travel_datetime")
 
 
 class LoungeEligibilityApiResponse(BaseModel):

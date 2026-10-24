@@ -16,8 +16,10 @@ Tests:
 """
 
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -28,6 +30,8 @@ from app.database import get_db
 from app.models.lounge_models import LoungeEnquiry, LoungeEnquiryStatus
 from app.models.journey_models import SupportedAirport
 from app.services.auth_service import AuthService
+from app.services.lounge_service import LoungeService
+from app.schemas.lounge import LoungeEligibilityCheckRequest, LoungeEnquiryCreate
 
 client = TestClient(app)
 
@@ -373,3 +377,297 @@ def test_admin_list_and_update_enquiry(admin_token):
         assert db_item is not None
         assert db_item.status == LoungeEnquiryStatus.CONTACTED
         assert db_item.assigned_staff_name == "Arjun Sharma"
+
+
+def test_domestic_cutoff_boundary_matrix():
+    """
+    Test Domestic enquiries across full boundary matrix:
+    - Well before normal cutoff
+    - Exactly at normal cutoff (12h)
+    - During grace period (11h to 12h)
+    - Exactly at end of grace period (11h)
+    - After grace period (< 11h)
+    - When travel datetime is in the past
+    """
+    tz = ZoneInfo("Asia/Kolkata")
+    # Travel date: 2026-11-20 18:00:00 IST (+05:30)
+    # Normal cutoff: 2026-11-20 06:00:00 IST (12 hours before)
+    # Grace period end: 2026-11-20 07:00:00 IST (11 hours before)
+    req = LoungeEligibilityCheckRequest(
+        lounge_category="Domestic",
+        travel_date="2026-11-20",
+        preferred_time="18:00",
+        airport="DEL",
+    )
+
+    # 1. Well before normal cutoff (e.g. 13 hours notice: 05:00:00)
+    res_before = LoungeService.check_eligibility(req, current_time=datetime(2026, 11, 20, 5, 0, 0, tzinfo=tz))
+    assert res_before.eligible is True
+    assert res_before.is_grace_period is False
+    assert res_before.lounge_category == "Domestic"
+    assert res_before.ineligible_reason is None
+    assert res_before.normal_cutoff_datetime == "2026-11-20T06:00:00+05:30"
+    assert res_before.grace_period_end_datetime == "2026-11-20T07:00:00+05:30"
+    assert res_before.travel_datetime == "2026-11-20T18:00:00+05:30"
+    assert res_before.lead_time_hours == 13.0
+    assert "Standard notice period met" in res_before.message
+
+    # 2. Exactly at normal cutoff (exactly 12 hours notice: 06:00:00)
+    res_at_cutoff = LoungeService.check_eligibility(req, current_time=datetime(2026, 11, 20, 6, 0, 0, tzinfo=tz))
+    assert res_at_cutoff.eligible is True
+    assert res_at_cutoff.is_grace_period is False
+    assert res_at_cutoff.ineligible_reason is None
+    assert res_at_cutoff.lead_time_hours == 12.0
+    assert "Standard notice period met" in res_at_cutoff.message
+
+    # 3. During grace period (11.5 hours notice: 06:30:00)
+    res_in_grace = LoungeService.check_eligibility(req, current_time=datetime(2026, 11, 20, 6, 30, 0, tzinfo=tz))
+    assert res_in_grace.eligible is True
+    assert res_in_grace.is_grace_period is True
+    assert res_in_grace.ineligible_reason is None
+    assert res_in_grace.lead_time_hours == 11.5
+    assert "grace period" in res_in_grace.message.lower()
+
+    # 4. Exactly at end of grace period (exactly 11 hours notice: 07:00:00)
+    res_at_grace_end = LoungeService.check_eligibility(req, current_time=datetime(2026, 11, 20, 7, 0, 0, tzinfo=tz))
+    assert res_at_grace_end.eligible is True
+    assert res_at_grace_end.is_grace_period is True
+    assert res_at_grace_end.ineligible_reason is None
+    assert res_at_grace_end.lead_time_hours == 11.0
+    assert "grace period" in res_at_grace_end.message.lower()
+
+    # 5. After grace period (10h 59m 59s notice: 07:00:01)
+    res_after_grace = LoungeService.check_eligibility(req, current_time=datetime(2026, 11, 20, 7, 0, 1, tzinfo=tz))
+    assert res_after_grace.eligible is False
+    assert res_after_grace.is_grace_period is False
+    assert res_after_grace.ineligible_reason is not None
+    assert "Cutoff window expired" in res_after_grace.ineligible_reason
+    assert "outside the allowed enquiry window" in res_after_grace.message
+
+    # 6. Selected travel datetime is in the past (18:00:00 and 19:00:00)
+    res_exact_travel = LoungeService.check_eligibility(req, current_time=datetime(2026, 11, 20, 18, 0, 0, tzinfo=tz))
+    assert res_exact_travel.eligible is False
+    assert res_exact_travel.is_grace_period is False
+    assert res_exact_travel.ineligible_reason == "Selected travel date and time is in the past."
+
+    res_past = LoungeService.check_eligibility(req, current_time=datetime(2026, 11, 20, 19, 0, 0, tzinfo=tz))
+    assert res_past.eligible is False
+    assert res_past.is_grace_period is False
+    assert res_past.ineligible_reason == "Selected travel date and time is in the past."
+
+
+def test_international_cutoff_boundary_matrix():
+    """
+    Test International enquiries across full boundary matrix:
+    - Well before normal cutoff
+    - Exactly at normal cutoff (24h)
+    - During grace period (23h to 24h)
+    - Exactly at end of grace period (23h)
+    - After grace period (< 23h)
+    - When travel datetime is in the past
+    """
+    tz = ZoneInfo("Asia/Dubai")
+    # Travel date: 2026-11-20 18:00:00 GST (+04:00)
+    # Normal cutoff: 2026-11-19 18:00:00 GST (24 hours before)
+    # Grace period end: 2026-11-19 19:00:00 GST (23 hours before)
+    req = LoungeEligibilityCheckRequest(
+        lounge_category="International",
+        travel_date="2026-11-20",
+        preferred_time="18:00",
+        airport="DXB",
+    )
+
+    # 1. Well before normal cutoff (e.g. 30 hours notice: 2026-11-19 12:00:00)
+    res_before = LoungeService.check_eligibility(req, current_time=datetime(2026, 11, 19, 12, 0, 0, tzinfo=tz))
+    assert res_before.eligible is True
+    assert res_before.is_grace_period is False
+    assert res_before.lounge_category == "International"
+    assert res_before.ineligible_reason is None
+    assert res_before.normal_cutoff_datetime == "2026-11-19T18:00:00+04:00"
+    assert res_before.grace_period_end_datetime == "2026-11-19T19:00:00+04:00"
+    assert res_before.travel_datetime == "2026-11-20T18:00:00+04:00"
+    assert res_before.lead_time_hours == 30.0
+    assert "Standard notice period met" in res_before.message
+
+    # 2. Exactly at normal cutoff (exactly 24 hours notice: 2026-11-19 18:00:00)
+    res_at_cutoff = LoungeService.check_eligibility(req, current_time=datetime(2026, 11, 19, 18, 0, 0, tzinfo=tz))
+    assert res_at_cutoff.eligible is True
+    assert res_at_cutoff.is_grace_period is False
+    assert res_at_cutoff.ineligible_reason is None
+    assert res_at_cutoff.lead_time_hours == 24.0
+
+    # 3. During grace period (23.5 hours notice: 2026-11-19 18:30:00)
+    res_in_grace = LoungeService.check_eligibility(req, current_time=datetime(2026, 11, 19, 18, 30, 0, tzinfo=tz))
+    assert res_in_grace.eligible is True
+    assert res_in_grace.is_grace_period is True
+    assert res_in_grace.ineligible_reason is None
+    assert res_in_grace.lead_time_hours == 23.5
+    assert "grace period" in res_in_grace.message.lower()
+
+    # 4. Exactly at end of grace period (exactly 23 hours notice: 2026-11-19 19:00:00)
+    res_at_grace_end = LoungeService.check_eligibility(req, current_time=datetime(2026, 11, 19, 19, 0, 0, tzinfo=tz))
+    assert res_at_grace_end.eligible is True
+    assert res_at_grace_end.is_grace_period is True
+    assert res_at_grace_end.ineligible_reason is None
+    assert res_at_grace_end.lead_time_hours == 23.0
+
+    # 5. After grace period (22h 59m 59s notice: 2026-11-19 19:00:01)
+    res_after_grace = LoungeService.check_eligibility(req, current_time=datetime(2026, 11, 19, 19, 0, 1, tzinfo=tz))
+    assert res_after_grace.eligible is False
+    assert res_after_grace.is_grace_period is False
+    assert res_after_grace.ineligible_reason is not None
+    assert "Cutoff window expired" in res_after_grace.ineligible_reason
+    assert "outside the allowed enquiry window" in res_after_grace.message
+
+    # 6. Selected travel datetime is in the past
+    res_past = LoungeService.check_eligibility(req, current_time=datetime(2026, 11, 20, 20, 0, 0, tzinfo=tz))
+    assert res_past.eligible is False
+    assert res_past.is_grace_period is False
+    assert res_past.ineligible_reason == "Selected travel date and time is in the past."
+
+
+def test_across_different_airport_timezones():
+    """
+    Test across multiple airport timezones: DEL (+05:30), DXB (+04:00), SIN (+08:00), LHR (Europe/London).
+    Verifies that normal cutoff, grace period end, server datetime, and travel datetime all carry explicit timezone offsets.
+    """
+    test_cases = [
+        {"airport": "DEL", "expected_tz": "Asia/Kolkata", "expected_offset": "+05:30"},
+        {"airport": "DXB", "expected_tz": "Asia/Dubai", "expected_offset": "+04:00"},
+        {"airport": "SIN", "expected_tz": "Asia/Singapore", "expected_offset": "+08:00"},
+        {"airport": "DOH", "expected_tz": "Asia/Qatar", "expected_offset": "+03:00"},
+        {"airport": "London Heathrow (LHR)", "expected_tz": "Europe/London", "expected_offset": "+00:00"},
+    ]
+
+    for tc in test_cases:
+        req = LoungeEligibilityCheckRequest(
+            lounge_category="International",
+            travel_date="2026-12-15",
+            preferred_time="14:00",
+            airport=tc["airport"],
+        )
+        # Fix server time in UTC: 2026-12-10 10:00:00 UTC
+        server_utc = datetime(2026, 12, 10, 10, 0, 0, tzinfo=timezone.utc)
+        res = LoungeService.check_eligibility(req, current_time=server_utc)
+
+        assert res.airport_timezone == tc["expected_tz"], f"Failed for {tc['airport']}"
+        assert res.eligible is True
+        assert res.normal_cutoff_datetime is not None
+        assert res.normal_cutoff_datetime.startswith("2026-12-14T14:00:00")
+        assert res.grace_period_end_datetime is not None
+        assert res.grace_period_end_datetime.startswith("2026-12-14T15:00:00")
+        assert res.travel_datetime is not None
+        assert res.travel_datetime.startswith("2026-12-15T14:00:00")
+        # Ensure offset exists on all ISO strings
+        assert tc["expected_offset"] in res.travel_datetime or res.travel_datetime.endswith("Z")
+
+
+def test_invalid_dates_and_times_handling():
+    """
+    Test rejection of invalid dates and times:
+    - Non-existent calendar day (e.g. 2026-02-31)
+    - Malformed date string
+    - Out-of-range hour/minute (e.g. 25:00, 14:75)
+    - Unparseable time string
+    """
+    # 1. Invalid calendar day (Feb 31)
+    req_bad_day = LoungeEligibilityCheckRequest(
+        lounge_category="Domestic",
+        travel_date="2026-02-31",
+        preferred_time="Morning (06:00 – 12:00)",
+        airport="DEL",
+    )
+    res_bad_day = LoungeService.check_eligibility(req_bad_day)
+    assert res_bad_day.eligible is False
+    assert res_bad_day.ineligible_reason is not None
+    assert "Invalid travel date" in res_bad_day.ineligible_reason
+
+    # 2. Out-of-range time (25:00)
+    req_bad_time = LoungeEligibilityCheckRequest(
+        lounge_category="Domestic",
+        travel_date="2026-11-20",
+        preferred_time="25:00",
+        airport="DEL",
+    )
+    res_bad_time = LoungeService.check_eligibility(req_bad_time)
+    assert res_bad_time.eligible is False
+    assert res_bad_time.ineligible_reason is not None
+    assert "Invalid 24-hour time values" in res_bad_time.ineligible_reason
+
+    # 3. Unrecognized time format
+    req_unrec_time = LoungeEligibilityCheckRequest(
+        lounge_category="Domestic",
+        travel_date="2026-11-20",
+        preferred_time="whenever",
+        airport="DEL",
+    )
+    res_unrec_time = LoungeService.check_eligibility(req_unrec_time)
+    assert res_unrec_time.eligible is False
+    assert res_unrec_time.ineligible_reason is not None
+    assert "Unrecognized preferred time format" in res_unrec_time.ineligible_reason
+
+    # 4. Submission of invalid travel date rejected with 422
+    payload_bad_date = {
+        "full_name": "Eleanor Vance",
+        "mobile_number": "+919876543210",
+        "email_address": "eleanor.vance@luxurytravel.org",
+        "airport": "DEL",
+        "lounge_type": "VIP / First Class Lounge",
+        "travel_date": "2026-02-31",
+        "preferred_time": "14:00",
+        "number_of_passengers": 1,
+    }
+    submit_res = client.post("/api/v1/lounges/enquiries", json=payload_bad_date)
+    assert submit_res.status_code == 422
+
+
+def test_authoritative_server_submission_cutoff_enforcement():
+    """
+    Ensure the submission endpoint recalculates eligibility on the server and rejects expired enquiries.
+    """
+    tz = ZoneInfo("Asia/Kolkata")
+    # Travel date: 2026-11-20 18:00:00 (Domestic)
+    # End of grace period is 2026-11-20 07:00:00
+    with TestingSessionLocal() as db:
+        # A. Attempting submission AFTER grace period (07:05:00) -> 422
+        expired_payload = LoungeEnquiryCreate(
+            full_name="Sebastian Croft",
+            mobile_number="+919123456789",
+            email_address="sebastian.croft@voyage.org",
+            airport="DEL",
+            lounge_category="Domestic",
+            lounge_type="VIP / First Class Lounge",
+            travel_date="2026-11-20",
+            preferred_time="18:00",
+            number_of_passengers=1,
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            LoungeService.create_enquiry(
+                db=db,
+                payload=expired_payload,
+                current_time=datetime(2026, 11, 20, 7, 5, 0, tzinfo=tz),
+            )
+        assert exc_info.value.status_code == 422
+        assert "outside the allowed enquiry window" in str(exc_info.value.detail)
+
+        # B. Submission DURING grace period (06:30:00) -> Succeeds with PENDING status
+        grace_payload = LoungeEnquiryCreate(
+            full_name="Sebastian Croft",
+            mobile_number="+919123456789",
+            email_address="sebastian.croft@voyage.org",
+            airport="DEL",
+            lounge_category="Domestic",
+            lounge_type="VIP / First Class Lounge",
+            travel_date="2026-11-20",
+            preferred_time="18:00",
+            number_of_passengers=1,
+        )
+        enquiry, is_dup = LoungeService.create_enquiry(
+            db=db,
+            payload=grace_payload,
+            current_time=datetime(2026, 11, 20, 6, 30, 0, tzinfo=tz),
+        )
+        assert enquiry is not None
+        assert enquiry.status == LoungeEnquiryStatus.PENDING
+        assert is_dup is False
+
