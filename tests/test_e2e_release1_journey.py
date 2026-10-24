@@ -38,7 +38,7 @@ def test_full_release1_customer_journey():
         )
         db.add(customer)
         db.flush()
-        db.add(Profile(auth_id=customer.id, email=customer_email, role=Role.CUSTOMER, full_name="E2E Test Customer"))
+        db.add(Profile(auth_id=customer.id, email=customer_email, role=Role.CUSTOMER, full_name="Alpha Test Customer"))
         admin = db.scalar(select(UserAuth).where(UserAuth.email == "admin@shafskyaviation.com"))
         if not admin:
             admin = UserAuth(
@@ -89,7 +89,7 @@ def test_full_release1_customer_journey():
         },
         "passengers": [
             {
-                "full_name": "E2E Test Customer",
+                "full_name": "Alpha Test Customer",
                 "passport_number": "Z1234567",
                 "is_primary": True,
             }

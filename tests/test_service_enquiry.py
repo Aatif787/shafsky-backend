@@ -466,5 +466,47 @@ def test_ticketing_enquiry_success_and_whatsapp():
         assert "2026-11-15" in msg_text
 
 
+def test_valid_onboard_meal_arrangement_enquiry_success():
+    db = _db_with_unique_ref()
 
+    with patch("app.integrations.whatsapp.client.whatsapp_client.send_text_message") as mock_wa:
+        mock_wa.return_value = {"success": True, "message_id": "wamid.meal_123"}
 
+        booking = BookingService.create_service_enquiry(
+            db,
+            passenger_name="Chef Robert",
+            passenger_email="robert@vip-dining.test",
+            passenger_phone="+919876543299",
+            service_category="Travel Support",
+            service_type="On-board Meal Arrangements for Group Meet & Greet Bookings",
+            origin="DEL",
+            destination="LHR",
+            service_date="2026-11-20",
+            notes="12 Vegan & Halal meals with low sodium",
+            details={
+                "passenger_name": "Chef Robert",
+                "flight_number": "AI 101",
+                "travel_date": "2026-11-20",
+                "sector": "DEL – LHR",
+                "meal_types": ["Breakfast", "Lunch"],
+                "meal_preferences": ["Vegan", "Halal"],
+                "meal_count": 12,
+                "allergies": ["Dairy", "Gluten"],
+                "additional_instructions": "Serve warm at 35,000 ft",
+                "id_type": "Passport",
+                "id_number": "",
+                "id_proof_attached": False,
+                "passenger_count": 12,
+            },
+        )
+
+        assert booking.service_category == "Travel Support"
+        assert booking.service_type == "On-board Meal Arrangements for Group Meet & Greet Bookings"
+        assert booking.status == BookingStatus.PENDING
+        assert float(booking.total_amount) == 0.0
+        assert booking.metadata_json.get("enquiry") is True
+        assert booking.metadata_json.get("quote_only") is True
+        assert booking.booking_ref.startswith("SHF-")
+        assert booking.origin_code == "DEL"
+        assert booking.dest_code == "LHR"
+        assert booking.metadata_json["details"]["meal_count"] == 12
