@@ -1,4 +1,4 @@
-﻿import sys
+import sys
 import os
 import pytest
 from datetime import datetime, timedelta, timezone
@@ -195,7 +195,7 @@ def test_create_cargo_logistics_booking(client):
 
 def test_create_medical_assistance_booking(client):
     payload = {
-        "passengerName": "Dr. Eleanor Medical",
+        "passengerName": "Eleanor Medical",
         "passengerEmail": "eleanor@shafsky-mail.com",
         "passengerPhone": "+19876543214",
         "originCode": "DEL",
@@ -249,7 +249,7 @@ def test_release_1_backward_compatibility(client):
     dep_time = (datetime.now(timezone.utc) + timedelta(hours=48)).isoformat()
     arr_time = (datetime.now(timezone.utc) + timedelta(hours=52)).isoformat()
     payload = {
-        "passengerName": "Release1 Client",
+        "passengerName": "Release Client",
         "passengerEmail": "r1@shafsky-mail.com",
         "passengerPhone": "+19876543299",
         "serviceType": "silver",
