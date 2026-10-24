@@ -221,6 +221,9 @@ def get_services_at_airport(
             item.short_description = _clean_text(item.short_description)
         if item.features:
             item.features = _clean_str_list(item.features)
+            item.inclusions = list(item.features) if item.features else []
+        else:
+            item.inclusions = []
         if item.additional_benefits:
             item.additional_benefits = _clean_str_list(item.additional_benefits)
         if m.service:

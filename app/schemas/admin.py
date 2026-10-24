@@ -42,8 +42,10 @@ class AirportServiceUpdateRequest(BaseModel):
     is_available: Optional[bool] = None
     terminal: Optional[str] = None
     features: Optional[List[str] | str] = None
+    inclusions: Optional[List[str] | str] = None
     short_description: Optional[str] = None
     min_booking_notice_hours: Optional[int] = Field(None, ge=0)
+
 
 
 class CouponToggleRequest(BaseModel):

@@ -76,6 +76,7 @@ class AirportServiceResponse(BaseModel):
     terminal: Optional[str] = None
     short_description: Optional[str] = None
     features: Optional[List[str]] = []
+    inclusions: Optional[List[str]] = Field(default_factory=list)
     additional_benefits: Optional[List[str]] = []
     min_booking_notice_hours: int
     is_available: bool

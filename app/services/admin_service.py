@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy import select, func, or_, desc
 from fastapi import HTTPException
 
@@ -595,6 +596,7 @@ class AdminService:
                 "terminal": aps.terminal or "All",
                 "is_available": aps.is_available,
                 "features": aps.features if isinstance(aps.features, list) else [],
+                "inclusions": aps.features if isinstance(aps.features, list) else [],
                 "short_description": aps.short_description or "",
                 "min_booking_notice_hours": aps.min_booking_notice_hours or 0,
                 "updated_at": aps.updated_at.isoformat() if aps.updated_at else None,
@@ -627,6 +629,7 @@ class AdminService:
             "journey_type": mapping.journey_type,
             "flight_type": mapping.flight_type,
             "features": list(mapping.features) if isinstance(mapping.features, list) else [],
+            "inclusions": list(mapping.features) if isinstance(mapping.features, list) else [],
         }
 
         if "price" in updates and updates["price"] is not None:
@@ -652,22 +655,31 @@ class AdminService:
         if "terminal" in updates and updates["terminal"] is not None:
             mapping.terminal = str(updates["terminal"]).strip()
 
+        # Inclusions / features handling (accept either field name)
+        features_input = None
         if "features" in updates and updates["features"] is not None:
-            if isinstance(updates["features"], list):
+            features_input = updates["features"]
+        elif "inclusions" in updates and updates["inclusions"] is not None:
+            features_input = updates["inclusions"]
+
+        if features_input is not None:
+            if isinstance(features_input, list):
                 cleaned_features = [
                     str(f).strip().lstrip("•-*").strip()
-                    for f in updates["features"]
+                    for f in features_input
                     if str(f).strip()
                 ]
                 setattr(mapping, "features", cleaned_features)
-            elif isinstance(updates["features"], str):
-                raw_str = updates["features"].strip()
+                flag_modified(mapping, "features")
+            elif isinstance(features_input, str):
+                raw_str = features_input.strip()
                 if "\n" in raw_str:
                     lines = [line.strip().lstrip("•-*").strip() for line in raw_str.split("\n")]
                 else:
                     lines = [f.strip().lstrip("•-*").strip() for f in raw_str.split(",")]
                 cleaned_features = [line for line in lines if line]
                 setattr(mapping, "features", cleaned_features)
+                flag_modified(mapping, "features")
 
         if "short_description" in updates and updates["short_description"] is not None:
             mapping.short_description = str(updates["short_description"]).strip()
@@ -703,6 +715,7 @@ class AdminService:
                         "is_available": mapping.is_available,
                         "terminal": mapping.terminal,
                         "features": list(mapping.features) if isinstance(mapping.features, list) else [],
+                        "inclusions": list(mapping.features) if isinstance(mapping.features, list) else [],
                     }
                 }
             )
@@ -735,6 +748,7 @@ class AdminService:
             "terminal": mapping.terminal or "All",
             "is_available": mapping.is_available,
             "features": mapping.features if isinstance(mapping.features, list) else [],
+            "inclusions": mapping.features if isinstance(mapping.features, list) else [],
             "short_description": mapping.short_description or "",
             "min_booking_notice_hours": mapping.min_booking_notice_hours or 0,
             "updated_at": mapping.updated_at.isoformat() if mapping.updated_at else None,
