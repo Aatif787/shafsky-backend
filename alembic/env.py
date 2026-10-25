@@ -46,6 +46,7 @@ import app.models.payment
 import app.models.airport
 import app.models.shared_domain
 import app.models.charter_models
+import app.models.lounge_models
 import app.models.ticketing
 import app.models.system_events
 

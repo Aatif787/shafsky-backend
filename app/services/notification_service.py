@@ -1113,11 +1113,105 @@ class NotificationService:
             return {"status": "FAILED", "error": type(exc).__name__}
 
     @classmethod
+    def _dispatch_lounge_enquiry_whatsapp(cls, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Dispatches an outbound WhatsApp notification to staff assigned to Lounge service
+        for a newly created Lounge enquiry.
+        Never raises: all network and Meta API failures are caught and logged safely.
+        """
+        booking_ref = str(context.get("booking_ref") or context.get("bookingRef") or "N/A")
+        details = context.get("details") or {}
+
+        officer_phone = (
+            getattr(settings, "WHATSAPP_LOUNGE_STAFF_PHONE", None)
+            or getattr(settings, "WHATSAPP_OFFICER_NOTIFY_PHONE", None)
+            or os.getenv("WHATSAPP_LOUNGE_STAFF_PHONE", "")
+            or os.getenv("WHATSAPP_OFFICER_NOTIFY_PHONE", "")
+            or "919599087957"
+        ).strip()
+
+        if not officer_phone:
+            logger.warning(
+                "Lounge enquiry WhatsApp skipped: staff phone is not configured",
+                extra={"booking_ref": booking_ref},
+            )
+            return {"status": "BYPASSED", "reason": "officer_phone_not_configured"}
+
+        customer_name = str(context.get("passenger_name") or context.get("passengerName") or "N/A").strip()
+        customer_phone = str(context.get("passenger_phone") or context.get("passengerPhone") or "N/A").strip()
+        customer_email = str(context.get("passenger_email") or context.get("passengerEmail") or "N/A").strip()
+
+        airport = context.get("origin_code") or details.get("airport") or "N/A"
+        lounge_type = context.get("service_type") or details.get("lounge_type") or "Lounge"
+        travel_date = (
+            details.get("travel_date")
+            or details.get("service_date")
+            or context.get("departure_time")
+            or "N/A"
+        )
+        pax_count = (
+            details.get("passenger_count")
+            or details.get("passengerCount")
+            or context.get("passenger_count")
+            or 1
+        )
+        notes = (
+            context.get("notes")
+            or details.get("additional_requirements")
+            or details.get("notes")
+        )
+
+        message_body = (
+            f"🛋️ *NEW LOUNGE ENQUIRY RECEIVED*\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"📋 *Ref:* {booking_ref}\n"
+            f"👤 *Guest:* {customer_name}\n"
+            f"📞 *Phone:* {customer_phone}\n"
+            f"✉️ *Email:* {customer_email}\n"
+            f"📍 *Airport:* {airport}\n"
+            f"🛋️ *Lounge Type:* {lounge_type}\n"
+            f"📅 *Date & Time:* {travel_date}\n"
+            f"👥 *Passengers:* {pax_count}\n"
+        )
+        if notes:
+            message_body += f"📝 *Requirements:* {notes}\n"
+        message_body += (
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"⚡ *Action Required:* Please contact the guest with lounge availability and rates."
+        )
+
+        try:
+            result = whatsapp_client.send_text_message(
+                to_phone=officer_phone,
+                message=message_body,
+            )
+            if result.get("success"):
+                logger.info(
+                    "Lounge WhatsApp notification dispatched for %s to %s",
+                    booking_ref,
+                    officer_phone,
+                )
+                return {"status": "DELIVERED", "message_id": result.get("message_id")}
+            logger.warning(
+                "Lounge WhatsApp notification dispatch failed for %s: %s",
+                booking_ref,
+                result.get("error"),
+            )
+            return {"status": "FAILED", "error": result.get("error")}
+        except Exception as exc:
+            logger.warning(
+                "Lounge WhatsApp notification encountered exception for %s: %s",
+                booking_ref,
+                type(exc).__name__,
+            )
+            return {"status": "FAILED", "error": type(exc).__name__}
+
+    @classmethod
     # pylint: disable=unused-argument
     def notify_booking_created(cls, db: Session, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         After a booking is persisted:
-        - For Ground Transport, Round Trip, and Ticketing enquiries: dispatches WhatsApp notification to the Shafsky operations team.
+        - For Ground Transport, Round Trip, Ticketing, and Lounge enquiries: dispatches WhatsApp notification to the Shafsky operations team.
         - For pending payments (airport assistance): suppresses customer email until payment confirmation.
         """
         _ = db
@@ -1174,6 +1268,21 @@ class NotificationService:
             except Exception as err:
                 logger.warning(
                     "Ticketing WhatsApp notification failed for %s: %s",
+                    booking_ref,
+                    type(err).__name__,
+                )
+                summary["admin"].append({"channel": "WHATSAPP", "status": "FAILED"})
+        elif cat_lower in ("lounge", "airport lounge", "lounge access"):
+            try:
+                wa_res = cls._dispatch_lounge_enquiry_whatsapp(context)
+                summary["admin"].append({
+                    "channel": "WHATSAPP",
+                    "status": wa_res.get("status", "DISPATCHED"),
+                    "details": wa_res,
+                })
+            except Exception as err:
+                logger.warning(
+                    "Lounge WhatsApp notification failed for %s: %s",
                     booking_ref,
                     type(err).__name__,
                 )

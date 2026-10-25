@@ -1156,6 +1156,7 @@ class BookingService:
                 "Cargo & Logistics": ["Cargo & Logistics", "Cargo"],
                 "Private Charter": ["Private Charter", "Charter"],
                 "Meet & Greet": ["Meet & Greet", "Airport Assistance", "Airport Services"],
+                "Lounge": ["Lounge", "Lounge Access", "Airport Lounge"],
             }
             raw_cat = service_category.strip()
             aliases = CATEGORY_FILTER_ALIASES.get(raw_cat, [raw_cat])
