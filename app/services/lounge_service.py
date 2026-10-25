@@ -62,12 +62,12 @@ VERIFIED_PREFERRED_TIMES = [
 CUTOFF_RULES = {
     "Domestic": CutoffRuleItem(
         notice_hours=12,
-        grace_period_hours=1,
+        grace_period_hours=0,
         notice_text="Domestic lounge enquiries require at least 12 hours' notice.",
     ),
     "International": CutoffRuleItem(
         notice_hours=24,
-        grace_period_hours=1,
+        grace_period_hours=0,
         notice_text="International lounge enquiries require at least 24 hours' notice.",
     ),
 }
@@ -230,14 +230,13 @@ class LoungeService:
     ) -> LoungeEligibilityData:
         """
         Authoritative eligibility evaluation:
-        - Domestic: 12h notice required. 1h grace period (normal cutoff: travel - 12h, grace period end: travel - 11h).
-        - International: 24h notice required. 1h grace period (normal cutoff: travel - 24h, grace period end: travel - 23h).
+        - Domestic: 12h advance notice required; no grace period.
+        - International: 24h advance notice required; no grace period.
         - Real-time calculation relative to server time in the airport's local timezone.
         - Boundary conditions handled:
             * server_time >= travel_datetime: in the past -> ineligible
             * server_time <= normal_cutoff: standard notice -> eligible, is_grace_period=False
-            * server_time <= grace_period_end: grace period -> eligible, is_grace_period=True
-            * server_time > grace_period_end: after grace period -> ineligible, is_grace_period=False
+            * Any time after normal_cutoff: ineligible; no grace period is allowed.
         """
         category = (payload.lounge_category or "Domestic").strip().capitalize()
         if category not in ("Domestic", "International"):
@@ -262,8 +261,8 @@ class LoungeService:
         server_datetime_str = server_dt_local.isoformat()
 
         notice_hours = 12 if category == "Domestic" else 24
-        grace_period_hours = 1
-        min_required_hours = notice_hours - grace_period_hours
+        grace_period_hours = 0
+        min_required_hours = notice_hours
 
         # 1. Parse and validate travel date
         try:
@@ -339,7 +338,7 @@ class LoungeService:
 
         # 4. Calculate cutoff datetimes in airport local timezone
         normal_cutoff_dt = travel_dt - timedelta(hours=notice_hours)
-        grace_period_end_dt = normal_cutoff_dt + timedelta(hours=grace_period_hours)
+        grace_period_end_dt = normal_cutoff_dt
         normal_cutoff_str = normal_cutoff_dt.isoformat()
         grace_period_end_str = grace_period_end_dt.isoformat()
 
@@ -358,21 +357,16 @@ class LoungeService:
             is_grace = False
             ineligible_reason = None
             msg = f"Standard notice period met ({lead_hours:.1f}h notice in airport local timezone: {tz_str})."
-        elif server_dt_local <= grace_period_end_dt:
-            eligible = True
-            is_grace = True
-            ineligible_reason = None
-            msg = f"Within 1-hour grace period ({lead_hours:.1f}h notice). Subject to airport lounge operational availability."
         else:
             eligible = False
             is_grace = False
             ineligible_reason = (
                 f"Cutoff window expired. {category} lounge enquiries require at least {notice_hours} hours advance notice "
-                f"(or minimum {min_required_hours} hours with the 1-hour grace period)."
+                f"."
             )
             msg = (
                 f"Selected time is outside the allowed enquiry window. {category} lounge enquiries "
-                f"require at least {notice_hours} hours' notice (minimum {min_required_hours} hours with grace period). "
+                f"require at least {notice_hours} hours' notice. "
                 f"Current lead time is {max(0.0, lead_hours):.1f} hours."
             )
 
