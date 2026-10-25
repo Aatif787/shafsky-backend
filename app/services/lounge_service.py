@@ -68,7 +68,7 @@ CUTOFF_RULES = {
     "International": CutoffRuleItem(
         notice_hours=24,
         grace_period_hours=1,
-        notice_text="International lounge enquiries require at least 24 hours' notice. A 1-hour grace period may apply, subject to availability.",
+        notice_text="International lounge enquiries require at least 24 hours' notice.",
     ),
 }
 
