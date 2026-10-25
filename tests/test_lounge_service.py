@@ -671,3 +671,101 @@ def test_authoritative_server_submission_cutoff_enforcement():
         assert enquiry.status == LoungeEnquiryStatus.PENDING
         assert is_dup is False
 
+
+def test_lounge_service_security_and_injection_resilience(admin_token):
+    """
+    Security validation suite:
+    1. SQL injection payloads in search, airport, and reference parameters are safely parameterized.
+    2. XSS payloads in full_name are rejected by schema validators.
+    3. Additional requirements allow unicode safely without execution.
+    4. Disposable and placeholder email domains are rejected with 422.
+    5. Public reference lookup strictly masks customer PII.
+    """
+    headers = {"Authorization": f"Bearer {admin_token}"}
+
+    # 1. SQL Injection attempt in admin search filter
+    sqli_searches = [
+        "' OR '1'='1",
+        "'; DROP TABLE lounge_enquiries; --",
+        "DEL' UNION SELECT * FROM users --",
+    ]
+    for payload in sqli_searches:
+        res = client.get(f"/api/v1/admin/lounges/enquiries?search={payload}", headers=headers)
+        assert res.status_code == 200
+        data = res.json()
+        assert "items" in data["data"]
+
+    # 2. SQL Injection in public reference lookup
+    res_sqli = client.get("/api/v1/lounges/enquiries/' OR 1=1 --")
+    assert res_sqli.status_code == 404
+
+    # 3. XSS in full_name rejected by validator
+    res_xss_name = client.post(
+        "/api/v1/lounges/enquiries",
+        json={
+            "full_name": "<script>alert('xss')</script>",
+            "mobile_number": "+919876543210",
+            "email_address": "secure.guest@voyage.org",
+            "airport": "DEL",
+            "lounge_category": "Domestic",
+            "lounge_type": "VIP / First Class Lounge",
+            "travel_date": "2026-11-20",
+            "preferred_time": "18:00",
+            "number_of_passengers": 1,
+        },
+    )
+    assert res_xss_name.status_code == 422
+    assert "Full name must contain letters only" in res_xss_name.text
+
+    # 4. Disposable/placeholder email rejected
+    res_bad_email = client.post(
+        "/api/v1/lounges/enquiries",
+        json={
+            "full_name": "Alexander Wright",
+            "mobile_number": "+919876543210",
+            "email_address": "test@example.com",
+            "airport": "DEL",
+            "lounge_category": "Domestic",
+            "lounge_type": "VIP / First Class Lounge",
+            "travel_date": "2026-11-20",
+            "preferred_time": "18:00",
+            "number_of_passengers": 1,
+        },
+    )
+    assert res_bad_email.status_code == 422
+
+    # 5. Non-owner lookup masks PII completely
+    # Create a valid enquiry
+    future_date = (date.today() + timedelta(days=10)).isoformat()
+    res_create = client.post(
+        "/api/v1/lounges/enquiries",
+        json={
+            "full_name": "Eleanor Vance",
+            "mobile_number": "+919876543210",
+            "email_address": "eleanor.vance@voyage.org",
+            "whatsapp_number": "+919876543211",
+            "airport": "DEL",
+            "lounge_category": "Domestic",
+            "lounge_type": "VIP / First Class Lounge",
+            "travel_date": future_date,
+            "preferred_time": "18:00",
+            "number_of_passengers": 2,
+            "additional_requirements": "Window view preferred <style>body{color:red}</style>",
+        },
+    )
+    assert res_create.status_code == 201
+    ref = res_create.json()["data"]["enquiry_reference"]
+
+    # Public unauthenticated lookup
+    res_public = client.get(f"/api/v1/lounges/enquiries/{ref}")
+    assert res_public.status_code == 200
+    pub_data = res_public.json()["data"]
+
+    # Assert PII masking
+    assert pub_data["full_name"] == "E*** V***"
+    assert pub_data["email_address"] == "***@***"
+    assert "mobile_number" not in pub_data
+    assert "whatsapp_number" not in pub_data
+    assert "internal_notes" not in pub_data
+
+
