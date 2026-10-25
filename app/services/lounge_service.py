@@ -63,7 +63,7 @@ CUTOFF_RULES = {
     "Domestic": CutoffRuleItem(
         notice_hours=12,
         grace_period_hours=1,
-        notice_text="Domestic lounge enquiries require at least 12 hours' notice. A 1-hour grace period may apply, subject to availability.",
+        notice_text="Domestic lounge enquiries require at least 12 hours' notice.",
     ),
     "International": CutoffRuleItem(
         notice_hours=24,
