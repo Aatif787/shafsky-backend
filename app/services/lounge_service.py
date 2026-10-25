@@ -623,24 +623,21 @@ class LoungeService:
     @classmethod
     def get_options(cls, db: Session) -> LoungeOptionsData:
         """
-        Fetches active airports from database and verified lounge configuration.
-        Does not invent availability.
+        Fetches the Lounge Service airport search list from data/airports.csv.
+        Lounge configuration and enquiry persistence remain unchanged.
         """
-        active_airports = db.scalars(
-            select(SupportedAirport)
-            .where(SupportedAirport.is_active.is_(True))
-            .order_by(SupportedAirport.iata_code)
-        ).all()
+        from app.flight.csv_airports import load_global_airports
 
+        csv_airports, _large_airports, _by_code = load_global_airports()
         airports_list: List[AirportOptionItem] = [
             AirportOptionItem(
-                code=ap.iata_code,
-                name=ap.airport_name,
-                city=ap.city,
-                country=ap.country,
-                timezone=ap.timezone or AIRPORT_TIMEZONES.get(ap.iata_code, "Asia/Kolkata"),
+                code=airport["code"],
+                name=airport["name"],
+                city=airport["city"],
+                country=airport["country"],
+                timezone=AIRPORT_TIMEZONES.get(airport["code"], "Asia/Kolkata"),
             )
-            for ap in active_airports
+            for airport in sorted(csv_airports, key=lambda item: (item["code"], item["name"]))
         ]
 
         server_now = datetime.now(timezone.utc).isoformat()
