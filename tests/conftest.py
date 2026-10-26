@@ -47,6 +47,8 @@ def configure_test_database() -> None:
     # Default suite expects Razorpay checkout. Force this so a developer shell
     # with PAYMENT_GATEWAY=ICICI (or a local .env) cannot break CI/payment tests.
     os.environ["PAYMENT_GATEWAY"] = "RAZORPAY"
+    # Ensure default flight unit tests run against AviationEdgeProvider unless explicitly overridden
+    os.environ["FLIGHT_PROVIDER"] = "aviation_edge"
     # CI has no Razorpay key, so the placeholders below apply. A local .env may
     # already contain a live key; load_dotenv() will not override an rzp_test_
     # key exported by the shell. Pytest must not keep a non-test key.

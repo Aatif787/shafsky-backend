@@ -108,10 +108,10 @@ class Settings(BaseSettings):
     AVIATIONSTACK_MAX_RETRIES: int = int(os.getenv("AVIATIONSTACK_MAX_RETRIES", "2"))
     AVIATIONSTACK_CACHE_TTL_SECONDS: int = int(os.getenv("AVIATIONSTACK_CACHE_TTL_SECONDS", "300"))
 
-    # Primary flight provider for website flight intelligence: "aviationstack" or "aviation_edge"
+    # Primary flight provider for website flight intelligence: "aerodatabox" | "aviationstack" | "aviation_edge"
     FLIGHT_PROVIDER: str = os.getenv(
         "FLIGHT_PROVIDER",
-        "aviation_edge" if os.getenv("TESTING") == "1" else "aviationstack"
+        "aviation_edge" if os.getenv("TESTING") == "1" else "aerodatabox"
     ).lower()
 
     # Meta WhatsApp Cloud API
@@ -124,6 +124,13 @@ class Settings(BaseSettings):
     WHATSAPP_OFFICER_NOTIFY_PHONE: str = os.getenv("WHATSAPP_OFFICER_NOTIFY_PHONE", "")
     WHATSAPP_BOOKING_PHONE: str = os.getenv("WHATSAPP_BOOKING_PHONE", os.getenv("WHATSAPP_BOT_PHONE", "917428300207"))
     WHATSAPP_BOT_PHONE: str = WHATSAPP_BOOKING_PHONE
+
+    # AeroDataBox RapidAPI Configuration
+    AERODATABOX_API_KEY: str = os.getenv("AERODATABOX_API_KEY", "60574a0b26msh0ed79f408fc4760p1a9e23jsnb2eccb3f41d4")
+    AERODATABOX_BASE_URL: str = os.getenv("AERODATABOX_BASE_URL", "https://aerodatabox.p.rapidapi.com")
+    RAPIDAPI_HOST: str = os.getenv("RAPIDAPI_HOST", "aerodatabox.p.rapidapi.com")
+    AERODATABOX_TIMEOUT: float = float(os.getenv("AERODATABOX_TIMEOUT", "6.0"))
+    AERODATABOX_MAX_RETRIES: int = int(os.getenv("AERODATABOX_MAX_RETRIES", "2"))
 
     # Razorpay Payment Gateway
     RAZORPAY_KEY_ID: str = os.getenv("RAZORPAY_KEY_ID", "")
