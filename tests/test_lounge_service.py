@@ -426,7 +426,7 @@ def test_domestic_cutoff_boundary_matrix():
     assert res_in_grace.is_grace_period is True
     assert res_in_grace.ineligible_reason is None
     assert res_in_grace.lead_time_hours == 11.5
-    assert "grace period" in res_in_grace.message.lower()
+    assert "notice period met" in res_in_grace.message.lower()
 
     # 4. Exactly at end of grace period (exactly 11 hours notice: 07:00:00)
     res_at_grace_end = LoungeService.check_eligibility(req, current_time=datetime(2026, 11, 20, 7, 0, 0, tzinfo=tz))
@@ -434,7 +434,7 @@ def test_domestic_cutoff_boundary_matrix():
     assert res_at_grace_end.is_grace_period is True
     assert res_at_grace_end.ineligible_reason is None
     assert res_at_grace_end.lead_time_hours == 11.0
-    assert "grace period" in res_at_grace_end.message.lower()
+    assert "notice period met" in res_at_grace_end.message.lower()
 
     # 5. After grace period (10h 59m 59s notice: 07:00:01)
     res_after_grace = LoungeService.check_eligibility(req, current_time=datetime(2026, 11, 20, 7, 0, 1, tzinfo=tz))
@@ -502,7 +502,7 @@ def test_international_cutoff_boundary_matrix():
     assert res_in_grace.is_grace_period is True
     assert res_in_grace.ineligible_reason is None
     assert res_in_grace.lead_time_hours == 23.5
-    assert "grace period" in res_in_grace.message.lower()
+    assert "notice period met" in res_in_grace.message.lower()
 
     # 4. Exactly at end of grace period (exactly 23 hours notice: 2026-11-19 19:00:00)
     res_at_grace_end = LoungeService.check_eligibility(req, current_time=datetime(2026, 11, 19, 19, 0, 0, tzinfo=tz))

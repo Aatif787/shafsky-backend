@@ -62,13 +62,13 @@ VERIFIED_PREFERRED_TIMES = [
 CUTOFF_RULES = {
     "Domestic": CutoffRuleItem(
         notice_hours=12,
-        grace_period_hours=0,
-        notice_text="Domestic lounge enquiries require at least 12 hours' notice.",
+        grace_period_hours=1,
+        notice_text="Domestic lounge enquiries require at least 12 hours' advance notice.",
     ),
     "International": CutoffRuleItem(
         notice_hours=24,
-        grace_period_hours=0,
-        notice_text="International lounge enquiries require at least 24 hours' notice.",
+        grace_period_hours=1,
+        notice_text="International lounge enquiries require at least 24 hours' advance notice.",
     ),
 }
 
@@ -357,16 +357,20 @@ class LoungeService:
             is_grace = False
             ineligible_reason = None
             msg = f"Standard notice period met ({lead_hours:.1f}h notice in airport local timezone: {tz_str})."
+        elif server_dt_local <= grace_period_end_dt:
+            eligible = True
+            is_grace = True
+            ineligible_reason = None
+            msg = f"Standard notice period met ({lead_hours:.1f}h notice in airport local timezone: {tz_str})."
         else:
             eligible = False
             is_grace = False
             ineligible_reason = (
-                f"Cutoff window expired. {category} lounge enquiries require at least {notice_hours} hours advance notice "
-                f"."
+                f"Cutoff window expired. {category} lounge enquiries require at least {notice_hours} hours advance notice."
             )
             msg = (
                 f"Selected time is outside the allowed enquiry window. {category} lounge enquiries "
-                f"require at least {notice_hours} hours' notice. "
+                f"require at least {notice_hours} hours' advance notice. "
                 f"Current lead time is {max(0.0, lead_hours):.1f} hours."
             )
 
