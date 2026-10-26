@@ -261,8 +261,8 @@ class LoungeService:
         server_datetime_str = server_dt_local.isoformat()
 
         notice_hours = 12 if category == "Domestic" else 24
-        grace_period_hours = 0
-        min_required_hours = notice_hours
+        grace_period_hours = 1
+        min_required_hours = notice_hours - grace_period_hours
 
         # 1. Parse and validate travel date
         try:
@@ -338,7 +338,7 @@ class LoungeService:
 
         # 4. Calculate cutoff datetimes in airport local timezone
         normal_cutoff_dt = travel_dt - timedelta(hours=notice_hours)
-        grace_period_end_dt = normal_cutoff_dt
+        grace_period_end_dt = normal_cutoff_dt + timedelta(hours=grace_period_hours)
         normal_cutoff_str = normal_cutoff_dt.isoformat()
         grace_period_end_str = grace_period_end_dt.isoformat()
 
