@@ -482,87 +482,6 @@ class AviationStackProvider(FlightProvider):
             status=formatted_status,
         )
 
-    def _synthesize_flight_status(
-        self,
-        flight_clean: str,
-        date_clean: str,
-        direction_clean: Optional[str] = None,
-        origin_iata: Optional[str] = None,
-        dest_iata: Optional[str] = None,
-        service_iata: Optional[str] = None,
-    ) -> FlightStatusData:
-        """Synthesize a robust, high-fidelity FlightStatusData fallback when provider quota is exhausted."""
-        carrier_iata, numeric_flight = split_flight_number(flight_clean)
-        carrier_iata = carrier_iata or flight_clean[:2]
-        airline_name = AIRLINE_IATA_MASTER.get(carrier_iata, f"{carrier_iata} Airlines")
-
-        svc = (service_iata or "").strip().upper()
-        orig = (origin_iata or "").strip().upper()
-        dest = (dest_iata or "").strip().upper()
-        direction = (direction_clean or "").strip().lower()
-
-        if direction in ("departure", "depart"):
-            dep_code = orig or svc or "DEL"
-            arr_code = dest or ("BOM" if dep_code != "BOM" else "DEL")
-        elif direction in ("arrival", "arrive"):
-            dep_code = orig or ("BOM" if (dest or svc) != "BOM" else "DEL")
-            arr_code = dest or svc or "DEL"
-        else:
-            dep_code = orig or svc or "DEL"
-            arr_code = dest or ("BOM" if dep_code != "BOM" else "DEL")
-
-        orig_ap = build_flight_airport(dep_code)
-        dest_ap = build_flight_airport(arr_code)
-
-        try:
-            dep_dt = datetime.fromisoformat(f"{date_clean}T11:00:00+00:00")
-        except Exception:
-            dep_dt = datetime.now(timezone.utc)
-        arr_dt = dep_dt + timedelta(hours=2)
-
-        dur_mins, dur_text = compute_flight_duration(None, dep_dt, arr_dt, flight_clean)
-
-        airline_details = AirlineDetails(
-            name=airline_name,
-            iata=carrier_iata,
-            logo=f"https://images.aviation-edge.com/airline-logos/{carrier_iata}.png",
-        )
-        flight_info = FlightInfo(
-            number=numeric_flight or flight_clean[2:],
-            iata=flight_clean,
-        )
-        dep_details = LocationEndpointDetails(
-            airport=dep_code,
-            airport_name=orig_ap.name if orig_ap else f"{dep_code} Airport",
-            city=orig_ap.city if orig_ap else dep_code,
-            country=orig_ap.country if orig_ap else None,
-            timezone=getattr(orig_ap, "timezone", None),
-            scheduled=dep_dt.isoformat(),
-            terminal="3" if dep_code == "DEL" else "1",
-        )
-        arr_details = LocationEndpointDetails(
-            airport=arr_code,
-            airport_name=dest_ap.name if dest_ap else f"{arr_code} Airport",
-            city=dest_ap.city if dest_ap else arr_code,
-            country=dest_ap.country if dest_ap else None,
-            timezone=getattr(dest_ap, "timezone", None),
-            scheduled=arr_dt.isoformat(),
-            terminal="2" if arr_code == "BOM" else "1",
-        )
-        duration_details = DurationDetails(
-            minutes=dur_mins,
-            formatted=dur_text,
-        )
-        return FlightStatusData(
-            airline=airline_details,
-            flight=flight_info,
-            departure=dep_details,
-            arrival=arr_details,
-            duration=duration_details,
-            aircraft=AircraftDetails(),
-            status="Scheduled",
-        )
-
     def validate_flight(
         self,
         flight_num: str,
@@ -578,14 +497,7 @@ class AviationStackProvider(FlightProvider):
         if not flight_num or not isinstance(flight_num, str):
             raise InvalidFlightNumberException(str(flight_num or ""))
 
-        try:
-            flight_clean = normalize_flight_number(flight_num)
-        except Exception:
-            flight_clean = normalize_flight_code(flight_num)
-
-        if not flight_clean or len(flight_clean) < 3:
-            raise InvalidFlightNumberException(flight_num)
-
+        flight_clean = normalize_flight_number(flight_num)
         date_clean = (date.strip()[:10]) if date else datetime.now().strftime("%Y-%m-%d")
         if not re.match(r"^\d{4}-\d{2}-\d{2}$", date_clean):
             raise InvalidFlightDateException(date_clean)
@@ -648,56 +560,15 @@ class AviationStackProvider(FlightProvider):
                 pass
 
         # ── 3. Fetch from AviationStack API ───────────────────────────────────
-        raw_candidates = []
-        is_rate_limited = False
-        try:
-            raw_candidates = self._make_request("flights", {"flight_iata": flight_clean, "limit": 10})
-            if not raw_candidates:
-                # Fallback query by flight_number + airline_iata
-                carrier_iata, numeric_flight = split_flight_number(flight_clean)
-                if carrier_iata and numeric_flight:
-                    raw_candidates = self._make_request(
-                        "flights",
-                        {"flight_number": numeric_flight, "airline_iata": carrier_iata, "limit": 10},
-                    )
-        except FlightRateLimitExceededException:
-            is_rate_limited = True
-            logger.warning(
-                "[AVIATIONSTACK QUOTA EXHAUSTED] Activating intelligent fallback flight synthesizer for %s on %s",
-                flight_clean, date_clean
-            )
-
-        if is_rate_limited:
-            flight_status = self._synthesize_flight_status(
-                flight_clean=flight_clean,
-                date_clean=date_clean,
-                direction_clean=direction_clean,
-                origin_iata=origin_iata,
-                dest_iata=dest_iata,
-                service_iata=service_iata,
-            )
-            self._set_cached_data(cache_key, flight_status.model_dump(mode="json"))
-            try:
-                store_unified_flight(
-                    flight_clean,
-                    flight_status.model_dump(mode="json"),
-                    provider="aviationstack",
-                    flight_date=date_clean,
-                    direction=direction_clean,
-                    origin=origin_iata,
-                    dest=dest_iata,
+        raw_candidates = self._make_request("flights", {"flight_iata": flight_clean, "limit": 10})
+        if not raw_candidates:
+            # Fallback query by flight_number + airline_iata
+            carrier_iata, numeric_flight = split_flight_number(flight_clean)
+            if carrier_iata and numeric_flight:
+                raw_candidates = self._make_request(
+                    "flights",
+                    {"flight_number": numeric_flight, "airline_iata": carrier_iata, "limit": 10},
                 )
-            except Exception as err:
-                logger.debug("Failed to store unified flight cache: %s", err)
-            logger.info(
-                "[AVIATIONSTACK FALLBACK SYNTHESIZED] Flight: %s | %s (%s) -> %s (%s)",
-                flight_clean,
-                flight_status.departure.airport,
-                flight_status.departure.scheduled,
-                flight_status.arrival.airport,
-                flight_status.arrival.scheduled,
-            )
-            return flight_status
 
         if not raw_candidates:
             logger.warning("[AVIATIONSTACK NO RECORDS] Flight: %s on %s", flight_clean, date_clean)
@@ -842,13 +713,7 @@ class AviationStackProvider(FlightProvider):
             except Exception:
                 pass
 
-        try:
-            results = self._make_request("flights", {"flight_iata": flight_clean, "limit": 5})
-        except FlightRateLimitExceededException:
-            logger.warning("[AVIATIONSTACK QUOTA EXHAUSTED] get_flight_status fallback for %s", flight_clean)
-            synth = self._synthesize_flight_status(flight_clean, today_str)
-            self._set_cached_data(cache_key, synth.model_dump(mode="json"))
-            return synth
+        results = self._make_request("flights", {"flight_iata": flight_clean, "limit": 5})
 
         if not results:
             self._set_not_found_cache(flight_clean, today_str)
@@ -883,10 +748,7 @@ class AviationStackProvider(FlightProvider):
             else:
                 results = self._make_request("flights", {"flight_iata": q_clean, "limit": 10})
         except FlightRateLimitExceededException:
-            logger.warning("[AVIATIONSTACK QUOTA EXHAUSTED] search_flights fallback for %s", q_clean)
-            if len(q_clean) >= 3 and not (len(q_clean) == 3 and q_clean.isalpha()):
-                synth = self._synthesize_flight_status(q_clean, datetime.now().strftime("%Y-%m-%d"))
-                return [synth]
+            logger.warning("[AVIATIONSTACK QUOTA EXHAUSTED] search_flights rate limited for %s", q_clean)
             return []
 
         normalized_list = []

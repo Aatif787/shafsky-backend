@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 import os
 from app.config import settings
 from app.flight.service import FlightIntelligenceService
+from app.flight.providers.aerodatabox_provider import AeroDataBoxProvider
 from app.flight.providers.aviation_edge_provider import AviationEdgeProvider
 from app.flight.providers.aviationstack_provider import AviationStackProvider
 from app.flight.schemas import (
@@ -20,6 +21,7 @@ from app.flight.schemas import (
     LocationEndpointDetails
 )
 import logging
+import re
 from app.flight.exceptions import (
     FlightDomainException,
     FlightProviderNotConfiguredException,
@@ -35,13 +37,18 @@ flights_router = APIRouter(prefix="/api/flights", tags=["Flight Operations"])
 def get_flight_service() -> FlightIntelligenceService:
     """Dependency provider creating FlightIntelligenceService with the active FlightProvider."""
     provider_name = getattr(settings, "FLIGHT_PROVIDER", "").lower()
-    if not provider_name:
-        provider_name = "aviation_edge" if os.getenv("TESTING") == "1" else "aviationstack"
+    if os.getenv("TESTING") == "1":
+        if provider_name not in ("aviationstack", "aerodatabox"):
+            provider_name = "aviation_edge"
+    elif not provider_name:
+        provider_name = "aerodatabox"
 
     if provider_name == "aviation_edge":
         provider = AviationEdgeProvider()
-    else:
+    elif provider_name == "aviationstack":
         provider = AviationStackProvider()
+    else:
+        provider = AeroDataBoxProvider()
     return FlightIntelligenceService(provider=provider)
 
 
@@ -145,11 +152,25 @@ def validate_flight(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="flightNum is required.",
             )
+
+        # Enforce strict commercial flight number format
+        clean_fl = re.sub(r"[\s\-_]+", "", flight_num).upper()
+        if not re.match(r"^(?:[A-Z]{2}|[A-Z]\d|\d[A-Z]|[A-Z]{3})\d{1,4}[A-Z]?$", clean_fl):
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={
+                    "success": False,
+                    "error": f"Invalid flight number format: '{flight_num}'. Expected standard 2-3 character airline code followed by 1-4 numbers (e.g. AI101, 6E202, EK504).",
+                    "code": "INVALID_FLIGHT_NUMBER",
+                    "data": {"valid": False, "flightData": None}
+                }
+            )
+
         flight_date = payload.resolved_date or datetime.now().strftime("%Y-%m-%d")
         direction = payload.resolved_direction
 
         flight_data = service.validate_flight(
-            flight_num,
+            clean_fl,
             flight_date,
             direction=direction,
             origin_code=payload.resolved_origin_code,
@@ -162,21 +183,17 @@ def validate_flight(
         )
     except FlightRateLimitExceededException:
         logger.warning(
-            "[ROUTER FLIGHT RATE LIMIT FALLBACK] External provider rate limited for %s. Synthesizing valid flight info.",
+            "[ROUTER FLIGHT RATE LIMIT] External provider rate limited for %s. Prompting manual flight entry.",
             flight_num,
         )
-        provider = AviationStackProvider()
-        flight_data = provider._synthesize_flight_status(
-            flight_clean=flight_num,
-            date_clean=flight_date,
-            direction_clean=direction,
-            origin_iata=payload.resolved_origin_code,
-            dest_iata=payload.resolved_destination_code,
-            service_iata=payload.airport_code,
-        )
-        return FlightValidateResponse(
-            success=True,
-            data=FlightValidateResponseData(valid=True, flightData=flight_data)
+        return JSONResponse(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            content={
+                "success": False,
+                "error": "Live flight tracking service rate limit reached. Please enter flight details manually or try again shortly.",
+                "code": "RATE_LIMIT_EXCEEDED",
+                "data": {"valid": False, "flightData": None}
+            }
         )
     except FlightDomainException as exc:
         return JSONResponse(
