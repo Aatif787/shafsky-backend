@@ -372,15 +372,42 @@ class AeroDataBoxProvider(FlightProvider):
             icao=f"{carrier_icao}{numeric_part}" if carrier_icao and numeric_part else None,
         )
 
+        # Extract real actual times (actualTime or runwayTime)
+        dep_act_obj = dep_dict.get("actualTime") or dep_dict.get("runwayTime") or {}
+        arr_act_obj = arr_dict.get("actualTime") or arr_dict.get("runwayTime") or {}
+        dep_act_raw = dep_act_obj.get("local") or dep_act_obj.get("utc")
+        arr_act_raw = arr_act_obj.get("local") or arr_act_obj.get("utc")
+        dep_act_str = dep_act_raw.replace(" ", "T") if dep_act_raw else None
+        arr_act_str = arr_act_raw.replace(" ", "T") if arr_act_raw else None
+
+        # Extract revised / estimated / predicted times
+        dep_est_obj = dep_dict.get("revisedTime") or dep_dict.get("estimatedTime") or {}
+        arr_est_obj = arr_dict.get("revisedTime") or arr_dict.get("predictedTime") or arr_dict.get("estimatedTime") or {}
+        dep_est_raw = dep_est_obj.get("local") or dep_est_obj.get("utc")
+        arr_est_raw = arr_est_obj.get("local") or arr_est_obj.get("utc")
+        dep_est_str = dep_est_raw.replace(" ", "T") if dep_est_raw else None
+        arr_est_str = arr_est_raw.replace(" ", "T") if arr_est_raw else None
+
+        # Extract real terminals, gates, desks, and belts
+        dep_terminal = dep_dict.get("terminal")
+        arr_terminal = arr_dict.get("terminal")
+        dep_gate = dep_dict.get("gate")
+        arr_gate = arr_dict.get("gate")
+        dep_checkin = dep_dict.get("checkInDesk")
+        arr_baggage = arr_dict.get("baggageBelt")
+
         dep_details = LocationEndpointDetails(
             airport=dep_iata,
             airport_name=dep_ap.get("name") or dep_ap.get("shortName") or f"{dep_iata} Airport",
             city=dep_ap.get("municipalityName") or dep_iata,
             country=dep_ap.get("countryCode"),
-            terminal=dep_dict.get("terminal"),
-            gate=dep_dict.get("gate"),
+            terminal=dep_terminal,
+            gate=dep_gate,
             scheduled=dep_sched_str,
+            estimated=dep_est_str,
+            actual=dep_act_str,
             timezone=dep_ap.get("timeZone"),
+            checkin_counter=dep_checkin,
         )
 
         arr_details = LocationEndpointDetails(
@@ -388,10 +415,13 @@ class AeroDataBoxProvider(FlightProvider):
             airport_name=arr_ap.get("name") or arr_ap.get("shortName") or f"{arr_iata} Airport",
             city=arr_ap.get("municipalityName") or arr_iata,
             country=arr_ap.get("countryCode"),
-            terminal=arr_dict.get("terminal"),
-            gate=arr_dict.get("gate"),
+            terminal=arr_terminal,
+            gate=arr_gate,
             scheduled=arr_sched_str,
+            estimated=arr_est_str,
+            actual=arr_act_str,
             timezone=arr_ap.get("timeZone"),
+            baggage_belt=arr_baggage,
         )
 
         aircraft_dict = item.get("aircraft") or {}
