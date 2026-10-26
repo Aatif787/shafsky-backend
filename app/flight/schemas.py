@@ -27,6 +27,8 @@ class FlightEndpointDetails(BaseModel):
     estimated_time: Optional[datetime] = None
     actual_time: Optional[datetime] = None
     delay_minutes: Optional[int] = None
+    baggage_belt: Optional[str] = None
+    checkin_counter: Optional[str] = None
 
 
 class AirlineDetails(BaseModel):
@@ -55,6 +57,8 @@ class LocationEndpointDetails(BaseModel):
     actual: Optional[str] = None
     delay: Optional[int] = None
     timezone: Optional[str] = None
+    baggage_belt: Optional[str] = None
+    checkin_counter: Optional[str] = None
 
 
 class DurationDetails(BaseModel):
