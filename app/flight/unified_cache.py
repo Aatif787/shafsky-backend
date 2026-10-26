@@ -118,10 +118,12 @@ def get_unified_flight(
     )
     clean_date = flight_date[:10].strip() if flight_date else None
     fallback_keys = []
-    if clean_date and clean_date not in ("ANY", "unknown", "None", ""):
-        fallback_keys.append(f"shafsky:flight:{clean_flight}:{clean_date}")
-    fallback_keys.append(f"shafsky:flight:{clean_flight}:LATEST")
-    fallback_keys.append(f"shafsky:flight:{clean_flight}:PERSISTENT")
+    # Only fall back to unsectored keys when no specific direction or route was requested
+    if not (direction or origin or dest):
+        if clean_date and clean_date not in ("ANY", "unknown", "None", ""):
+            fallback_keys.append(f"shafsky:flight:{clean_flight}:{clean_date}")
+        fallback_keys.append(f"shafsky:flight:{clean_flight}:LATEST")
+        fallback_keys.append(f"shafsky:flight:{clean_flight}:PERSISTENT")
 
     now_ts = time.time()
 
@@ -178,55 +180,58 @@ def get_unified_flight(
             record = None
             if clean_date and clean_date not in ("ANY", "unknown", "None", ""):
                 record = query.filter(FlightAPICache.flight_date == clean_date).order_by(FlightAPICache.created_at.desc()).first()
-            if not record:
+            if not record and not (direction or origin or dest):
                 record = query.filter(FlightAPICache.flight_date.in_(["LATEST", "PERPETUAL"])).order_by(FlightAPICache.created_at.desc()).first()
-            if not record:
+            if not record and not (direction or origin or dest):
                 record = query.order_by(FlightAPICache.created_at.desc()).first()
 
             if record and isinstance(record.response_data, dict) and _matches_route(record.response_data):
-                data = record.response_data
-                logger.info("Unified Flight Cache [DB FlightAPICache HIT] | Flight: %s | Provider: %s", clean_flight, record.provider)
-                store_unified_flight(
-                    clean_flight,
-                    data,
-                    provider=record.provider,
-                    flight_date=record.flight_date,
-                    skip_db=True,
-                    direction=direction,
-                    origin=origin,
-                    dest=dest,
-                )
-                return data
+                # When direction is requested without origin/dest, don't return unsectored DB cache
+                if not direction or (origin and dest):
+                    data = record.response_data
+                    logger.info("Unified Flight Cache [DB FlightAPICache HIT] | Flight: %s | Provider: %s", clean_flight, record.provider)
+                    store_unified_flight(
+                        clean_flight,
+                        data,
+                        provider=record.provider,
+                        flight_date=record.flight_date,
+                        skip_db=True,
+                        direction=direction,
+                        origin=origin,
+                        dest=dest,
+                    )
+                    return data
 
-            # Check persistent FlightStatusRecord
-            fs_query = session.query(FlightStatusRecord).filter(
-                FlightStatusRecord.flight_number == clean_flight
-            )
-            if origin:
-                fs_query = fs_query.filter(FlightStatusRecord.origin_code == origin.strip().upper())
-            if dest:
-                fs_query = fs_query.filter(FlightStatusRecord.dest_code == dest.strip().upper())
+            # Check persistent FlightStatusRecord (requires route or exact date, not unsectored direction query)
+            if (origin and dest) or (clean_date and clean_date not in ("ANY", "unknown", "None", "") and not direction):
+                fs_query = session.query(FlightStatusRecord).filter(
+                    FlightStatusRecord.flight_number == clean_flight
+                )
+                if origin:
+                    fs_query = fs_query.filter(FlightStatusRecord.origin_code == origin.strip().upper())
+                if dest:
+                    fs_query = fs_query.filter(FlightStatusRecord.dest_code == dest.strip().upper())
 
-            fs_rec = fs_query.order_by(FlightStatusRecord.updated_at.desc()).first()
-            if fs_rec and isinstance(fs_rec.raw_details, dict) and _matches_route(fs_rec.raw_details):
-                data = fs_rec.raw_details
-                logger.info(
-                    "Unified Flight Cache [DB FlightStatusRecord HIT] | Flight: %s | Route: %s -> %s",
-                    clean_flight,
-                    fs_rec.origin_code,
-                    fs_rec.dest_code,
-                )
-                store_unified_flight(
-                    clean_flight,
-                    data,
-                    provider="flight_status_record",
-                    flight_date=clean_date,
-                    skip_db=True,
-                    direction=direction,
-                    origin=origin,
-                    dest=dest,
-                )
-                return data
+                fs_rec = fs_query.order_by(FlightStatusRecord.updated_at.desc()).first()
+                if fs_rec and isinstance(fs_rec.raw_details, dict) and _matches_route(fs_rec.raw_details):
+                    data = fs_rec.raw_details
+                    logger.info(
+                        "Unified Flight Cache [DB FlightStatusRecord HIT] | Flight: %s | Route: %s -> %s",
+                        clean_flight,
+                        fs_rec.origin_code,
+                        fs_rec.dest_code,
+                    )
+                    store_unified_flight(
+                        clean_flight,
+                        data,
+                        provider="flight_status_record",
+                        flight_date=clean_date,
+                        skip_db=True,
+                        direction=direction,
+                        origin=origin,
+                        dest=dest,
+                    )
+                    return data
 
     except Exception as err:
         logger.debug("DB flight cache lookup error: %s", err)
@@ -276,9 +281,10 @@ def store_unified_flight(
         dest=dest,
         include_latest=not (direction or origin or dest),
     )
-    keys.append(f"shafsky:flight:{clean_flight}:{clean_date}")
-    keys.append(f"shafsky:flight:{clean_flight}:LATEST")
-    keys.append(f"shafsky:flight:{clean_flight}:PERSISTENT")
+    if not (direction or origin or dest):
+        keys.append(f"shafsky:flight:{clean_flight}:{clean_date}")
+        keys.append(f"shafsky:flight:{clean_flight}:LATEST")
+        keys.append(f"shafsky:flight:{clean_flight}:PERSISTENT")
     unique_keys = list(dict.fromkeys(keys))
 
     serialized = json.dumps(data)
@@ -623,6 +629,7 @@ def clear_unified_cache() -> None:
     try:
         with SessionLocal() as session:
             session.query(FlightAPICache).delete()
+            session.query(FlightStatusRecord).delete()
             session.commit()
     except Exception as err:
         logger.debug("DB flight cache clear error: %s", err)
