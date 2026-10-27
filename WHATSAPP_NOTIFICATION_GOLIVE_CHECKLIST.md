@@ -3,8 +3,14 @@
 Ordered, copy-pasteable runbook for releasing the fix. Every step has a pass/fail check.
 All values below are read from the environment; no credentials are written in this document.
 
-**Current state of the branch:** code complete, `1094 passed` on the full suite, **not deployed**.
-The only things standing between the branch and reliable delivery are step 1 and step 3.
+**Current state:** the first batch is committed and pushed as `f271a3c` (on `origin/main`), so Render has
+the diagnostics, template resolution, startup validation and durable dedupe. This batch adds per-message
+delivery tracking and is **not committed or deployed**. Full suite: `1096 passed`, one pre-existing unrelated
+failure.
+
+Delivery to the four business numbers is still broken, and the reason is measured rather than assumed:
+Meta accepts every send and then fails four of five with **131047** because those numbers have not written in
+24 hours. Step 1 is what fixes it; step 3 ships the visibility fix that would have made this obvious.
 
 ---
 
@@ -15,15 +21,35 @@ The only things standing between the branch and reliable delivery are step 1 and
 | 0.1 | `GET https://shafsky-backend-1.onrender.com/ready` | `{"ready":true}`; note whether `redis.status` is `UNAVAILABLE` |
 | 0.2 | Sender identity via `GET /v21.0/{WHATSAPP_PHONE_NUMBER_ID}?fields=display_phone_number,verified_name,quality_rating` | `+91 74283 00207`, `Shafsky Aviation Services`, `GREEN` |
 | 0.3 | Validity and scopes via the Graph `debug_token` endpoint | `is_valid` true, `expires_at` 0, messaging scope present |
-| 0.4 | Approved templates via `GET /v21.0/{WABA_ID}/message_templates` | today only `hello_world` — hence step 1 |
+| 0.4 | Templates via `GET /v21.0/{WABA_ID}/message_templates` | `hello_world` (refused from a production number, **131058**) and `shafsky_ops_alert` **PENDING** — hence step 1 |
 
 ---
 
-## 1. Create and approve the operations template (blocking)
+## 1. Approve the operations template (blocking)
 
-Business-initiated WhatsApp messages outside the recipient's 24-hour window are impossible without an
-approved template. The dispatcher already sends exactly one `BODY` parameter, so the template must have
-**exactly one** variable.
+**Status on 2026-10-27:** the template already exists on WABA `28382574078076685` as
+`shafsky_ops_alert` / `en_US` / `UTILITY`, id `3342000509338521`, **status `PENDING`** (no rejection reason).
+Re-run the check below until it reads `APPROVED`; nothing else unblocks delivery to the four business numbers.
+
+```bash
+curl --oauth2-bearer "$WHATSAPP_ACCESS_TOKEN" \
+  "https://graph.facebook.com/v21.0/$WHATSAPP_BUSINESS_ACCOUNT_ID/message_templates?fields=name,status,language,category,rejected_reason"
+```
+
+Approval is Meta's decision and is usually quick for `UTILITY`, but this WABA is
+`business_verification_status: not_verified`, which slows review and caps messaging tiers — worth completing
+in Meta Business Manager → Business settings → Business verification.
+
+The creation call, for reference (it is idempotent only by name, so do not run it again while the template
+exists):
+
+**This is the root cause, measured — not a precaution.** With no template configured the dispatcher sends
+freeform text; Meta accepts it (HTTP 200 plus a `wamid`) and then rejects delivery with **131047**
+("more than 24 hours have passed since the customer last replied") for every recipient who has not written in
+24 hours. Today that is four of the five numbers; only `8864931247` receives, because it chats with the bot.
+
+Business-initiated WhatsApp messages outside that window are impossible without an approved template. The
+dispatcher already sends exactly one `BODY` parameter, so the template must have **exactly one** variable.
 
 ```bash
 curl -X POST "https://graph.facebook.com/v21.0/$WHATSAPP_BUSINESS_ACCOUNT_ID/message_templates" \
@@ -153,10 +179,14 @@ The Meta template can stay in place — an unused approved template is harmless.
 -- diagnostic dispatch rows created during the investigation
 DELETE FROM notification_records
 WHERE template_type = 'WHATSAPP_OPS_NOTIFICATION'
-  AND payload->>'idempotency_key' IN (
-    'wa_booking_notify:SHF-HARNESS-0001',
-    'wa_booking_notify:SHF-HARNESS-0002',
-    'wa_booking_notify:SHF-TEST-CLASS'
+  AND (
+    payload->>'idempotency_key' IN (
+      'wa_booking_notify:SHF-HARNESS-0001',
+      'wa_booking_notify:SHF-HARNESS-0002',
+      'wa_booking_notify:SHF-TEST-CLASS'
+    )
+    OR payload->>'idempotency_key' LIKE 'wa_diagnostic_probe:%'
+    OR payload->>'probe' = 'true'
   );
 ```
 
@@ -172,9 +202,11 @@ passenger "Shafsky Ops Test".
 | --- | --- |
 | Dispatch wired for every real creation path | yes — `/api/bookings`, `/api/bookings/enquiries`, `/api/airport/bookings`, ticketing, lounge, charter, journey query, bot flow |
 | Five recipients, failure-isolated | yes — one rejected number never blocks the other four |
-| Sender, credential and recipients correct | verified live: 5/5 accepted, then `DELIVERED` |
+| Sender, credential and recipients correct | verified: all five eligible, all five accepted by Meta (a genuinely API-registered number returns 400, so the business accounts are not the problem) |
 | Delivery outside the 24-hour window | **requires step 1** — code side is ready, Meta side is not |
 | Meta failures diagnosable | yes — HTTP status, code, subcode, user message and remedy, per recipient, in logs and in `notification_records` |
+| Per-recipient delivery visible | yes — one `payload.messages[]` entry per `wamid`; the record becomes `FAILED` with the Meta code as soon as any message fails, instead of `DELIVERED` because one did |
+| Delivery to all five numbers | **blocked on step 1** — proven: 1 delivered, 4 × 131047 without a template |
 | Duplicate suppression across restarts | yes — durable, database-backed, works even with Redis down |
 | Duplicate suppression when two workers race the same event | only with Redis reachable — the database guard is check-then-act |
 | Misconfiguration visible | yes — `ERROR` at startup naming the exact missing variable, plus `ERROR` per template-less send |

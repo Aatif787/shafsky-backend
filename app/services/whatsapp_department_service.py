@@ -388,6 +388,20 @@ class WhatsAppDepartmentService:
                     key = str(entry.get("status") or "FAILED")
                     status_counts[key] = status_counts.get(key, 0) + 1
 
+                # One row per Meta message. The Cloud API accepts a send and only
+                # reports the real outcome seconds later, so per-message state is
+                # the only way to know which recipient actually received anything.
+                messages = [
+                    {
+                        "index": position,
+                        "phone": entry.get("masked_phone") or entry.get("phone"),
+                        "message_id": entry.get("message_id"),
+                        "status": "accepted" if entry.get("status") == "ACCEPTED" else str(entry.get("status") or "FAILED").lower(),
+                    }
+                    for position, entry in enumerate(recipient_results, 1)
+                    if entry.get("message_id")
+                ]
+
                 note = NotificationRecord(
                     recipient_email=str((context or {}).get("passenger_email") or (context or {}).get("email") or "ops@shafsky.aero"),
                     recipient_phone="ALL_5_RECIPIENTS",
@@ -397,6 +411,7 @@ class WhatsAppDepartmentService:
                         "idempotency_key": clean_key,
                         "outcome": outcome,
                         "status_counts": status_counts,
+                        "messages": messages,
                         "recipient_results": recipient_results,
                         "context_summary": {
                             "booking_ref": (context or {}).get("booking_ref"),

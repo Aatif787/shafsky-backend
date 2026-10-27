@@ -38,6 +38,98 @@ from app.integrations.whatsapp.handlers import (
 
 logger = logging.getLogger(__name__)
 
+
+_DELIVERED_STATES = {"delivered", "read"}
+
+
+def apply_delivery_status(rec, message_id: str, status_value: str, status_payload: dict) -> None:
+    """Record one Meta delivery status against the message it belongs to.
+
+    The Cloud API accepts a send (HTTP 200 plus a wamid) and reports the real
+    outcome only in a later status webhook. Storing a single status per record
+    therefore hid failures: one recipient being delivered used to mark a
+    five-recipient notification DELIVERED while the other four were rejected with
+    131047. This keeps a per-message map and derives the record status from every
+    message instead.
+    """
+    from app.models.schema import NotificationStatus
+
+    payload = rec.payload if isinstance(rec.payload, dict) else {}
+    messages = payload.get("messages")
+    errors = status_payload.get("errors") or []
+    first_error = errors[0] if errors and isinstance(errors[0], dict) else {}
+    error_detail = (
+        (first_error.get("error_data") or {}).get("details")
+        or first_error.get("message")
+        or None
+    )
+
+    if isinstance(messages, list):
+        for item in messages:
+            if isinstance(item, dict) and item.get("message_id") == message_id:
+                item["status"] = status_value or item.get("status")
+                if first_error:
+                    item["error_code"] = first_error.get("code")
+                    item["error_detail"] = error_detail
+                break
+        rec.payload = {**payload, "messages": messages}
+        flag_modified(rec, "payload")
+        states = [
+            str(item.get("status") or "").lower()
+            for item in messages
+            if isinstance(item, dict)
+        ]
+        failed = [
+            item for item in messages
+            if isinstance(item, dict) and str(item.get("status") or "").lower() == "failed"
+        ]
+    else:
+        states = []
+        failed = []
+
+    if failed:
+        codes = sorted({item.get("error_code") for item in failed if item.get("error_code")})
+        detail = next((item.get("error_detail") for item in failed if item.get("error_detail")), None)
+        rec.status = NotificationStatus.FAILED
+        rec.error_log = (
+            f"Meta delivery failed for {len(failed)}/{len(states)} recipients "
+            f"(codes: {codes}). {detail or ''}"
+        ).strip()
+        logger.error(
+            "[WhatsApp Webhook Status] Delivery failed for %d/%d recipients on record %s (codes %s): %s",
+            len(failed),
+            len(states),
+            getattr(rec, "id", "?"),
+            codes,
+            detail or "no detail",
+        )
+        if any(code == 131047 for code in codes):
+            logger.error(
+                "[WhatsApp Webhook Status] Error 131047: recipient is outside the 24-hour customer "
+                "service window. Configure an approved WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE so "
+                "operations alerts are delivered as a template, not as freeform text."
+            )
+        return
+
+    if states and all(state in _DELIVERED_STATES for state in states):
+        rec.status = NotificationStatus.DELIVERED
+        rec.delivered_at = datetime.now(timezone.utc)
+        return
+
+    if states:
+        # Accepted, but not every message has confirmed delivery yet.
+        rec.status = NotificationStatus.COMPLETED
+        return
+
+    # Legacy record without a per-message map (single-message notifications).
+    if status_value in _DELIVERED_STATES:
+        rec.status = NotificationStatus.DELIVERED
+        rec.delivered_at = datetime.now(timezone.utc)
+    elif status_value == "failed":
+        rec.status = NotificationStatus.FAILED
+        rec.error_log = f"Meta delivery failed: {errors}"
+
+
 CANCEL_COMMANDS = {"cancel", "stop", "abort"}
 HELP_COMMANDS = {"help", "support", "info"}
 RESTART_COMMANDS = {
@@ -1269,7 +1361,7 @@ class WhatsAppService:
                         if st_id and db is not None:
                             try:
                                 from sqlalchemy import or_, select
-                                from app.models.schema import NotificationRecord, NotificationStatus
+                                from app.models.schema import NotificationRecord
                                 matched = list(db.scalars(
                                     select(NotificationRecord).where(
                                         or_(
@@ -1279,12 +1371,7 @@ class WhatsAppService:
                                     )
                                 ))
                                 for rec in matched:
-                                    if st_val in ("delivered", "read"):
-                                        rec.status = NotificationStatus.DELIVERED
-                                        rec.delivered_at = datetime.now(timezone.utc)
-                                    elif st_val == "failed":
-                                        rec.status = NotificationStatus.FAILED
-                                        rec.error_log = f"Meta delivery failed: {st.get('errors')}"
+                                    apply_delivery_status(rec, st_id, st_val, st)
                                 if matched:
                                     db.commit()
                             except Exception as st_err:

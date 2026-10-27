@@ -336,3 +336,85 @@ def test_resolved_service_category_routes_to_the_right_department(
     department, label = WhatsAppDepartmentService.resolve_department(category, "multi_service")
     assert department == expected_department
     assert label == expected_label
+
+
+# ---------------------------------------------------------------------------
+# 6. Delivery status is per message, never per record
+# ---------------------------------------------------------------------------
+
+def _ops_record(message_ids):
+    return NotificationRecord(
+        template_type=OPS_TEMPLATE_TYPE,
+        channel="WHATSAPP_OPS",
+        payload={
+            "idempotency_key": "wa_booking_notify:SHF-PERMSG-001",
+            "messages": [
+                {"index": i, "phone": f"919****{mid[-3:]}", "message_id": mid, "status": "accepted"}
+                for i, mid in enumerate(message_ids, 1)
+            ],
+        },
+        status=NotificationStatus.COMPLETED,
+        message_id=",".join(message_ids),
+    )
+
+
+def test_one_delivered_recipient_does_not_mark_the_whole_record_delivered():
+    """Regression: a single personal-number delivery used to hide four 131047 failures."""
+    from app.integrations.whatsapp.service import apply_delivery_status
+
+    ids = [f"wamid.A{i}" for i in range(1, 6)]
+    rec = _ops_record(ids)
+
+    apply_delivery_status(rec, ids[3], "delivered", {"status": "delivered"})
+
+    assert rec.status == NotificationStatus.COMPLETED, "4 of 5 are still unconfirmed"
+    assert rec.delivered_at is None
+    statuses = {m["message_id"]: m["status"] for m in rec.payload["messages"]}
+    assert statuses[ids[3]] == "delivered"
+    assert statuses[ids[0]] == "accepted"
+
+
+def test_all_five_delivered_marks_the_record_delivered():
+    from app.integrations.whatsapp.service import apply_delivery_status
+
+    ids = [f"wamid.B{i}" for i in range(1, 6)]
+    rec = _ops_record(ids)
+
+    for mid in ids:
+        apply_delivery_status(rec, mid, "delivered", {"status": "delivered"})
+
+    assert rec.status == NotificationStatus.DELIVERED
+    assert rec.delivered_at is not None
+
+
+def test_window_closed_delivery_failure_keeps_the_meta_code_on_the_record():
+    from app.integrations.whatsapp.service import apply_delivery_status
+
+    ids = [f"wamid.C{i}" for i in range(1, 6)]
+    rec = _ops_record(ids)
+
+    failure = {
+        "status": "failed",
+        "errors": [
+            {
+                "code": 131047,
+                "title": "Re-engagement message",
+                "message": "Re-engagement message",
+                "error_data": {
+                    "details": "Message failed to send because more than 24 hours have passed "
+                    "since the customer last replied to this number."
+                },
+            }
+        ],
+    }
+    for mid in ids[:4]:
+        apply_delivery_status(rec, mid, "failed", failure)
+    apply_delivery_status(rec, ids[4], "delivered", {"status": "delivered"})
+
+    assert rec.status == NotificationStatus.FAILED
+    assert "131047" in rec.error_log
+    assert "24 hours" in rec.error_log
+    assert "4/5" in rec.error_log
+    failed_entries = [m for m in rec.payload["messages"] if m["status"] == "failed"]
+    assert len(failed_entries) == 4
+    assert all(m["error_code"] == 131047 for m in failed_entries)

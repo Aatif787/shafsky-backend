@@ -2,7 +2,9 @@
 
 **Scope:** `shafsky-backend-main` (FastAPI backend) — operations WhatsApp notifications for new bookings/enquiries.
 **Date of investigation:** 2026-10-27
-**Status:** Root cause identified. Code fixed and covered by tests. **Live delivery verified on the currently deployed revision.** The fix is **not deployed** (no authorization given).
+**Status:** Root cause proven per recipient. First batch of fixes is committed and pushed as `f271a3c`
+(on `origin/main`, so Render has it). The per-message delivery tracking described here is **not yet committed
+or deployed**.
 
 > Secrets were never printed. Tokens appear only as length/prefix metadata; Meta errors are sanitized.
 
@@ -54,25 +56,44 @@ have caught it because the dispatch call itself did not exist.
 **Confidence: high** for the database/git facts; the mapping to "the exact booking you created" rests on the
 only real bookings in the production DB being from 2026-10-21/23.
 
-### 1.3 Root cause B — no approved Meta template, so delivery is silently 24-hour-window dependent
+### 1.3 Root cause B — no approved template, so Meta accepts and then fails delivery with 131047
 
-This is the defect that will reproduce the same symptom again, and the one fixed in code.
+**This is the defect that produces the reported symptom, and it is now proven, not inferred.**
 
-* `WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE` is **empty** in the backend `.env`, and is **not declared** in
-  `render.yaml`.
-* The WhatsApp Business Account (`28382574078076685`) has **exactly one approved template**:
-  `hello_world` / `en_US` / `UTILITY`. There is no operations-notification template.
-* Consequently the dispatcher falls back to a **freeform text** message. Meta only delivers freeform text
-  inside the recipient's **24-hour customer service window**. Outside it, Meta rejects every send with
-  **error 131047** ("Re-engagement message").
-* Before this fix the code logged that as a `WARNING`, recorded the recipient as a generic `FAILED`, and
-  persisted no Meta error code — so the booking still succeeded and the failure was invisible in the UI,
-  the admin notifications view, and the database.
+The dispatcher sends a **freeform text** message because `WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE` is empty.
+Meta's Cloud API accepts such a send — HTTP `200` plus a real `wamid` — and only decides delivery later, in the
+status webhook. Outside the recipient's **24-hour customer service window** that verdict is:
+
+```
+code 131047  "Re-engagement message"
+details: "Message failed to send because more than 24 hours have passed since the
+          customer last replied to this number."
+```
+
+So acceptance proves nothing. Measured per recipient on 2026-10-27 (§5.2):
+
+| Recipient | Kind | Last inbound to the business | Window | Meta verdict |
+| --- | --- | --- | --- | --- |
+| `8864931247` | personal | 2026-10-27 09:54 UTC (1,183 messages) | **open** | **DELIVERED** |
+| `9599087957` | business | 2026-08-27 | closed | **FAILED 131047** |
+| `9599225778` | business | 2026-08-25 | closed | **FAILED 131047** |
+| `9217522660` | business | never | closed | **FAILED 131047** |
+| `9599087959` | business | never | closed | **FAILED 131047** |
+
+The correlation is exact: the only number that receives is the only number that chats with the bot, which is
+also the only number whose window is open. Being a *WhatsApp Business* account is **not** the cause — see the
+calibration in §5.4, where a genuinely API-registered number comes back as HTTP `400`, not `200`.
+
+Consequences that made this invisible:
+
+* the send path logged `accepted`/`ACCEPTED` and stored five `wamid`s, which looks healthy everywhere;
+* nothing in the response, the logs, or the admin view said "131047";
+* the record was then marked `DELIVERED` because **one** of the five messages reported delivered (§1.6).
 
 Because the WABA has only `hello_world` approved, **any** non-empty value for
-`WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE` in the Render dashboard would today fail with **132001**
-("template name does not exist in the translation"). Either configuration is a defect: unset means
-window-dependent delivery; set-but-unapproved means guaranteed failure for all five recipients.
+`WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE` would today fail with **132001** ("template name does not exist"),
+and `hello_world` itself is unusable from a production number — Meta answers **131058**, "Hello World templates
+can only be sent from the Public Test Numbers". A purpose-built template is therefore mandatory, not optional.
 
 ### 1.4 Root cause C — the durable duplicate guard was dead code (real bug, proven)
 
@@ -104,23 +125,36 @@ memory with `WEB_CONCURRENCY=2`. Any restart or a second worker could therefore 
 
 ---
 
+### 1.6 Root cause D — delivery status was stored per record, not per message
+
+The status webhook handler wrote one flag on the record: any `delivered` status set
+`NotificationRecord.status = DELIVERED`. With five messages per record, the single personal-number delivery
+marked the whole notification delivered while four recipients had been rejected with 131047. That is why the
+dashboard, and my own first read of it, showed a healthy delivery.
+
+Fixed by keeping a per-message map (`payload.messages[]`, one entry per `wamid`) and deriving the record status
+from every message: any failure makes the record `FAILED` with the Meta code preserved; `DELIVERED` requires
+all five; otherwise the record stays `COMPLETED`.
+
+---
+
 ## 2. Files changed
 
 | File | Change |
 | --- | --- |
-| `app/services/whatsapp_department_service.py` | Durable-dedupe query fixed (no more `.astext`); added `META_FAILURE_REMEDIES` classification; new `_resolve_template`, `_send_to_recipient`, `_classify_meta_failure`, `_describe_send_result`, `validate_configuration`; both dispatchers now keep per-recipient Meta diagnostics and report `WINDOW_CLOSED`, `TEMPLATE_NOT_FOUND`, `AUTH_ERROR`, `RATE_LIMITED`, etc.; results now include `template_configured` and `status_counts`; template-less sends log `ERROR` in production |
-| `app/integrations/whatsapp/client.py` | Returns `status_code` on success and `error_user_msg` on failure; logs an explicit `WARNING` when the offline/simulated transport is active |
+| `app/services/whatsapp_department_service.py` | Durable-dedupe query fixed (no more `.astext`); `META_FAILURE_REMEDIES` classification; `_resolve_template`, `_send_to_recipient`, `_classify_meta_failure`, `_describe_send_result`, `validate_configuration`; per-recipient Meta diagnostics; `template_configured` and `status_counts`; **per-message map (`payload.messages[]`) written on every dispatch** so delivery can be attributed to a single recipient; template-less sends log `ERROR` in production |
+| `app/integrations/whatsapp/service.py` | New `apply_delivery_status()`: records each webhook status against the exact `wamid` and derives the record status from **all** messages (any failure → `FAILED` with the Meta code; `DELIVERED` only when every message confirms); logs `ERROR` with remediation for 131047 |
+| `app/integrations/whatsapp/client.py` | Returns `status_code` on success and `error_user_msg` on failure; warns when the simulated offline transport is active |
 | `app/services/booking_service.py` | Passes the resolved `service_category` into the notification context |
 | `app/services/airport_service.py` | Same, for the Airport Meet & Greet engine |
-| `app/main.py` | Startup diagnostic: logs `ERROR` (production) when recipients, credentials or template are missing |
+| `app/main.py` | Startup diagnostic: `ERROR` (production) naming the exact missing variable |
 | `render.yaml` | Declares `WHATSAPP_BOOKING_NOTIFY_PHONE_1..5`, `WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE`, `WHATSAPP_DEPARTMENT_TEMPLATE_LANG` |
 | `.env.example` | Documents that an empty template means 24-hour-window-only delivery |
-| `tests/test_whatsapp_department_notifications.py` | Autouse fixture now also purges persisted ops notifications (required because the durable guard actually works now) |
-| `tests/test_whatsapp_notification_delivery_diagnostics.py` | **New** — 14 regression tests |
+| `tests/test_whatsapp_department_notifications.py` | Autouse fixture also purges persisted ops notifications (needed now that the durable guard actually works) |
+| `tests/test_whatsapp_notification_delivery_diagnostics.py` | **New** — 17 regression tests, including three that pin per-message delivery attribution |
 
-Not touched: frontend, WhatsApp bot handlers/flows, Razorpay, ICICI, booking prices, unrelated booking logic.
-
----
+Not touched: frontend, WhatsApp bot conversation handlers/flows, Razorpay, ICICI review mode, booking prices,
+unrelated booking logic.
 
 ## 3. Configuration problems found
 
@@ -180,15 +214,21 @@ failure with every file this change touches reverted** (`git checkout --`, verif
 failure that depends on accumulated test-database rows pushing the searched instance out of the result page —
 unrelated to WhatsApp and not caused by this change.
 
+Current run against `f271a3c` plus the per-message tracking:
+
+```
+1096 passed, 1 failed, 5 warnings in 195.92s
+```
+
+The single failure is the same pre-existing `test_02_workflow_admin.py::test_02_workflow_search`.
+
 Targeted suites:
 
 | Selection | Result |
 | --- | --- |
-| `test_whatsapp_notification_delivery_diagnostics.py` (new) | 14 passed |
+| `test_whatsapp_notification_delivery_diagnostics.py` (17 tests) | 17 passed |
 | `test_whatsapp_department_notifications.py` | 18 passed |
-| WhatsApp + notification + booking set (9 files) | 189 passed |
-| notification + booking + integration + charter set (6 files) | 162 passed |
-| WhatsApp + client + security regressions (5 files) | 165 passed |
+| diagnostics + department + integration | 52 passed |
 
 Startup path verified separately in a real `ENVIRONMENT=production` boot (`RENDER=1`, template unset): the app
 starts, `GET /ready` returns `200 READY`, and the log contains
@@ -202,83 +242,90 @@ pre-existing ones. `py_compile` clean on every changed module.
 
 ### 4.3 The new tests actually catch the old bugs
 
-Running the new file against the pre-fix `whatsapp_department_service.py` (HEAD version, restored afterwards):
+Two comparisons, both run and then restored:
 
-```
-7 failed, 7 passed
-```
+* against the **original** pre-fix revision: `7 failed, 7 passed` — window-closed reporting, Meta diagnostic
+  preservation, durable dedupe across restart, production error logging, and `validate_configuration` all fail;
+* against **`f271a3c`** (the first batch, already deployed): `3 failed, 14 passed` — exactly the three new
+  per-message delivery tests, because `apply_delivery_status` did not exist yet.
 
-The seven that fail are exactly the ones targeting the fixed behaviour: window-closed reporting, Meta
-diagnostic preservation, durable dedupe across restart, production error logging, and
-`validate_configuration`. This is the evidence that the tests are regression tests and not tautologies.
+Each batch therefore fails on the code that preceded it, which is what makes these regression tests rather
+than tautologies.
 
 ---
 
 ## 5. Actual Meta API responses observed
 
-All values below are from real HTTP calls to `graph.facebook.com/v21.0`. Tokens are never echoed.
+All values below are from real HTTP calls to `graph.facebook.com/v21.0`. No credential is echoed.
 
-### 5.1 Read-only identity / token checks
+### 5.1 Read-only identity and capability checks
 
 | Call | HTTP | Sanitized result |
 | --- | --- | --- |
-| `GET /{phone_number_id}?fields=display_phone_number,verified_name,quality_rating,...` | **200** | `+91 74283 00207`, `Shafsky Aviation Services`, `GREEN`, `CLOUD_API`, `code_verification_status: EXPIRED` |
-| `GET /debug_token` | **200** | `is_valid: true`, `expires_at: 0`, `type: SYSTEM_USER`, messaging + management scopes |
-| `GET /{waba_id}/message_templates` | **200** | `total templates: 1` → `hello_world | en_US | APPROVED | UTILITY` |
+| `GET /{phone_number_id}` | **200** | `+91 74283 00207`, `Shafsky Aviation Services`, `GREEN`, `CLOUD_API`, `CONNECTED`, `code_verification_status: EXPIRED` |
+| `GET /debug_token` | **200** | `is_valid` true, `expires_at` 0, type `SYSTEM_USER`, scopes include messaging and management |
+| `GET /{waba_id}/message_templates` | **200** | one template only — `hello_world` / `en_US` / `UTILITY` |
+| `GET /{waba_id}/phone_numbers` | **200** | one number, the sender `+91 74283 00207`; none of the five recipients is registered as an API sender on this WABA |
+| `GET /{business_id}/owned_whatsapp_business_accounts` | **200** | two WABAs; the second holds only a `+1 555` test number |
+| `GET /{waba_id}/conversation_analytics` | **200** | empty dataset — Meta exposes no per-message delivery status over the API |
+| `GET /{message_id}` | **400** | `GraphMethodException`: a message id is not readable, so status exists only in webhooks |
 
-### 5.2 Real sends (per-recipient, freeform text — the path the code actually used)
+### 5.2 Per-recipient send and delivery (controlled experiment, 2026-10-27)
 
-| Recipient | HTTP | `message_id` | Delivery webhook |
-| --- | --- | --- | --- |
-| `919****957` | 200 | `wamid.HBgMOTE5NTk5MDg3OTU3FQIAERgSM0Y2NTRCN0I1OTNEMTAyMzlGAA==` | delivered |
-| `919****778` | 200 | `wamid.HBgMOTE5NTk5MjI1Nzc4FQIAERgSQjZEODREOEI5NTMwOUMxMTA2AA==` | delivered |
-| `919****660` | 200 | `wamid.HBgMOTE5MjE3NTIyNjYwFQIAERgSMUIyNjk0NzgwNjk0MDlERDcyAA==` | delivered |
-| `918****247` | 200 | `wamid.HBgMOTE4ODY0OTMxMjQ3FQIAERgSQUIwQjUxNjAzRDJCNTY5OTgwAA==` | delivered |
-| `919****959` | 200 | `wamid.HBgMOTE5NTk5MDg3OTU5FQIAEg...RkQ2OTIxNjIxNjlGM0M1NDdCAA==` | delivered |
+One labelled freeform message per number, with its `wamid` recorded so Meta's status webhook could be attributed
+to the exact recipient.
 
-All five numbers are **currently inside their 24-hour window**, which is precisely why the template-less path
-succeeds today and why a "test send" cannot prove the configuration is correct. No `131047` could be
-produced without waiting for a window to close; the classification of `131047` is covered by a deterministic
-test instead.
+| # | Recipient | Attempted | Meta accepted | Delivered | Evidence |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `9599087957` | yes, own request | `200` + `wamid.HBgMOTE5NTk5MDg3OTU3FQ…` | **no** | 131047 "more than 24 hours have passed since the customer last replied" |
+| 2 | `9599225778` | yes, own request | `200` + `wamid.HBgMOTE5NTk5MjI1Nzc4…` | **no** | 131047 |
+| 3 | `9217522660` | yes, own request | `200` + `wamid.HBgMOTE5MjE3NTIyNjYw…` | **no** | 131047 |
+| 4 | `8864931247` | yes, own request | `200` + `wamid.HBgMOTE4ODY0OTMxMjQ3…` | **yes** | webhook `delivered`, `delivered_at` set |
+| 5 | `9599087959` | yes, own request | `200` + `wamid.HBgMOTE5NTk5MDg3OTU5…` | **no** | 131047 |
 
-### 5.3 Real production bookings (live end-to-end)
+So the answer to "rejected, accepted-but-not-delivered, or never attempted" is: **all five attempted as five
+independent requests, all five accepted by Meta, four never delivered** — rejected at delivery because the
+24-hour window is closed.
 
-| Booking | Request result | WhatsApp outcome |
+### 5.3 Real production bookings
+
+Both bookings created during the earlier investigation produced five accepted messages; the record was then
+marked `DELIVERED` on the strength of the single personal-number delivery (§1.6). With per-message tracking in
+place, the same run would now read `FAILED … (codes: [131047]) … 4/5`.
+
+| Booking | Request result | Notification record |
 | --- | --- | --- |
-| `SHF-20261027-73036D8C` | HTTP **502** from Render's proxy (booking + notification still completed server-side) | 5/5 ACCEPTED → record later marked **DELIVERED**, `delivered_at` 08:40:20Z |
-| `SHF-20261027-7C371712` | HTTP **201** in 6.3 s | 5/5 ACCEPTED → record later marked **DELIVERED**, `delivered_at` 08:40:56Z |
+| `SHF-20261027-73036D8C` | HTTP **502** from Render's proxy (booking still committed) | 5 accepted; recorded `DELIVERED` — actually 1 delivered, 4 × 131047 |
+| `SHF-20261027-7C371712` | HTTP **201** in 6.3 s | 5 accepted; recorded `DELIVERED` — actually 1 delivered, 4 × 131047 |
 
-Both bookings produced a `notification_records` row with `template_type = WHATSAPP_OPS_NOTIFICATION`,
-`recipient_phone = ALL_5_RECIPIENTS`, five real `wamid` values, and were then updated to `DELIVERED` by the
-Meta status webhook — so the webhook path (`POST /api/whatsapp/webhook`) is working too
-(`GET /api/whatsapp/webhook?hub.mode=subscribe` returns the challenge for the correct verify token and
-**403** for a wrong one).
+### 5.4 Calibration — what a genuinely ineligible recipient looks like
 
-The `502` on the first attempt is a Render-proxy/cold-start artefact, not a notification failure; the retry
-returned `201`. Worth a separate look because the frontend sees an error even though the booking exists.
+Two control sends prove the four business numbers are **not** the problem:
 
----
+| Control | HTTP | Response |
+| --- | --- | --- |
+| Send to our own API sender number `7428300207` (registered on the Cloud API, cannot receive) | **400** | `(#100) Invalid parameter` |
+| Send `hello_world` from the production number | **400** | `(#131058) Hello World templates can only be sent from the Public Test Numbers` |
+
+A real Business *Platform* recipient fails synchronously with `400`. The four recipients returned `200` with a
+`wamid`, so they are ordinary, eligible WhatsApp users — including WhatsApp Business app accounts. The failure
+is the window, not the account type.
 
 ## 6. Was live delivery verified?
 
-**Yes — for the currently deployed revision (`da86ba1`).**
+**Yes, and it is verified to be broken for four of the five recipients.**
 
-Verified: two real `POST /api/bookings` calls created real bookings; each produced five Meta-accepted
-messages with real `wamid`s; the delivery-status webhook then marked both records `DELIVERED`. Sender
-identity, token, and all five recipients are confirmed correct.
+* All five numbers: request attempted independently, `200` accepted with a `wamid` (§5.2).
+* `8864931247`: delivered, confirmed by the status webhook. Preserved by the fix.
+* The other four: not delivered, Meta code **131047**, confirmed by the status webhook.
+* Production bookings reproduce it: five accepted, one delivered.
 
-**Yes — for the fixed code:** verified that the fixed dispatcher still builds and sends the identical five
-payloads (capturing transport, 5/5 ACCEPTED), and that the repaired durable guard now returns `DUPLICATE`
-for an already-completed event against the production database, `ACQUIRED` for a new one and `IN_PROGRESS`
-for an immediate repeat.
+What is **not** yet true is delivery to the four business numbers. No code change can fix that on its own: Meta
+will not deliver a business-initiated freeform message to a recipient who has not written in 24 hours. The fix
+is an approved template (§7 step 1), after which the same dispatcher sends window-independently.
 
-**No — the fix has not been deployed.** The running service still executes the old code, so the new
-diagnostics, error classification and startup check are not live until a deploy is authorized.
-
-**Automated tests vs. live delivery are kept separate throughout**: the 1094 passing tests use mocked or
-offline transports and prove logic, not delivery. Only §5.2/§5.3 are live evidence.
-
----
+**Automated tests versus live evidence:** the 1,094-test suite uses mocked transports and proves logic only;
+every claim about delivery above comes from real Meta responses or the real status webhook.
 
 ## 7. What still has to happen (cannot be fixed in code alone)
 
@@ -326,3 +373,7 @@ Remove when convenient (they are diagnostic, not customer data):
 * `notification_records` rows with `template_type = WHATSAPP_OPS_NOTIFICATION` and idempotency keys
   `wa_booking_notify:SHF-HARNESS-0001`, `…:SHF-HARNESS-0002` (local harness runs) and the pre-existing
   `…:SHF-TEST-CLASS`.
+* Six more rows from the per-recipient delivery experiment (§5.2) — idempotency keys prefixed
+  `wa_diagnostic_probe:` and `payload.probe = true`. The cleanup SQL in the go-live checklist removes them
+  together with the harness rows.
+* Probe messages were delivered to the five numbers themselves (labelled "automated infrastructure test").
