@@ -139,10 +139,20 @@ _cors_kwargs = {
         "Idempotency-Key",
         "X-Idempotency-Key",
         "X-Correlation-ID",
+        "X-Request-ID",
+        "request-id",
+        "x-request-id",
+        "x-rtb-fingerprint-id",
         # ngrok free-tier interstitial bypass; portal may still send on older builds
         "ngrok-skip-browser-warning",
     ],
-    "expose_headers": ["X-Correlation-ID", "X-Request-ID"],
+    "expose_headers": [
+        "X-Correlation-ID",
+        "X-Request-ID",
+        "request-id",
+        "x-request-id",
+        "x-rtb-fingerprint-id",
+    ],
     "max_age": 600,
     "allow_origin_regex": _CORS_ORIGIN_REGEX,
 }

@@ -63,6 +63,11 @@ def configure_test_database() -> None:
     os.environ.setdefault("WHATSAPP_ACCESS_TOKEN", "test_wa_access_token")
     os.environ.setdefault("WHATSAPP_PHONE_NUMBER_ID", "test_wa_phone_id")
     os.environ.setdefault("WHATSAPP_OFFICER_NOTIFY_PHONE", "919999999999")
+    os.environ.setdefault("WHATSAPP_BOOKING_NOTIFY_PHONE_1", "9599087957")
+    os.environ.setdefault("WHATSAPP_BOOKING_NOTIFY_PHONE_2", "9599225778")
+    os.environ.setdefault("WHATSAPP_BOOKING_NOTIFY_PHONE_3", "9217522660")
+    os.environ.setdefault("WHATSAPP_BOOKING_NOTIFY_PHONE_4", "8864931247")
+    os.environ.setdefault("WHATSAPP_BOOKING_NOTIFY_PHONE_5", "9599087959")
 
     if test_url:
         os.environ["DATABASE_URL"] = test_url
@@ -99,12 +104,24 @@ def isolate_process_and_redis_state():
     from app.core.redis import get_redis_client
     from app.flight.unified_cache import clear_unified_cache
     from app.flight.providers import aviation_edge_provider as ae_mod
+    from app.integrations.whatsapp.client import whatsapp_client
 
     RateLimiter.clear()
     InMemoryLockStore.clear()
     InMemoryResponseStore.clear()
     clear_unified_cache()
     ae_mod._IN_MEMORY_CACHE.clear()
+    wa_keys_to_clean = (
+        "send_text_message",
+        "send_message",
+        "is_configured",
+        "send_interactive_buttons",
+        "send_interactive_list",
+        "_get_http_client",
+        "_post_payload",
+    )
+    for wa_k in wa_keys_to_clean:
+        whatsapp_client.__dict__.pop(wa_k, None)
     client = get_redis_client()
     if client is not None:
         client.flushdb()
@@ -114,6 +131,8 @@ def isolate_process_and_redis_state():
     InMemoryResponseStore.clear()
     clear_unified_cache()
     ae_mod._IN_MEMORY_CACHE.clear()
+    for wa_k in wa_keys_to_clean:
+        whatsapp_client.__dict__.pop(wa_k, None)
     if client is not None:
         client.flushdb()
     try:

@@ -112,6 +112,33 @@ class TicketingService:
             details={"booking_ref": ref, "origin": booking.origin_iata, "dest": booking.destination_iata}
         )
 
+        # Dispatch Universal WhatsApp notification for Ticketing booking
+        try:
+            from app.services.notification_service import NotificationService
+            NotificationService.notify_booking_created(db, {
+                "booking_ref": ref,
+                "passenger_name": booking.contact_name,
+                "passenger_email": booking.contact_email,
+                "passenger_phone": booking.contact_phone,
+                "passenger_count": booking.passenger_count,
+                "flight_num": booking.flight_number,
+                "origin_code": booking.origin_iata,
+                "dest_code": booking.destination_iata,
+                "service_category": "Ticketing",
+                "service_type": booking.cabin_class,
+                "service_name": f"Air Ticket ({booking.airline_name} {booking.flight_number})",
+                "departure_time": booking.departure_time.isoformat() if booking.departure_time else None,
+                "total_amount": float(booking.total_fare),
+                "currency": booking.currency,
+                "status": booking.status.value if hasattr(booking.status, "value") else str(booking.status),
+                "notes": booking.notes,
+            })
+        except Exception as notify_err:
+            import logging
+            logging.getLogger("shafsky.ticketing").warning(
+                "Ticket booking notification dispatch skipped or failed for %s: %s", ref, notify_err
+            )
+
         return booking
 
     @classmethod

@@ -67,11 +67,11 @@ def test_valid_ground_transport_enquiry_success_and_whatsapp_attempted():
         db.add.assert_called_once()
         db.commit.assert_called()
 
-        # Verify WhatsApp notification was attempted to officer phone
-        mock_wa.assert_called_once()
-        args, _ = mock_wa.call_args
+        # Verify WhatsApp notification was attempted to all 5 recipient phones
+        assert mock_wa.call_count == 5
+        args, _ = mock_wa.call_args_list[0]
         to_phone, msg_text = args[0], args[1]
-        assert to_phone == "919999999999" or len(to_phone) >= 10
+        assert to_phone == "919599087957" or len(to_phone) >= 10
         assert "NEW TRANSPORT ENQUIRY" in msg_text
         assert booking.booking_ref in msg_text
         assert "Jane Chauffeur" in msg_text
@@ -235,8 +235,8 @@ def test_reference_pricing_is_informational_only():
         assert booking.metadata_json["details"]["reference_price"] == 8500.0
 
         # Verify label in WhatsApp message
-        mock_wa.assert_called_once()
-        msg_text = mock_wa.call_args[0][1]
+        assert mock_wa.call_count == 5
+        msg_text = mock_wa.call_args_list[0][0][1]
         assert "REFERENCE PRICING — NOT FINAL QUOTE" in msg_text
         assert "8,500.00" in msg_text or "8500" in msg_text
 
@@ -293,8 +293,9 @@ def test_non_ground_transport_enquiries_not_affected():
         assert hotel_booking.service_category == "Travel Support"
         assert hotel_booking.status == BookingStatus.PENDING
         assert float(hotel_booking.total_amount) == 0.0
-        # Transport WhatsApp dispatch MUST NOT be triggered for Travel Support
-        mock_wa.assert_not_called()
+        # Hotel / Travel Support triggers universal WhatsApp dispatch to all 5 numbers
+        assert mock_wa.call_count == 5
+        assert "Hotel" in mock_wa.call_args_list[0][0][1]
 
 
 # =====================================================================
@@ -358,9 +359,9 @@ def test_api_endpoint_ground_transport_enquiry():
             assert body["data"]["status"] == "PENDING"
             assert body["data"]["bookingRef"].startswith("SHF-")
 
-            # Verify WhatsApp alert dispatched to team
-            mock_wa.assert_called_once()
-            msg_text = mock_wa.call_args[0][1]
+            # Verify WhatsApp alert dispatched to all 5 team recipients
+            assert mock_wa.call_count == 5
+            msg_text = mock_wa.call_args_list[0][0][1]
             assert "Toyota Alphard" in msg_text
             assert "Gurugram Cyber City" in msg_text
             assert "REFERENCE PRICING — NOT FINAL QUOTE" in msg_text
@@ -406,9 +407,9 @@ def test_round_trip_enquiry_success_and_whatsapp():
         assert booking.metadata_json.get("quote_only") is True
         assert booking.booking_ref.startswith("SHF-")
 
-        # Verify WhatsApp notification was sent to officer
-        mock_wa.assert_called_once()
-        msg_text = mock_wa.call_args[0][1]
+        # Verify WhatsApp notification was sent to all 5 recipients
+        assert mock_wa.call_count == 5
+        msg_text = mock_wa.call_args_list[0][0][1]
         assert "NEW ROUND TRIP ENQUIRY" in msg_text
         assert booking.booking_ref in msg_text
         assert "Rahul Sharma" in msg_text
@@ -455,9 +456,9 @@ def test_ticketing_enquiry_success_and_whatsapp():
         assert booking.metadata_json.get("quote_only") is True
         assert booking.booking_ref.startswith("SHF-")
 
-        # Verify WhatsApp notification was sent to officer
-        mock_wa.assert_called_once()
-        msg_text = mock_wa.call_args[0][1]
+        # Verify WhatsApp notification was sent to all 5 recipients
+        assert mock_wa.call_count == 5
+        msg_text = mock_wa.call_args_list[0][0][1]
         assert "NEW TICKETING ENQUIRY" in msg_text
         assert booking.booking_ref in msg_text
         assert "Priya Patel" in msg_text

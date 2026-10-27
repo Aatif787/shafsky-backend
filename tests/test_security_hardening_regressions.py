@@ -384,7 +384,7 @@ def test_security_middleware_wraps_idempotency():
 def test_whatsapp_timeout_is_not_retried(monkeypatch):
     import httpx
 
-    from app.integrations.whatsapp.client import whatsapp_client
+    from app.integrations.whatsapp.client import WhatsAppClient, whatsapp_client
 
     calls = {"n": 0}
 
@@ -393,8 +393,8 @@ def test_whatsapp_timeout_is_not_retried(monkeypatch):
             calls["n"] += 1
             raise httpx.TimeoutException("timed out")
 
-    monkeypatch.setattr(whatsapp_client, "is_configured", lambda: True)
-    monkeypatch.setattr(whatsapp_client, "_get_http_client", lambda: _Boom())
+    monkeypatch.setattr(WhatsAppClient, "is_configured", lambda self: True)
+    monkeypatch.setattr(WhatsAppClient, "_get_http_client", lambda self: _Boom())
     res = whatsapp_client.send_message(to_phone="+919999999999", message_body="hi")
     assert calls["n"] == 1
     assert res.get("status") == "timeout_unverified"

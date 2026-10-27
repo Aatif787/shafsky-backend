@@ -574,7 +574,9 @@ class ReviewPaymentFlowMixin(BaseFlowMixin):
         quote_request: bool = False,
     ) -> None:
         officer_phone = (
-            os.getenv("WHATSAPP_OFFICER_NOTIFY_PHONE", "") or ""
+            os.getenv("WHATSAPP_BOOKING_NOTIFY_PHONE_1")
+            or os.getenv("WHATSAPP_OFFICER_NOTIFY_PHONE")
+            or "919599087959"
         ).strip()
         if not officer_phone:
             return

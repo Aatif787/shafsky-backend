@@ -1259,11 +1259,36 @@ class WhatsAppService:
 
                     for st in val.get("statuses", []):
                         statuses_handled += 1
+                        st_id = st.get("id")
+                        st_val = str(st.get("status") or "").lower()
                         logger.info(
                             "[WhatsApp Webhook Status] Message %s status: %s",
-                            st.get("id"),
-                            st.get("status"),
+                            st_id,
+                            st_val,
                         )
+                        if st_id and db is not None:
+                            try:
+                                from sqlalchemy import or_, select
+                                from app.models.schema import NotificationRecord, NotificationStatus
+                                matched = list(db.scalars(
+                                    select(NotificationRecord).where(
+                                        or_(
+                                            NotificationRecord.message_id == st_id,
+                                            NotificationRecord.message_id.like(f"%{st_id}%"),
+                                        )
+                                    )
+                                ))
+                                for rec in matched:
+                                    if st_val in ("delivered", "read"):
+                                        rec.status = NotificationStatus.DELIVERED
+                                        rec.delivered_at = datetime.now(timezone.utc)
+                                    elif st_val == "failed":
+                                        rec.status = NotificationStatus.FAILED
+                                        rec.error_log = f"Meta delivery failed: {st.get('errors')}"
+                                if matched:
+                                    db.commit()
+                            except Exception as st_err:
+                                logger.debug("[WhatsApp Webhook Status] NotificationRecord update skipped: %s", st_err)
 
                     for msg in val.get("messages", []):
                         if not isinstance(msg, dict):
