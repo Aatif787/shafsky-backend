@@ -99,6 +99,13 @@ class CharterService:
         except Exception as notify_err:
             logger.warning("Charter notification dispatch skipped or failed: %s", str(notify_err))
 
+        # Dispatch Department 3 WhatsApp notification (Air Charter Desk)
+        try:
+            from app.services.whatsapp_department_service import WhatsAppDepartmentService
+            WhatsAppDepartmentService.dispatch_charter_notification(request_record)
+        except Exception as wa_err:
+            logger.warning("Charter WhatsApp department notification failed: %s", wa_err)
+
         return request_record
 
     @classmethod

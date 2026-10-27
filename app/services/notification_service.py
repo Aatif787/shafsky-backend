@@ -1210,8 +1210,8 @@ class NotificationService:
     # pylint: disable=unused-argument
     def notify_booking_created(cls, db: Session, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        After a booking is persisted:
-        - For Ground Transport, Round Trip, Ticketing, and Lounge enquiries: dispatches WhatsApp notification to the Shafsky operations team.
+        After a booking or enquiry is persisted:
+        - Dispatches service-wise WhatsApp notification to the assigned department (Dept 1, 2, or 3).
         - For pending payments (airport assistance): suppresses customer email until payment confirmation.
         """
         _ = db
@@ -1222,71 +1222,21 @@ class NotificationService:
             "admin": [],
         }
 
-        service_category = str(
-            context.get("service_category") or context.get("serviceCategory") or ""
-        ).strip()
-
-        cat_lower = service_category.lower()
-        if cat_lower in ("ground transport", "transport"):
-            try:
-                wa_res = cls._dispatch_ground_transport_enquiry_whatsapp(context)
-                summary["admin"].append({
-                    "channel": "WHATSAPP",
-                    "status": wa_res.get("status", "DISPATCHED"),
-                    "details": wa_res,
-                })
-            except Exception as err:
-                logger.warning(
-                    "Ground transport WhatsApp notification failed for %s: %s",
-                    booking_ref,
-                    type(err).__name__,
-                )
-                summary["admin"].append({"channel": "WHATSAPP", "status": "FAILED"})
-        elif cat_lower in ("round trip", "round_trip", "roundtrip"):
-            try:
-                wa_res = cls._dispatch_round_trip_enquiry_whatsapp(context)
-                summary["admin"].append({
-                    "channel": "WHATSAPP",
-                    "status": wa_res.get("status", "DISPATCHED"),
-                    "details": wa_res,
-                })
-            except Exception as err:
-                logger.warning(
-                    "Round trip WhatsApp notification failed for %s: %s",
-                    booking_ref,
-                    type(err).__name__,
-                )
-                summary["admin"].append({"channel": "WHATSAPP", "status": "FAILED"})
-        elif cat_lower in ("ticketing", "air ticketing"):
-            try:
-                wa_res = cls._dispatch_ticketing_enquiry_whatsapp(context)
-                summary["admin"].append({
-                    "channel": "WHATSAPP",
-                    "status": wa_res.get("status", "DISPATCHED"),
-                    "details": wa_res,
-                })
-            except Exception as err:
-                logger.warning(
-                    "Ticketing WhatsApp notification failed for %s: %s",
-                    booking_ref,
-                    type(err).__name__,
-                )
-                summary["admin"].append({"channel": "WHATSAPP", "status": "FAILED"})
-        elif cat_lower in ("lounge", "airport lounge", "lounge access"):
-            try:
-                wa_res = cls._dispatch_lounge_enquiry_whatsapp(context)
-                summary["admin"].append({
-                    "channel": "WHATSAPP",
-                    "status": wa_res.get("status", "DISPATCHED"),
-                    "details": wa_res,
-                })
-            except Exception as err:
-                logger.warning(
-                    "Lounge WhatsApp notification failed for %s: %s",
-                    booking_ref,
-                    type(err).__name__,
-                )
-                summary["admin"].append({"channel": "WHATSAPP", "status": "FAILED"})
+        try:
+            from app.services.whatsapp_department_service import WhatsAppDepartmentService
+            wa_res = WhatsAppDepartmentService.dispatch_booking_or_enquiry_notification(context)
+            summary["admin"].append({
+                "channel": "WHATSAPP",
+                "status": wa_res.get("status", "DISPATCHED"),
+                "details": wa_res,
+            })
+        except Exception as err:
+            logger.warning(
+                "WhatsApp department notification failed for %s: %s",
+                booking_ref,
+                type(err).__name__,
+            )
+            summary["admin"].append({"channel": "WHATSAPP", "status": "FAILED"})
 
         logger.info(
             "Booking created with pending payment. Customer email suppressed until payment confirmation.",
