@@ -34,7 +34,7 @@ import os
 import re
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -67,6 +67,76 @@ class WhatsAppDepartmentService:
     IDEMPOTENCY_TIMEOUT_HOLD_SECONDS: int = 300  # 5 minutes hold on ambiguous timeout
 
     MAX_TEMPLATE_PARAM_CHARS: int = 1000  # Strictly below Meta Cloud API 1024-character limit
+
+    # Meta Cloud API failures that need an operator action rather than a retry.
+    # Each entry maps a Meta error code to (per-recipient status, actionable remedy).
+    # Error 131047 is the one that silently kills business-initiated notifications:
+    # Meta only accepts freeform text inside a recipient's 24-hour customer service
+    # window, so a template-less send that works today fails tomorrow.
+    META_FAILURE_REMEDIES: Dict[int, Tuple[str, str]] = {
+        190: (
+            "AUTH_ERROR",
+            "WHATSAPP_ACCESS_TOKEN is invalid or expired. Issue a new system-user token and update the deployment.",
+        ),
+        100: (
+            "INVALID_REQUEST",
+            "Meta rejected the payload. Verify template name, language and parameter count.",
+        ),
+        131047: (
+            "WINDOW_CLOSED",
+            "Recipient is outside the 24-hour customer service window. Business-initiated messages "
+            "require an approved WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE.",
+        ),
+        131026: (
+            "UNDELIVERABLE",
+            "Recipient cannot receive WhatsApp messages (not on WhatsApp or has not opted in).",
+        ),
+        131030: (
+            "INVALID_RECIPIENT",
+            "Recipient number is not in the allowed recipient list for this WhatsApp Business Account.",
+        ),
+        131031: (
+            "ACCOUNT_RESTRICTED",
+            "The WhatsApp Business Account is restricted. Resolve the restriction in Meta Business Manager.",
+        ),
+        131042: (
+            "BILLING_ISSUE",
+            "Meta billing for this WhatsApp Business Account is unhealthy. Fix the payment method in Meta Business Manager.",
+        ),
+        132000: (
+            "TEMPLATE_PARAM_MISMATCH",
+            "Parameter count does not match the approved template body. Align build_template_components with the template.",
+        ),
+        132001: (
+            "TEMPLATE_NOT_FOUND",
+            "Template name/language is not approved on this WhatsApp Business Account. "
+            "Check WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE and WHATSAPP_DEPARTMENT_TEMPLATE_LANG.",
+        ),
+        132005: (
+            "TEMPLATE_PARAM_MISMATCH",
+            "Template parameter text violates Meta limits. Check sanitize_template_param output.",
+        ),
+        132007: (
+            "TEMPLATE_PAUSED",
+            "The approved template is paused for quality. Fix the template in Meta Business Manager.",
+        ),
+        132012: (
+            "TEMPLATE_PARAM_MISMATCH",
+            "Template parameter format is invalid for the approved template.",
+        ),
+        130429: (
+            "RATE_LIMITED",
+            "Meta Cloud API rate limit reached. Reduce burst volume or request a higher tier.",
+        ),
+        131048: (
+            "RATE_LIMITED",
+            "Meta Cloud API spam rate limit reached. Slow down outbound messaging.",
+        ),
+        131056: (
+            "RATE_LIMITED",
+            "Pair rate limit reached for this recipient. Retry later.",
+        ),
+    }
 
     # Department 1 service keywords
     DEPT1_CATEGORIES = {
@@ -168,22 +238,39 @@ class WhatsAppDepartmentService:
 
         clean_key = idempotency_key.strip()
 
-        # 1. Check PostgreSQL NotificationRecord persistence for durable completed record
+        # 1. Check PostgreSQL NotificationRecord persistence for durable completed record.
+        # `payload` is a generic JSON column, so the JSONB-only `.astext` operator raises
+        # AttributeError here. That failure used to be swallowed at DEBUG level, silently
+        # disabling the only cross-restart duplicate guard. Filter the bounded candidate
+        # window in Python instead, and surface a broken guard at WARNING.
         try:
+            from sqlalchemy import select
+
             from app.database import SessionLocal
             from app.models.schema import NotificationRecord, NotificationStatus
-            from sqlalchemy import select
+
+            completed_since = datetime.now(timezone.utc) - timedelta(
+                seconds=cls.IDEMPOTENCY_DISPATCHED_TTL_SECONDS
+            )
             with SessionLocal() as db:
-                existing = db.scalar(
+                candidates = db.scalars(
                     select(NotificationRecord)
                     .where(NotificationRecord.template_type == "WHATSAPP_OPS_NOTIFICATION")
-                    .where(NotificationRecord.payload["idempotency_key"].astext == clean_key)
-                    .where(NotificationRecord.status.in_([NotificationStatus.COMPLETED, NotificationStatus.DELIVERED]))
-                )
-                if existing:
-                    return "DUPLICATE"
+                    .where(
+                        NotificationRecord.status.in_(
+                            [NotificationStatus.COMPLETED, NotificationStatus.DELIVERED]
+                        )
+                    )
+                    .where(NotificationRecord.created_at >= completed_since)
+                    .order_by(NotificationRecord.created_at.desc())
+                    .limit(1000)
+                ).all()
+                for record in candidates:
+                    payload = record.payload if isinstance(record.payload, dict) else {}
+                    if payload.get("idempotency_key") == clean_key:
+                        return "DUPLICATE"
         except Exception as db_err:
-            logger.debug("[WhatsApp Idempotency] DB persistence check skipped: %s", db_err)
+            logger.warning("[WhatsApp Idempotency] Durable duplicate check unavailable: %s", db_err)
 
         # 2. Check Redis if available
         try:
@@ -296,6 +383,11 @@ class WhatsAppDepartmentService:
                 rec_status = NotificationStatus.COMPLETED if is_successful else (
                     NotificationStatus.PENDING if is_unknown else NotificationStatus.FAILED
                 )
+                status_counts: Dict[str, int] = {}
+                for entry in recipient_results:
+                    key = str(entry.get("status") or "FAILED")
+                    status_counts[key] = status_counts.get(key, 0) + 1
+
                 note = NotificationRecord(
                     recipient_email=str((context or {}).get("passenger_email") or (context or {}).get("email") or "ops@shafsky.aero"),
                     recipient_phone="ALL_5_RECIPIENTS",
@@ -304,6 +396,7 @@ class WhatsAppDepartmentService:
                     payload={
                         "idempotency_key": clean_key,
                         "outcome": outcome,
+                        "status_counts": status_counts,
                         "recipient_results": recipient_results,
                         "context_summary": {
                             "booking_ref": (context or {}).get("booking_ref"),
@@ -688,6 +781,198 @@ class WhatsAppDepartmentService:
         return "\n".join(lines)
 
     @classmethod
+    def _resolve_template(cls) -> Tuple[str, str]:
+        """
+        Resolves the approved Meta template name and language for operations notifications.
+
+        A missing template is not a cosmetic warning: Meta only accepts freeform text inside
+        a recipient's 24-hour customer service window, so template-less delivery succeeds for
+        a while and then fails for every recipient with error 131047. Surface that loudly.
+        """
+        template_name = getattr(settings, "WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE", None)
+        if template_name is None:
+            template_name = os.getenv("WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE", "")
+        template_name = (template_name or "").strip()
+
+        template_lang = getattr(settings, "WHATSAPP_DEPARTMENT_TEMPLATE_LANG", None)
+        if template_lang is None:
+            template_lang = os.getenv("WHATSAPP_DEPARTMENT_TEMPLATE_LANG", "en_US")
+        template_lang = (template_lang or "en_US").strip()
+
+        if not template_name:
+            message = (
+                "[WhatsApp Notify] WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE is not set. "
+                "Falling back to freeform text, which Meta only accepts inside the recipient's "
+                "24-hour customer service window; outside it every send fails with error 131047. "
+                "Set WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE to an approved template and "
+                "WHATSAPP_DEPARTMENT_TEMPLATE_LANG to its language code to make delivery window-independent."
+            )
+            if bool(getattr(settings, "is_production", False)):
+                logger.error(message)
+            else:
+                logger.warning(message)
+
+        return template_name, template_lang
+
+    @classmethod
+    def _send_to_recipient(
+        cls,
+        phone: str,
+        message_body: str,
+        template_name: str,
+        template_lang: str,
+    ) -> Dict[str, Any]:
+        """Sends one operations notification using the template path when configured."""
+        if template_name:
+            components = cls.build_template_components(message_body)
+            return whatsapp_client.send_message(
+                to_phone=phone,
+                template_name=template_name,
+                template_language=template_lang,
+                template_components=components,
+            )
+        return whatsapp_client.send_text_message(phone, message_body)
+
+    @classmethod
+    def _classify_meta_failure(cls, res: Dict[str, Any], error_text: str) -> Tuple[str, str]:
+        """Maps a failed Meta response to (recipient status, actionable remedy)."""
+        code = res.get("error_code")
+        code_int: Optional[int]
+        try:
+            code_int = int(code) if code is not None else None
+        except (TypeError, ValueError):
+            code_int = None
+
+        if code_int is not None and code_int in cls.META_FAILURE_REMEDIES:
+            return cls.META_FAILURE_REMEDIES[code_int]
+
+        # Some results only carry the rendered message; match long numeric codes to avoid
+        # false positives from short values such as "100" inside arbitrary text.
+        for known_code, outcome in cls.META_FAILURE_REMEDIES.items():
+            if len(str(known_code)) >= 5 and str(known_code) in error_text:
+                return outcome
+
+        return (
+            "FAILED",
+            "Inspect the Meta Cloud API error code and the WhatsApp Business Account status.",
+        )
+
+    @classmethod
+    def _describe_send_result(
+        cls,
+        phone_label: str,
+        masked_phone: str,
+        res: Optional[Dict[str, Any]],
+        entity_ref: str = "N/A",
+    ) -> Dict[str, Any]:
+        """
+        Normalizes one Meta send result into a per-recipient record that keeps the real HTTP
+        status and Meta error code/subcode, so an operator can tell a closed messaging window
+        apart from an expired token or a rejected template.
+        """
+        payload = res or {}
+        message_id = payload.get("message_id")
+        is_success = payload.get("success") is True
+        res_status = str(payload.get("status") or "").lower()
+        res_err = str(payload.get("error") or "")
+
+        entry: Dict[str, Any] = {"phone": phone_label, "masked_phone": masked_phone}
+        for source_key, target_key in (
+            ("status_code", "http_status"),
+            ("error_code", "error_code"),
+            ("error_subcode", "error_subcode"),
+            ("error_user_msg", "error_user_msg"),
+        ):
+            if payload.get(source_key) is not None:
+                entry[target_key] = payload.get(source_key)
+
+        # Only a Meta-confirmed acceptance carrying a message identifier counts as sent.
+        if is_success and message_id:
+            entry["status"] = "ACCEPTED"
+            entry["message_id"] = message_id
+            logger.info(
+                "[WhatsApp Notify] Meta accepted %s for %s (message_id=%s)",
+                entity_ref,
+                masked_phone,
+                message_id,
+            )
+            return entry
+
+        if res_status == "unconfigured":
+            entry["status"] = "FAILED"
+            entry["error"] = res_err or "WhatsApp Cloud API is not configured in backend environment."
+            entry["remedy"] = (
+                "Set WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID in the deployment environment."
+            )
+            logger.error(
+                "[WhatsApp Notify] %s not sent to %s: WhatsApp Cloud API credentials missing.",
+                entity_ref,
+                masked_phone,
+            )
+            return entry
+
+        if res_status == "timeout_unverified" or "timeout" in res_err.lower():
+            entry["status"] = "UNKNOWN"
+            entry["error"] = res_err or "Timeout connecting to Meta WhatsApp API; delivery state unknown."
+            logger.error(
+                "[WhatsApp Notify] %s send to %s timed out; delivery state UNKNOWN. "
+                "Verify in Meta WhatsApp Manager before resending.",
+                entity_ref,
+                masked_phone,
+            )
+            return entry
+
+        failure_status, remedy = cls._classify_meta_failure(payload, res_err)
+        entry["status"] = failure_status
+        entry["error"] = res_err or "Missing message identifier from Meta API"
+        entry["remedy"] = remedy
+        logger.error(
+            "[WhatsApp Notify] %s send to %s FAILED (%s | http=%s code=%s subcode=%s): %s | remedy: %s",
+            entity_ref,
+            masked_phone,
+            failure_status,
+            payload.get("status_code"),
+            payload.get("error_code"),
+            payload.get("error_subcode"),
+            entry["error"],
+            remedy,
+        )
+        return entry
+
+    @classmethod
+    def validate_configuration(cls) -> Dict[str, Any]:
+        """
+        Startup diagnostic for the operations notification path.
+        Reports what is missing instead of failing silently at booking time.
+        """
+        recipients = cls.get_recipient_phone_numbers()
+        template_name, template_lang = cls._resolve_template()
+        problems: List[str] = []
+
+        if not recipients:
+            problems.append(
+                "No recipient numbers: set WHATSAPP_BOOKING_NOTIFY_PHONE_1..5 in the deployment environment."
+            )
+        if not template_name:
+            problems.append(
+                "No approved template: set WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE so notifications "
+                "work outside the 24-hour customer service window."
+            )
+        if not whatsapp_client.is_configured():
+            problems.append(
+                "Cloud API credentials missing: set WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID."
+            )
+
+        return {
+            "ok": not problems,
+            "recipients_configured": len(recipients),
+            "template": template_name or None,
+            "template_language": template_lang,
+            "template_configured": bool(template_name),
+            "problems": problems,
+        }
+
+    @classmethod
     def dispatch_booking_or_enquiry_notification(cls, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Evaluates context, performs two-phase idempotency check, and dispatches WhatsApp alert
@@ -746,78 +1031,18 @@ class WhatsAppDepartmentService:
             dept, service_label = cls.resolve_department(category, service_type, context)
             message_body = cls.format_booking_notification(context, dept, service_label)
 
-            template_name = getattr(settings, "WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE", None)
-            if template_name is None:
-                template_name = os.getenv("WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE", "")
-            template_name = (template_name or "").strip()
-
-            template_lang = getattr(settings, "WHATSAPP_DEPARTMENT_TEMPLATE_LANG", None)
-            if template_lang is None:
-                template_lang = os.getenv("WHATSAPP_DEPARTMENT_TEMPLATE_LANG", "en_US")
-            template_lang = (template_lang or "en_US").strip()
-
-            if not template_name:
-                logger.warning(
-                    "[WhatsApp Notify] WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE is not set. "
-                    "Falling back to freeform text. NOTE: Meta Cloud API requires an approved template "
-                    "when messaging recipients outside their 24-hour customer window (Error 131047)."
-                )
+            template_name, template_lang = cls._resolve_template()
 
             # 5. Dispatch to ALL configured recipients (continue if any individual number fails)
             recipient_results: List[Dict[str, Any]] = []
             successful_count = 0
             timeout_count = 0
+            window_closed_count = 0
 
             for phone in recipients:
                 masked = cls._mask_phone(phone)
                 try:
-                    if template_name:
-                        components = cls.build_template_components(message_body)
-                        res = whatsapp_client.send_message(
-                            to_phone=phone,
-                            template_name=template_name,
-                            template_language=template_lang,
-                            template_components=components,
-                        )
-                    else:
-                        res = whatsapp_client.send_text_message(phone, message_body)
-
-                    msg_id = res.get("message_id")
-                    is_success = res.get("success") is True
-                    res_status = str(res.get("status") or "").lower()
-                    res_err = str(res.get("error") or "")
-
-                    # Verify Meta API response confirmed acceptance with message identifier
-                    if is_success and msg_id:
-                        successful_count += 1
-                        recipient_results.append({
-                            "phone": phone,
-                            "masked_phone": masked,
-                            "status": "ACCEPTED",
-                            "message_id": msg_id,
-                        })
-                    elif res_status == "timeout_unverified" or "timeout" in res_err.lower():
-                        timeout_count += 1
-                        recipient_results.append({
-                            "phone": phone,
-                            "masked_phone": masked,
-                            "status": "UNKNOWN",
-                            "error": res.get("error") or "Timeout connecting to Meta WhatsApp API; delivery state unknown.",
-                        })
-                    else:
-                        if "131047" in res_err:
-                            logger.warning(
-                                "[WhatsApp Notify] Meta rejected message to %s (Error 131047): "
-                                "Recipient is outside 24h messaging window. Configure WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE with an approved Meta template.",
-                                masked,
-                            )
-                        recipient_results.append({
-                            "phone": phone,
-                            "masked_phone": masked,
-                            "status": "FAILED",
-                            "error": res.get("error") or "Missing message identifier from Meta API",
-                        })
-
+                    res = cls._send_to_recipient(phone, message_body, template_name, template_lang)
                 except Exception as item_err:
                     logger.error(
                         "[WhatsApp Notify] Exception during send for %s to %s: %s",
@@ -831,8 +1056,30 @@ class WhatsAppDepartmentService:
                         "status": "FAILED",
                         "error": str(item_err),
                     })
+                    continue
+
+                entry = cls._describe_send_result(phone, masked, res, entity_ref=booking_ref)
+                if entry["status"] == "ACCEPTED":
+                    successful_count += 1
+                elif entry["status"] == "UNKNOWN":
+                    timeout_count += 1
+                elif entry["status"] == "WINDOW_CLOSED":
+                    window_closed_count += 1
+                recipient_results.append(entry)
 
             # Determine overall outcome
+            status_counts: Dict[str, int] = {}
+            for entry in recipient_results:
+                key = str(entry.get("status") or "FAILED")
+                status_counts[key] = status_counts.get(key, 0) + 1
+            if window_closed_count:
+                logger.error(
+                    "[WhatsApp Notify] %d/%d recipients for %s are outside the 24-hour window (Meta 131047). "
+                    "Configure an approved WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE to make delivery reliable.",
+                    window_closed_count,
+                    len(recipients),
+                    booking_ref,
+                )
             if successful_count == len(recipients):
                 overall_status = "ACCEPTED"
             elif successful_count > 0:
@@ -863,6 +1110,8 @@ class WhatsAppDepartmentService:
                 # Backward-compatible alias for existing consumers
                 "recipients_delivered": successful_count,
                 "recipient_results": recipient_results,
+                "template_configured": bool(template_name),
+                "status_counts": status_counts,
             }
 
         except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -943,74 +1192,18 @@ class WhatsAppDepartmentService:
             # 4. Format message body
             message_body = cls.format_charter_notification(charter_req)
 
-            template_name = (
-                getattr(settings, "WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE", None)
-                or os.getenv("WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE", "")
-            ).strip()
-
-            template_lang = (
-                getattr(settings, "WHATSAPP_DEPARTMENT_TEMPLATE_LANG", None)
-                or os.getenv("WHATSAPP_DEPARTMENT_TEMPLATE_LANG", "en_US")
-            ).strip()
-
-            if not template_name:
-                logger.warning(
-                    "[WhatsApp Notify] WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE is not set for charter. "
-                    "Falling back to freeform text. NOTE: Meta Cloud API requires an approved template "
-                    "when messaging recipients outside their 24-hour customer window (Error 131047)."
-                )
+            template_name, template_lang = cls._resolve_template()
 
             # 5. Dispatch to ALL configured recipients
             recipient_results: List[Dict[str, Any]] = []
             successful_count = 0
             timeout_count = 0
+            window_closed_count = 0
 
             for phone in recipients:
                 masked = cls._mask_phone(phone)
                 try:
-                    if template_name:
-                        components = cls.build_template_components(message_body)
-                        res = whatsapp_client.send_message(
-                            to_phone=phone,
-                            template_name=template_name,
-                            template_language=template_lang,
-                            template_components=components,
-                        )
-                    else:
-                        res = whatsapp_client.send_text_message(phone, message_body)
-
-                    msg_id = res.get("message_id")
-                    is_success = res.get("success") is True
-                    res_status = str(res.get("status") or "").lower()
-                    res_err = str(res.get("error") or "")
-
-                    if is_success and msg_id:
-                        successful_count += 1
-                        recipient_results.append({
-                            "phone": masked,
-                            "status": "ACCEPTED",
-                            "message_id": msg_id,
-                        })
-                    elif res_status == "timeout_unverified" or "timeout" in res_err.lower():
-                        timeout_count += 1
-                        recipient_results.append({
-                            "phone": masked,
-                            "status": "UNKNOWN",
-                            "error": res.get("error") or "Timeout connecting to Meta WhatsApp API; delivery state unknown.",
-                        })
-                    else:
-                        if "131047" in res_err:
-                            logger.warning(
-                                "[WhatsApp Notify] Meta rejected message to %s (Error 131047): "
-                                "Recipient is outside 24h messaging window. Configure WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE with an approved Meta template.",
-                                masked,
-                            )
-                        recipient_results.append({
-                            "phone": masked,
-                            "status": "FAILED",
-                            "error": res.get("error") or "Missing message identifier from Meta API",
-                        })
-
+                    res = cls._send_to_recipient(phone, message_body, template_name, template_lang)
                 except Exception as item_err:
                     logger.error(
                         "[WhatsApp Notify] Exception during charter send for %s to %s: %s",
@@ -1023,7 +1216,28 @@ class WhatsAppDepartmentService:
                         "status": "FAILED",
                         "error": str(item_err),
                     })
+                    continue
 
+                entry = cls._describe_send_result(masked, masked, res, entity_ref=ref)
+                if entry["status"] == "ACCEPTED":
+                    successful_count += 1
+                elif entry["status"] == "UNKNOWN":
+                    timeout_count += 1
+                elif entry["status"] == "WINDOW_CLOSED":
+                    window_closed_count += 1
+                recipient_results.append(entry)
+
+            status_counts: Dict[str, int] = {}
+            for entry in recipient_results:
+                key = str(entry.get("status") or "FAILED")
+                status_counts[key] = status_counts.get(key, 0) + 1
+            if window_closed_count:
+                logger.error(
+                    "[WhatsApp Notify] %d/%d charter recipients for %s are outside the 24-hour window (Meta 131047).",
+                    window_closed_count,
+                    len(recipients),
+                    ref,
+                )
             if successful_count == len(recipients):
                 overall_status = "ACCEPTED"
             elif successful_count > 0:
@@ -1051,6 +1265,8 @@ class WhatsAppDepartmentService:
                 # Backward-compatible alias
                 "recipients_delivered": successful_count,
                 "recipient_results": recipient_results,
+                "template_configured": bool(template_name),
+                "status_counts": status_counts,
             }
 
         except Exception as exc:  # pylint: disable=broad-exception-caught

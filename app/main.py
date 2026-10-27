@@ -88,6 +88,29 @@ async def lifespan(_app: FastAPI):
             "airports.csv could not be preloaded; global airport search will retry on first query",
             extra={"error": str(csv_err)},
         )
+
+    # Operations WhatsApp notifications fail silently at booking time when the
+    # deployment is missing recipients, credentials, or an approved template.
+    # Report it once at startup instead of burying it in per-booking logs.
+    try:
+        from app.services.whatsapp_department_service import WhatsAppDepartmentService
+
+        wa_config = WhatsAppDepartmentService.validate_configuration()
+        if not wa_config["ok"]:
+            log_config_problem = (
+                structured_logger.error if env not in ["development", "dev", "testing", "test"]
+                else structured_logger.warning
+            )
+            log_config_problem(
+                "WhatsApp operations notifications are not fully configured: "
+                + "; ".join(wa_config["problems"]),
+                extra=wa_config,
+            )
+    except Exception as wa_config_err:
+        structured_logger.warning(
+            "WhatsApp operations notification configuration check failed",
+            extra={"error": str(wa_config_err)},
+        )
     yield
 
 

@@ -37,12 +37,41 @@ from app.models.schema import NotificationRecord, NotificationStatus
 from app.integrations.whatsapp.service import WhatsAppService
 
 
+def _purge_durable_ops_notifications():
+    """Delete persisted operations-notification rows from the test database.
+
+    ``claim_idempotency`` now really queries NotificationRecord for a completed
+    dispatch with the same idempotency key (it previously raised AttributeError
+    on the generic JSON column and was silently skipped). Without this purge, a
+    record written by an earlier run of this suite would make every rerun see
+    its fixed booking references as duplicates.
+    """
+    try:
+        from sqlalchemy import delete
+
+        from app.database import SessionLocal
+        from app.models.schema import NotificationRecord
+
+        with SessionLocal() as db:
+            db.execute(
+                delete(NotificationRecord).where(
+                    NotificationRecord.template_type == "WHATSAPP_OPS_NOTIFICATION"
+                )
+            )
+            db.commit()
+    except Exception:
+        # Isolated unit tests may run without a migrated database.
+        pass
+
+
 @pytest.fixture(autouse=True)
 def reset_idempotency_state():
-    """Clear in-memory idempotency state between tests."""
+    """Clear in-memory and durable idempotency state between tests."""
+    _purge_durable_ops_notifications()
     WhatsAppDepartmentService.clear_idempotency_cache()
     yield
     WhatsAppDepartmentService.clear_idempotency_cache()
+    _purge_durable_ops_notifications()
 
 
 # ==========================================

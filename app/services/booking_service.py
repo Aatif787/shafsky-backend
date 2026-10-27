@@ -749,6 +749,7 @@ class BookingService:
                         "passenger_email": new_booking.passenger_email,
                         "passenger_phone": new_booking.passenger_phone,
                         "passenger_count": total_guests,
+                        "service_category": service_category,
                         "flight_num": new_booking.flight_num,
                         "origin_code": new_booking.origin_code,
                         "dest_code": new_booking.dest_code,

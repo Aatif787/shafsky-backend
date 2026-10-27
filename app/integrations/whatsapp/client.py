@@ -51,6 +51,10 @@ class WhatsAppClient:
                 # Never call live Meta from pytest/CI. Tests may still patch
                 # httpx.Client.post to assert error handling.
                 client_kwargs["transport"] = _OfflineWhatsAppTransport()
+                logger.warning(
+                    "[WhatsApp] Offline transport active: outbound messages are SIMULATED and never "
+                    "reach Meta. A success here does not prove live WhatsApp delivery."
+                )
             self._http_client = httpx.Client(**client_kwargs)
         return self._http_client
 
@@ -224,6 +228,7 @@ class WhatsAppClient:
                         "success": True,
                         "message_id": message_id,
                         "status": "sent",
+                        "status_code": response.status_code,
                         "response": data
                     }
 
@@ -245,6 +250,7 @@ class WhatsAppClient:
                     "status_code": response.status_code,
                     "error_code": error_code,
                     "error_subcode": error_subcode,
+                    "error_user_msg": err_data.get("error_user_msg"),
                     "error": f"Meta API Error ({response.status_code}): {error_msg}",
                     "status": "failed"
                 }

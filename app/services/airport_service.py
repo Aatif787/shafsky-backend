@@ -203,6 +203,7 @@ class AirportService:
                 "dest_code": f_obj.arrival_airport,
                 "airport_code": f_obj.arrival_airport if f_obj.flight_type == "ARRIVAL" else f_obj.departure_airport,
                 "journey_type": f_obj.flight_type,
+                "service_category": "Airport Assistance",
                 "service_type": service_package,
                 "service_name": service_package,
                 "departure_time": f_obj.scheduled_time.isoformat() if getattr(f_obj.scheduled_time, "isoformat", None) else str(f_obj.scheduled_time),

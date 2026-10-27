@@ -114,6 +114,23 @@ services:
         sync: false
       - key: WHATSAPP_WEBHOOK_VERIFY_TOKEN
         sync: false
+      # Operations notification recipients. Without these the dispatcher returns
+      # BYPASSED/no_recipients_configured and no WhatsApp alert is ever sent.
+      - key: WHATSAPP_BOOKING_NOTIFY_PHONE_1
+        sync: false
+      - key: WHATSAPP_BOOKING_NOTIFY_PHONE_2
+        sync: false
+      - key: WHATSAPP_BOOKING_NOTIFY_PHONE_3
+        sync: false
+      - key: WHATSAPP_BOOKING_NOTIFY_PHONE_4
+        sync: false
+      - key: WHATSAPP_BOOKING_NOTIFY_PHONE_5
+        sync: false
+      # Approved Meta template. Required for delivery outside the 24-hour window.
+      - key: WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE
+        sync: false
+      - key: WHATSAPP_DEPARTMENT_TEMPLATE_LANG
+        value: en_US
       - key: AVIATIONSTACK_API_KEY
         sync: false
       - key: FLIGHT_PROVIDER
