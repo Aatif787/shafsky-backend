@@ -78,6 +78,10 @@ class BaseFlowMixin:
         return {}
 
     @classmethod
+    def _send_service_menu(cls, db: Session, conv: WhatsAppConversation, category_name: str) -> Dict[str, Any]:
+        return {}
+
+    @classmethod
     def _send_service_menu_for_category(
         cls, db: Session, conv: WhatsAppConversation, category_name: Optional[str]
     ) -> Dict[str, Any]:

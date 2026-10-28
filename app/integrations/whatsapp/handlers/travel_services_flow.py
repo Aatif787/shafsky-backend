@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.models.whatsapp_models import WhatsAppConversation
+from app.integrations.whatsapp.handlers.base import BaseFlowMixin
 from app.integrations.whatsapp.client import whatsapp_client
 from app.integrations.whatsapp import copy as wa_copy
 from app.integrations.whatsapp import delivery as wa_delivery
@@ -37,7 +38,7 @@ _CONFIRM_COMMANDS = {"confirm", "submit", "submit enquiry", "1", "yes", "ok"}
 _EDIT_COMMANDS = {"edit", "change", "change details", "2"}
 
 
-class TravelServicesFlowMixin:
+class TravelServicesFlowMixin(BaseFlowMixin):
     """Mixin for the Travel Services menu and its two enquiry flows."""
 
     # -- infrastructure ---------------------------------------------------
@@ -74,7 +75,7 @@ class TravelServicesFlowMixin:
     @classmethod
     def _sync_conversation(cls, conv: WhatsAppConversation, service: str, answers: Dict[str, Any]) -> None:
         """Keep the conversation columns ops already reads in step with the answers."""
-        for field, value in te.conversation_snapshot(service, answers).items():
+        for field, value in te.conversation_snapshot(service, answers, conv_phone=conv.phone_number).items():
             setattr(conv, field, value)
 
     # -- Travel Services menu --------------------------------------------
@@ -286,7 +287,7 @@ class TravelServicesFlowMixin:
         title = te.SERVICE_TITLES.get(service, "Travel Services")
         wa_delivery.send_text(
             conv.phone_number,
-            te.build_review(service, answers),
+            te.build_review(service, answers, conv_phone=conv.phone_number),
             client=whatsapp_client,
         )
         body_text = "Ready to send this enquiry to our team?"
@@ -354,7 +355,7 @@ class TravelServicesFlowMixin:
             )
             return {"status": "enquiry_already_submitted", "success": True}
 
-        payload = te.build_submission(service, answers)
+        payload = te.build_submission(service, answers, conv_phone=conv.phone_number)
         try:
             booking = BookingService.create_service_enquiry(db, **payload)
         except HTTPException as err:

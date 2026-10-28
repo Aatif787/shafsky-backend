@@ -69,11 +69,21 @@ def _say(db, phone, text, input_id=None):
 
 
 def _last_text():
-    return WhatsAppClient.send_text_message.call_args.args[1]
+    mock = getattr(WhatsAppClient, "send_text_message", None)
+    call_args = getattr(mock, "call_args", None)
+    return call_args.args[1] if call_args else ""
 
 
 def _last_buttons():
-    return WhatsAppClient.send_interactive_buttons.call_args.kwargs
+    mock = getattr(WhatsAppClient, "send_interactive_buttons", None)
+    call_args = getattr(mock, "call_args", None)
+    return call_args.kwargs if call_args else {}
+
+
+def _last_list():
+    mock = getattr(WhatsAppClient, "send_interactive_list", None)
+    call_args = getattr(mock, "call_args", None)
+    return call_args.kwargs if call_args else {}
 
 
 def _open_travel_menu(db, phone):
@@ -109,22 +119,15 @@ def _ticketing_to_review(db, phone, return_trip=False, from_airport="DEL", to_ai
     _open_travel_menu(db, phone)
     _say(db, phone, "2")                                   # Flight Ticketing
     _say(db, phone, "2" if return_trip else "1")           # journey type
-    _say(db, phone, from_airport)
-    _say(db, phone, to_airport)
-    _say(db, phone, FUTURE_DATE)
+    _say(db, phone, from_airport)                          # origin
+    _say(db, phone, to_airport)                            # destination
+    _say(db, phone, FUTURE_DATE)                           # departure date
     if return_trip:
-        _say(db, phone, RETURN_DATE)
+        _say(db, phone, RETURN_DATE)                       # return date
     _say(db, phone, "1")                                   # cabin class
     _say(db, phone, "1")                                   # 1 adult
-    _say(db, phone, "Skip")                                # airline preference
-    _say(db, phone, "Aariz")                               # passenger 1 first name
-    _say(db, phone, "Khan")
-    _say(db, phone, "1")                                   # Male
-    _say(db, phone, "01/01/1990")                          # DOB
-    _say(db, phone, "Indian")                              # nationality
-    _say(db, phone, "Aariz Khan")                          # lead contact
-    _say(db, phone, email or _unique_email())
-    _say(db, phone, "Same")
+    _say(db, phone, "Aariz Khan")                          # lead passenger full name
+    _say(db, phone, email or _unique_email())              # email (or Skip)
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +141,7 @@ def test_travel_menu_offers_only_visa_and_flight_ticketing():
         conv, phone = _new_conversation(db)
         _say(db, phone, "Hi")
         # Main menu still has all four categories, with an updated Travel description.
-        rows = WhatsAppClient.send_interactive_list.call_args.kwargs["sections"][0]["rows"]
+        rows = _last_list()["sections"][0]["rows"]
         assert [r["id"] for r in rows] == [
             "cat_airport",
             "cat_travel",
@@ -241,7 +244,7 @@ def test_visa_enquiry_end_to_end_creates_website_style_enquiry():
         assert conv.current_state == "AWAITING_QUOTE"
         assert conv.payment_status == "QUOTE_REQUESTED"
         assert conv.razorpay_payment_url is None
-        assert conv.booking_ref.startswith("SHF-")
+        assert conv.booking_ref and conv.booking_ref.startswith("SHF-")
 
         booking = db.query(Booking).filter_by(booking_ref=conv.booking_ref).one()
         assert booking.service_category == "Travel Support"
@@ -298,7 +301,7 @@ def test_visa_rejects_invalid_answers_and_past_dates():
 # ---------------------------------------------------------------------------
 
 
-def test_ticketing_field_set_matches_website_form():
+def test_ticketing_field_set_minimized():
     domestic = {
         "tkt_trip_type": "one_way",
         "tkt_from": "DEL",
@@ -307,19 +310,30 @@ def test_ticketing_field_set_matches_website_form():
         "tkt_travellers": {"adults": 1, "children": 0, "infants": 0},
     }
     keys = [step.key for step in te.plan(te.TICKETING, domestic)]
-    assert "tkt_return_date" not in keys
-    assert keys[:4] == ["tkt_trip_type", "tkt_from", "tkt_to", "tkt_depart_date"]
-    assert "tkt_cabin" in keys and "tkt_alliance" in keys
-    for field in ("first_name", "last_name", "gender", "date_of_birth", "nationality"):
-        assert f"tkt_pax_1_{field}" in keys
-    for field in ("passport_number", "passport_expiry", "passport_country"):
-        assert f"tkt_pax_1_{field}" not in keys
+    assert keys == [
+        "tkt_trip_type",
+        "tkt_from",
+        "tkt_to",
+        "tkt_depart_date",
+        "tkt_cabin",
+        "tkt_travellers",
+        "tkt_contact_name",
+        "tkt_contact_email",
+    ]
 
     international = dict(domestic, tkt_to="LHR", tkt_trip_type="round_trip")
     intl_keys = [step.key for step in te.plan(te.TICKETING, international)]
-    assert "tkt_return_date" in intl_keys
-    for field in ("passport_number", "passport_expiry", "passport_country"):
-        assert f"tkt_pax_1_{field}" in intl_keys
+    assert intl_keys == [
+        "tkt_trip_type",
+        "tkt_from",
+        "tkt_to",
+        "tkt_depart_date",
+        "tkt_return_date",
+        "tkt_cabin",
+        "tkt_travellers",
+        "tkt_contact_name",
+        "tkt_contact_email",
+    ]
 
     assert te.detect_itinerary_type("DEL", "BOM") == "DOMESTIC"
     assert te.detect_itinerary_type("DEL", "LHR") == "INTERNATIONAL"
@@ -345,22 +359,13 @@ def test_one_way_ticketing_enquiry_has_no_return_date():
         assert booking.service_category == "Travel Support"
         assert booking.origin_code == "DEL"
         assert booking.dest_code == "BOM"
-        assert booking.notes.startswith("Alliance: Any Alliance")
+        assert "Trip: One-way" in booking.notes
         details = booking.metadata_json["details"]
         assert details["trip_type"] == "one_way"
         assert details["return_date"] is None
         assert details["itinerary_type"] == "DOMESTIC"
         assert details["pax_adults"] == 1
-        assert details["passengers"][0] == {
-            "first_name": "Aariz",
-            "last_name": "Khan",
-            "gender": "Male",
-            "date_of_birth": "1990-01-01",
-            "nationality": "Indian",
-            "passport_number": "",
-            "passport_expiry": "",
-            "passport_issuing_country": "",
-        }
+        assert details["lead_passenger"] == "Aariz Khan"
     finally:
         db.close()
 
@@ -380,7 +385,7 @@ def test_return_ticketing_validates_return_date_and_keeps_it():
         assert "cannot be earlier than your departure" in _last_text()
         db.refresh(conv)
         assert conv.current_state == "TRAVEL_ENQUIRY"
-        state = conv.whatsapp_state_json["travel_enquiry"]
+        state = (conv.whatsapp_state_json or {})["travel_enquiry"]
         assert "tkt_return_date" not in state["answers"]
 
         _say(db, phone, RETURN_DATE)              # valid return date
@@ -388,15 +393,8 @@ def test_return_ticketing_validates_return_date_and_keeps_it():
 
         _say(db, phone, "1")                      # cabin
         _say(db, phone, "1")                      # 1 adult
-        _say(db, phone, "Skip")                   # alliance
-        _say(db, phone, "Aariz")
-        _say(db, phone, "Khan")
-        _say(db, phone, "1")
-        _say(db, phone, "01/01/1990")
-        _say(db, phone, "Indian")
-        _say(db, phone, "Aariz Khan")
-        _say(db, phone, _unique_email())
-        _say(db, phone, "Same")
+        _say(db, phone, "Aariz Khan")             # lead name
+        _say(db, phone, _unique_email())          # email
 
         review = _last_text()
         assert "Return" in review
@@ -409,48 +407,38 @@ def test_return_ticketing_validates_return_date_and_keeps_it():
         details = booking.metadata_json["details"]
         assert details["trip_type"] == "round_trip"
         assert details["return_date"] == "2027-01-05"
-        assert booking.notes.startswith("Alliance: Any Alliance")
+        assert "Trip: Return" in booking.notes
     finally:
         db.close()
 
 
-def test_international_ticketing_collects_passport_details():
+def test_ticketing_email_can_be_skipped():
     db = SessionLocal()
     try:
         conv, phone = _new_conversation(db)
         _open_travel_menu(db, phone)
-        _say(db, phone, "2")
+        _say(db, phone, "2")                      # Flight Ticketing
         _say(db, phone, "1")                      # one-way
         _say(db, phone, "DEL")
         _say(db, phone, "LHR")                    # international
         _say(db, phone, FUTURE_DATE)
-        _say(db, phone, "1")
-        _say(db, phone, "1")
-        _say(db, phone, "Skip")
-        _say(db, phone, "Aariz")
-        _say(db, phone, "Khan")
-        _say(db, phone, "1")
-        _say(db, phone, "01/01/1990")
-        _say(db, phone, "Indian")
+        _say(db, phone, "1")                      # cabin
+        _say(db, phone, "2")                      # 2 passengers
+        _say(db, phone, "Aariz Khan")             # lead passenger
+        _say(db, phone, "Skip")                   # skip email!
 
-        assert "passport number" in _last_text().lower()
-        _say(db, phone, "A1234567")
-        assert "passport expiry" in _last_text().lower()
-        _say(db, phone, "01/01/2032")
-        assert "passport issuing country" in _last_text().lower()
-        _say(db, phone, "India")
+        review = _last_text()
+        assert "Skipped (WhatsApp contact)" in review
+        assert "Aariz Khan" in review
+        assert "2 passenger(s)" in review
 
-        _say(db, phone, "Aariz Khan")
-        _say(db, phone, _unique_email())
-        _say(db, phone, "Same")
         _say(db, phone, "1", input_id="btn_enquiry_confirm")
-
         db.refresh(conv)
+
         booking = db.query(Booking).filter_by(booking_ref=conv.booking_ref).one()
-        passenger = booking.metadata_json["details"]["passengers"][0]
-        assert passenger["passport_number"] == "A1234567"
-        assert passenger["passport_expiry"] == "2032-01-01"
-        assert passenger["passport_issuing_country"] == "India"
+        assert booking.passenger_name == "Aariz Khan"
+        assert "guest." in booking.passenger_email
+        assert booking.metadata_json["details"]["email_provided"] is False
     finally:
         db.close()
 
@@ -475,7 +463,7 @@ def test_back_returns_to_previous_field_and_overwrites_answer():
 
         _say(db, phone, "Qatar")
         db.refresh(conv)
-        answers = conv.whatsapp_state_json["travel_enquiry"]["answers"]
+        answers = (conv.whatsapp_state_json or {})["travel_enquiry"]["answers"]
         assert answers["visa_destination"] == "Qatar"
         assert "passport" in _last_text().lower()
 
@@ -521,7 +509,7 @@ def test_session_expiry_mid_enquiry_discards_stale_answers():
         _say(db, phone, "1")
         _say(db, phone, "Qatar")
         db.refresh(conv)
-        assert conv.whatsapp_state_json["travel_enquiry"]["answers"]
+        assert (conv.whatsapp_state_json or {})["travel_enquiry"]["answers"]
 
         conv.last_user_activity_at = datetime.now(timezone.utc) - timedelta(minutes=20)
         db.commit()
@@ -554,8 +542,8 @@ def test_duplicate_confirm_creates_a_single_enquiry():
         assert second["status"] == "enquiry_already_submitted"
         db.refresh(conv)
         # Answers moved onto the Booking row; the session keeps only the reference.
-        assert conv.whatsapp_state_json["travel_enquiry"]["answers"] == {}
-        assert conv.whatsapp_state_json["travel_enquiry"]["submitted_ref"] == conv.booking_ref
+        assert (conv.whatsapp_state_json or {})["travel_enquiry"]["answers"] == {}
+        assert (conv.whatsapp_state_json or {})["travel_enquiry"]["submitted_ref"] == conv.booking_ref
 
         # A repeated Confirm from the customer (now in AWAITING_QUOTE) also must not
         # create a second row.
@@ -596,7 +584,7 @@ def test_other_category_flows_are_unaffected():
         _say(db, phone, "3")                       # Private Charter still uses the catalog menu
         db.refresh(conv)
         assert conv.current_state == "SERVICE_SELECTION"
-        rows = WhatsAppClient.send_interactive_list.call_args.kwargs["sections"][0]["rows"]
+        rows = _last_list()["sections"][0]["rows"]
         assert rows, "Private Charter should still list its catalog services"
     finally:
         db.close()
@@ -690,7 +678,7 @@ def test_back_can_switch_ticketing_to_one_way_and_drops_return_step():
         # The return-date step no longer exists.
         assert "cabin class" in _last_text().lower()
         db.refresh(conv)
-        answers = conv.whatsapp_state_json["travel_enquiry"]["answers"]
+        answers = (conv.whatsapp_state_json or {})["travel_enquiry"]["answers"]
         assert answers["tkt_trip_type"] == "one_way"
     finally:
         db.close()
@@ -704,12 +692,12 @@ def test_help_inside_enquiry_keeps_the_current_step():
         _say(db, phone, "1")
         _say(db, phone, "Qatar")
         db.refresh(conv)
-        before = conv.whatsapp_state_json["travel_enquiry"]["index"]
+        before = (conv.whatsapp_state_json or {})["travel_enquiry"]["index"]
 
         res = _say(db, phone, "help")
         db.refresh(conv)
         assert res["status"] == "help_sent"
         assert conv.current_state == "TRAVEL_ENQUIRY"
-        assert conv.whatsapp_state_json["travel_enquiry"]["index"] == before
+        assert (conv.whatsapp_state_json or {})["travel_enquiry"]["index"] == before
     finally:
         db.close()

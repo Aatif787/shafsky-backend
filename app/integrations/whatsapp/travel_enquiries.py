@@ -161,7 +161,10 @@ def _v_email(step, raw, answers, service, conv_phone):
     clean = (raw or "").strip()
     ok, reason = is_acceptable_customer_email(clean)
     if not ok:
-        return False, None, EMAIL_FORMAT_HELP if reason == "invalid_syntax" else REAL_EMAIL_HELP
+        msg = EMAIL_FORMAT_HELP if reason == "invalid_syntax" else REAL_EMAIL_HELP
+        if step.optional:
+            msg += " (or type *Skip* to leave it blank)"
+        return False, None, msg
     return True, clean, None
 
 
@@ -527,10 +530,10 @@ _TKT_CABIN = Step(
     prompt="Which cabin class?",
     validator="choice",
     options=(
-        ("First Class Suite", "First class suite"),
-        ("Business Class Lie-Flat", "Business class lie-flat"),
-        ("Premium Economy", "Premium economy"),
         ("Economy Class", "Economy class"),
+        ("Premium Economy", "Premium economy"),
+        ("Business Class Lie-Flat", "Business class lie-flat"),
+        ("First Class Suite", "First class suite"),
     ),
 )
 
@@ -538,71 +541,31 @@ _TKT_TRAVELLERS = Step(
     key="tkt_travellers",
     prompt=(
         "How many passengers are travelling?\n\n"
-        "Reply with adults, children and infants — e.g. *2 0 0*\n"
-        "• Adults: 12+ years (1–9)\n"
-        "• Children: 2–11 years (0–9)\n"
-        "• Infants: under 2 years (0–4)"
+        "Reply with the total number (e.g. *1* or *2*),\n"
+        "or breakdown by adults, children, infants (e.g. *2 1 0*)."
     ),
     validator="counts",
 )
 
-_TKT_ALLIANCE = Step(
-    key="tkt_alliance",
-    prompt=(
-        "Preferred airline or alliance?\n\n"
-        "Type *Skip* for no preference."
-    ),
-    validator="choice",
-    optional=True,
-    skip_value="Any Alliance",
-    options=(
-        ("Any Alliance", "Any premier airline"),
-        ("Indian Carriers", "All Indian carriers"),
-        ("Air India", "Air India / Air India Express"),
-        ("IndiGo", "IndiGo"),
-        ("Vistara", "Vistara / Akasa Air"),
-        ("Star Alliance", "Star Alliance"),
-        ("Oneworld", "Oneworld"),
-        ("SkyTeam", "SkyTeam"),
-    ),
-)
-
 _TKT_CONTACT_NAME = Step(
     key="tkt_contact_name",
-    prompt="Lead contact full name:",
+    prompt="Full name of the lead passenger:",
     validator="contact_name",
+    max_length=120,
 )
 
 _TKT_CONTACT_EMAIL = Step(
     key="tkt_contact_email",
-    prompt="Email address for the ticketing desk's quotation:",
+    prompt=(
+        "Email address for quotation & flight itinerary:\n\n"
+        "_(Optional — reply *Skip* if you prefer WhatsApp only)_"
+    ),
     validator="email",
+    optional=True,
+    skip_value="",
     max_length=200,
 )
 
-_TKT_CONTACT_PHONE = Step(
-    key="tkt_contact_phone",
-    prompt="Contact phone number (or type *Same* to use this WhatsApp number):",
-    validator="phone",
-)
-
-_TKT_PAX_FIELDS: Tuple[Tuple[str, str, str, bool], ...] = (
-    ("first_name", "first name (as printed on the passport)", "person_name", False),
-    ("last_name", "last name", "person_name", False),
-    ("gender", "gender", "choice", False),
-    ("date_of_birth", "date of birth (*DD/MM/YYYY*)", "past_date", False),
-    ("nationality", "nationality", "country", False),
-)
-
-_TKT_PASSPORT_FIELDS: Tuple[Tuple[str, str, str, bool], ...] = (
-    ("passport_number", "passport number (e.g. *A1234567*)", "passport", False),
-    ("passport_expiry", "passport expiry date (*DD/MM/YYYY*)", "date", False),
-    ("passport_country", "passport issuing country", "country", False),
-)
-
-_GENDER_OPTIONS: Tuple[Tuple[str, str], ...] = (("Male", "Male"), ("Female", "Female"), ("Other", "Other"))
-
-#: Exact list used by ``detectItineraryType`` in TicketingPassenger.tsx.
 _INTL_MARKERS: Tuple[str, ...] = (
     "LHR", "LONDON",
     "DXB", "DUBAI",
@@ -629,7 +592,7 @@ def _country_code(value: Optional[str]) -> str:
 
 
 def detect_itinerary_type(from_airport: Optional[str], to_airport: Optional[str]) -> str:
-    """Port of ``detectItineraryType`` from the website ticketing form."""
+    """Detect whether flight is DOMESTIC or INTERNATIONAL."""
     if not from_airport or not to_airport:
         return "DOMESTIC"
     if _country_code(from_airport) == "IN" and _country_code(to_airport) == "IN":
@@ -639,17 +602,6 @@ def detect_itinerary_type(from_airport: Optional[str], to_airport: Optional[str]
 
 def itinerary_type(answers: Dict[str, Any]) -> str:
     return detect_itinerary_type(answers.get("tkt_from"), answers.get("tkt_to"))
-
-
-def _tkt_pax_step(index: int, total: int, field_name: str, label: str, validator: str, optional: bool) -> Step:
-    return Step(
-        key=f"tkt_pax_{index}_{field_name}",
-        prompt=f"Passenger {index} of {total} — {label}:",
-        validator=validator,
-        options=_GENDER_OPTIONS if validator == "choice" else (),
-        optional=optional,
-        max_length=80 if field_name != "passport_number" else 20,
-    )
 
 
 def _plan_ticketing(answers: Dict[str, Any]) -> List[Step]:
@@ -672,18 +624,7 @@ def _plan_ticketing(answers: Dict[str, Any]) -> List[Step]:
             )
         )
 
-    steps.extend([_TKT_CABIN, _TKT_TRAVELLERS, _TKT_ALLIANCE])
-
-    total = passenger_count(answers)
-    international = itinerary_type(answers) == "INTERNATIONAL"
-    for index in range(1, total + 1):
-        for field_name, label, validator, optional in _TKT_PAX_FIELDS:
-            steps.append(_tkt_pax_step(index, total, field_name, label, validator, optional))
-        if international:
-            for field_name, label, validator, optional in _TKT_PASSPORT_FIELDS:
-                steps.append(_tkt_pax_step(index, total, field_name, label, validator, optional))
-
-    steps.extend([_TKT_CONTACT_NAME, _TKT_CONTACT_EMAIL, _TKT_CONTACT_PHONE])
+    steps.extend([_TKT_CABIN, _TKT_TRAVELLERS, _TKT_CONTACT_NAME, _TKT_CONTACT_EMAIL])
     return steps
 
 
@@ -703,21 +644,20 @@ def plan(service: str, answers: Dict[str, Any]) -> List[Step]:
 _PURPOSE_LABELS = dict(_VISA_PURPOSE.options)
 _BEHALF_LABELS = dict(_VISA_BEHALF.options)
 _CABIN_LABELS = dict(_TKT_CABIN.options)
-_ALLIANCE_LABELS = dict(_TKT_ALLIANCE.options)
 
 
 def _fmt_date(iso: Optional[str]) -> str:
     try:
         return datetime.strptime(str(iso), "%Y-%m-%d").strftime("%d/%m/%Y")
     except (TypeError, ValueError):
-        return str(iso or "—")
+        return iso or "—"
 
 
 def _fmt_month(value: Optional[str]) -> str:
     try:
         return datetime.strptime(str(value), "%Y-%m").strftime("%B %Y")
     except (TypeError, ValueError):
-        return str(value or "—")
+        return value or "—"
 
 
 def _visa_applicants(answers: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -730,24 +670,6 @@ def _visa_applicants(answers: Dict[str, Any]) -> List[Dict[str, str]]:
                 "passport_number": str(answers.get(f"visa_applicant_{index}_passport_number") or ""),
                 "passport_expiry": str(answers.get(f"visa_applicant_{index}_passport_expiry") or ""),
                 "date_of_birth": str(answers.get(f"visa_applicant_{index}_date_of_birth") or ""),
-            }
-        )
-    return out
-
-
-def _tkt_passengers(answers: Dict[str, Any]) -> List[Dict[str, str]]:
-    out: List[Dict[str, str]] = []
-    for index in range(1, passenger_count(answers) + 1):
-        out.append(
-            {
-                "first_name": str(answers.get(f"tkt_pax_{index}_first_name") or ""),
-                "last_name": str(answers.get(f"tkt_pax_{index}_last_name") or ""),
-                "gender": str(answers.get(f"tkt_pax_{index}_gender") or ""),
-                "date_of_birth": str(answers.get(f"tkt_pax_{index}_date_of_birth") or ""),
-                "nationality": str(answers.get(f"tkt_pax_{index}_nationality") or ""),
-                "passport_number": str(answers.get(f"tkt_pax_{index}_passport_number") or ""),
-                "passport_expiry": str(answers.get(f"tkt_pax_{index}_passport_expiry") or ""),
-                "passport_issuing_country": str(answers.get(f"tkt_pax_{index}_passport_country") or ""),
             }
         )
     return out
@@ -797,10 +719,18 @@ def _review_visa(answers: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _review_ticketing(answers: Dict[str, Any]) -> str:
+def _review_ticketing(answers: Dict[str, Any], conv_phone: str = "") -> str:
     counts = _counts(answers, "tkt_travellers")
     return_trip = answers.get("tkt_trip_type") == "round_trip"
     intent = itinerary_type(answers)
+    total_pax = max(1, counts["adults"] + counts["children"] + counts["infants"])
+    pax_desc = f"{total_pax} passenger(s)"
+    if counts["children"] or counts["infants"]:
+        pax_desc += f" ({counts['adults']} adult(s), {counts['children']} child(ren), {counts['infants']} infant(s))"
+    email_val = answers.get("tkt_contact_email")
+    email_display = email_val if email_val else "Skipped (WhatsApp contact)"
+    phone_display = answers.get("tkt_contact_phone") or conv_phone or "This WhatsApp number"
+
     lines = [
         "📋 *FLIGHT TICKETING — PLEASE REVIEW*",
         "",
@@ -810,40 +740,24 @@ def _review_ticketing(answers: Dict[str, Any]) -> str:
     ]
     if return_trip:
         lines.append(f"• *Return*: {_fmt_date(answers.get('tkt_return_date'))}")
-    lines.append(f"• *Cabin*: {_CABIN_LABELS.get(str(answers.get('tkt_cabin') or ''), '—')}")
-    alliance = str(answers.get("tkt_alliance") or "Any Alliance")
-    lines.append(f"• *Airline preference*: {_ALLIANCE_LABELS.get(alliance, alliance)}")
-    lines.append(
-        f"• *Passengers*: {counts['adults']} adult(s), {counts['children']} child(ren), {counts['infants']} infant(s)"
-    )
-    lines.append("")
-    lines.append("*Travellers*")
-    for index, pax in enumerate(_tkt_passengers(answers), 1):
-        name = f"{pax['first_name']} {pax['last_name']}".strip()
-        detail = [pax["gender"] or "—", _fmt_date(pax["date_of_birth"]), pax["nationality"] or "—"]
-        if pax["passport_number"]:
-            detail.append(f"passport {pax['passport_number']}")
-        if pax["passport_expiry"]:
-            detail.append(f"expires {_fmt_date(pax['passport_expiry'])}")
-        if pax["passport_issuing_country"]:
-            detail.append(f"issued by {pax['passport_issuing_country']}")
-        lines.append(f"{index}. {name or 'Traveller'} — " + ", ".join(detail))
     lines.extend(
         [
+            f"• *Cabin*: {_CABIN_LABELS.get(str(answers.get('tkt_cabin') or ''), answers.get('tkt_cabin') or '—')}",
+            f"• *Passengers*: {pax_desc}",
             "",
-            f"• *Contact*: {answers.get('tkt_contact_name') or '—'}",
-            f"• *Email*: {answers.get('tkt_contact_email') or '—'}",
-            f"• *Phone*: {answers.get('tkt_contact_phone') or '—'}",
+            f"• *Lead Passenger*: {answers.get('tkt_contact_name') or '—'}",
+            f"• *Email*: {email_display}",
+            f"• *Contact Phone*: {phone_display}",
         ]
     )
     return "\n".join(lines)
 
 
-def build_review(service: str, answers: Dict[str, Any]) -> str:
+def build_review(service: str, answers: Dict[str, Any], conv_phone: str = "") -> str:
     """Customer-facing summary before submission (Meta text limit is 4096)."""
-    body = _review_visa(answers) if service == VISA else _review_ticketing(answers)
+    body = _review_visa(answers) if service == VISA else _review_ticketing(answers, conv_phone)
     if len(body) > 3500:
-        body = body[:3480].rstrip() + "\n… (remaining travellers are on the submitted enquiry)"
+        body = body[:3480].rstrip() + "\n… (remaining details on submitted enquiry)"
     return body
 
 
@@ -851,7 +765,7 @@ def _visa_counts(answers: Dict[str, Any]) -> Dict[str, int]:
     return _counts(answers, "visa_travellers")
 
 
-def build_submission(service: str, answers: Dict[str, Any]) -> Dict[str, Any]:
+def build_submission(service: str, answers: Dict[str, Any], conv_phone: str = "") -> Dict[str, Any]:
     """Keyword arguments for ``BookingService.create_service_enquiry``.
 
     The values mirror what the website forms post to ``/api/bookings/enquiries``
@@ -887,7 +801,6 @@ def build_submission(service: str, answers: Dict[str, Any]) -> Dict[str, Any]:
             "date_mode": date_mode,
             "travel_date": answers.get("visa_travel_date") or None,
             "tentative_month": answers.get("visa_tentative_month") or None,
-            # Mirrors VisaWorkflow.handleSubmit: pax_adults = applicants.length.
             "pax_adults": len(applicants),
             "pax_children": counts["children"],
             "pax_infants": counts["infants"],
@@ -896,7 +809,7 @@ def build_submission(service: str, answers: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "passenger_name": str(answers.get("visa_contact_name") or ""),
             "passenger_email": str(answers.get("visa_contact_email") or ""),
-            "passenger_phone": str(answers.get("visa_contact_phone") or ""),
+            "passenger_phone": str(answers.get("visa_contact_phone") or conv_phone or ""),
             "service_category": ENQUIRY_SERVICE_CATEGORY,
             "service_type": SERVICE_TITLES[VISA],
             "origin": str(answers.get("visa_passport") or "") or None,
@@ -907,30 +820,41 @@ def build_submission(service: str, answers: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     counts = _counts(answers, "tkt_travellers")
-    passengers = _tkt_passengers(answers)
-    names = ", ".join(f"{p['first_name']} {p['last_name']}".strip() for p in passengers if p["first_name"])
+    lead_name = str(answers.get("tkt_contact_name") or "Guest").strip()
     return_trip = answers.get("tkt_trip_type") == "round_trip"
-    alliance = str(answers.get("tkt_alliance") or "Any Alliance")
-    notes = f"Alliance: {alliance}"
-    if names:
-        notes += f" | Passengers: {names}"
+    cabin = answers.get("tkt_cabin") or "Economy Class"
+    total_pax = max(1, counts["adults"] + counts["children"] + counts["infants"])
+    raw_email = str(answers.get("tkt_contact_email") or "").strip()
+    phone = str(answers.get("tkt_contact_phone") or conv_phone or "").strip()
+
+    if raw_email:
+        submission_email = raw_email
+        email_provided = True
+    else:
+        submission_email = f"guest.{phone or 'wa'}@shafskyaviation.com"
+        email_provided = False
+
+    notes = f"Trip: {'Return' if return_trip else 'One-way'} | Cabin: {cabin} | Pax: {total_pax}"
+    if not email_provided:
+        notes += " | Email: Skipped (Contact via WhatsApp/phone)"
+
     details = {
         "channel": "whatsapp",
-        "passenger_count": len(passengers),
+        "passenger_count": total_pax,
         "trip_type": "round_trip" if return_trip else "one_way",
         "itinerary_type": itinerary_type(answers),
         "return_date": (answers.get("tkt_return_date") or None) if return_trip else None,
-        "cabin_class": answers.get("tkt_cabin"),
-        "preferred_alliance": alliance,
-        "pax_adults": counts["adults"],
+        "cabin_class": cabin,
+        "pax_adults": max(1, counts["adults"]),
         "pax_children": counts["children"],
         "pax_infants": counts["infants"],
-        "passengers": passengers,
+        "email_provided": email_provided,
+        "lead_passenger": lead_name,
     }
     return {
-        "passenger_name": str(answers.get("tkt_contact_name") or ""),
-        "passenger_email": str(answers.get("tkt_contact_email") or ""),
-        "passenger_phone": str(answers.get("tkt_contact_phone") or ""),
+        "passenger_name": lead_name,
+        "passenger_email": submission_email,
+        "passenger_phone": phone,
         "service_category": ENQUIRY_SERVICE_CATEGORY,
         "service_type": SERVICE_TITLES[TICKETING],
         "origin": str(answers.get("tkt_from") or "") or None,
@@ -941,7 +865,7 @@ def build_submission(service: str, answers: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def conversation_snapshot(service: str, answers: Dict[str, Any]) -> Dict[str, Any]:
+def conversation_snapshot(service: str, answers: Dict[str, Any], conv_phone: str = "") -> Dict[str, Any]:
     """Conversation columns kept in sync while the enquiry is collected."""
     total = traveller_total(service, answers)
     if service == VISA:
@@ -956,14 +880,16 @@ def conversation_snapshot(service: str, answers: Dict[str, Any]) -> Dict[str, An
             "booking_date": label,
             "customer_name": answers.get("visa_contact_name"),
             "customer_email": answers.get("visa_contact_email"),
-            "customer_phone": answers.get("visa_contact_phone"),
+            "customer_phone": answers.get("visa_contact_phone") or conv_phone,
             "additional_requirements": answers.get("visa_notes"),
         }
+    email_val = answers.get("tkt_contact_email")
+    phone_val = answers.get("tkt_contact_phone") or conv_phone
     return {
         "passenger_count": total or 1,
         "booking_date": _fmt_date(answers.get("tkt_depart_date")) if answers.get("tkt_depart_date") else None,
         "customer_name": answers.get("tkt_contact_name"),
-        "customer_email": answers.get("tkt_contact_email"),
-        "customer_phone": answers.get("tkt_contact_phone"),
+        "customer_email": email_val if email_val else None,
+        "customer_phone": phone_val if phone_val else None,
         "additional_requirements": None,
     }
