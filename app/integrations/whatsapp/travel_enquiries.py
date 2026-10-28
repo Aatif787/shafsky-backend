@@ -549,7 +549,7 @@ _TKT_TRAVELLERS = Step(
 
 _TKT_CONTACT_NAME = Step(
     key="tkt_contact_name",
-    prompt="Full name of the lead passenger:\n\nExample: *Aariz Khan*",
+    prompt="Full name of the lead passenger:",
     validator="contact_name",
     max_length=120,
 )
