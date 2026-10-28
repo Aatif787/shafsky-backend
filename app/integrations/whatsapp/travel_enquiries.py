@@ -650,14 +650,14 @@ def _fmt_date(iso: Optional[str]) -> str:
     try:
         return datetime.strptime(str(iso), "%Y-%m-%d").strftime("%d/%m/%Y")
     except (TypeError, ValueError):
-        return str(iso or "—")
+        return iso or "—"
 
 
 def _fmt_month(value: Optional[str]) -> str:
     try:
         return datetime.strptime(str(value), "%Y-%m").strftime("%B %Y")
     except (TypeError, ValueError):
-        return str(value or "—")
+        return value or "—"
 
 
 def _visa_applicants(answers: Dict[str, Any]) -> List[Dict[str, str]]:

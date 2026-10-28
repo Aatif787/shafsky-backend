@@ -69,11 +69,21 @@ def _say(db, phone, text, input_id=None):
 
 
 def _last_text():
-    return WhatsAppClient.send_text_message.call_args.args[1]
+    mock = getattr(WhatsAppClient, "send_text_message", None)
+    call_args = getattr(mock, "call_args", None)
+    return call_args.args[1] if call_args else ""
 
 
 def _last_buttons():
-    return WhatsAppClient.send_interactive_buttons.call_args.kwargs
+    mock = getattr(WhatsAppClient, "send_interactive_buttons", None)
+    call_args = getattr(mock, "call_args", None)
+    return call_args.kwargs if call_args else {}
+
+
+def _last_list():
+    mock = getattr(WhatsAppClient, "send_interactive_list", None)
+    call_args = getattr(mock, "call_args", None)
+    return call_args.kwargs if call_args else {}
 
 
 def _open_travel_menu(db, phone):
@@ -131,7 +141,7 @@ def test_travel_menu_offers_only_visa_and_flight_ticketing():
         conv, phone = _new_conversation(db)
         _say(db, phone, "Hi")
         # Main menu still has all four categories, with an updated Travel description.
-        rows = WhatsAppClient.send_interactive_list.call_args.kwargs["sections"][0]["rows"]
+        rows = _last_list()["sections"][0]["rows"]
         assert [r["id"] for r in rows] == [
             "cat_airport",
             "cat_travel",
@@ -234,7 +244,7 @@ def test_visa_enquiry_end_to_end_creates_website_style_enquiry():
         assert conv.current_state == "AWAITING_QUOTE"
         assert conv.payment_status == "QUOTE_REQUESTED"
         assert conv.razorpay_payment_url is None
-        assert conv.booking_ref.startswith("SHF-")
+        assert conv.booking_ref and conv.booking_ref.startswith("SHF-")
 
         booking = db.query(Booking).filter_by(booking_ref=conv.booking_ref).one()
         assert booking.service_category == "Travel Support"
@@ -375,7 +385,7 @@ def test_return_ticketing_validates_return_date_and_keeps_it():
         assert "cannot be earlier than your departure" in _last_text()
         db.refresh(conv)
         assert conv.current_state == "TRAVEL_ENQUIRY"
-        state = conv.whatsapp_state_json["travel_enquiry"]
+        state = (conv.whatsapp_state_json or {})["travel_enquiry"]
         assert "tkt_return_date" not in state["answers"]
 
         _say(db, phone, RETURN_DATE)              # valid return date
@@ -453,7 +463,7 @@ def test_back_returns_to_previous_field_and_overwrites_answer():
 
         _say(db, phone, "Qatar")
         db.refresh(conv)
-        answers = conv.whatsapp_state_json["travel_enquiry"]["answers"]
+        answers = (conv.whatsapp_state_json or {})["travel_enquiry"]["answers"]
         assert answers["visa_destination"] == "Qatar"
         assert "passport" in _last_text().lower()
 
@@ -499,7 +509,7 @@ def test_session_expiry_mid_enquiry_discards_stale_answers():
         _say(db, phone, "1")
         _say(db, phone, "Qatar")
         db.refresh(conv)
-        assert conv.whatsapp_state_json["travel_enquiry"]["answers"]
+        assert (conv.whatsapp_state_json or {})["travel_enquiry"]["answers"]
 
         conv.last_user_activity_at = datetime.now(timezone.utc) - timedelta(minutes=20)
         db.commit()
@@ -532,8 +542,8 @@ def test_duplicate_confirm_creates_a_single_enquiry():
         assert second["status"] == "enquiry_already_submitted"
         db.refresh(conv)
         # Answers moved onto the Booking row; the session keeps only the reference.
-        assert conv.whatsapp_state_json["travel_enquiry"]["answers"] == {}
-        assert conv.whatsapp_state_json["travel_enquiry"]["submitted_ref"] == conv.booking_ref
+        assert (conv.whatsapp_state_json or {})["travel_enquiry"]["answers"] == {}
+        assert (conv.whatsapp_state_json or {})["travel_enquiry"]["submitted_ref"] == conv.booking_ref
 
         # A repeated Confirm from the customer (now in AWAITING_QUOTE) also must not
         # create a second row.
@@ -574,7 +584,7 @@ def test_other_category_flows_are_unaffected():
         _say(db, phone, "3")                       # Private Charter still uses the catalog menu
         db.refresh(conv)
         assert conv.current_state == "SERVICE_SELECTION"
-        rows = WhatsAppClient.send_interactive_list.call_args.kwargs["sections"][0]["rows"]
+        rows = _last_list()["sections"][0]["rows"]
         assert rows, "Private Charter should still list its catalog services"
     finally:
         db.close()
@@ -668,7 +678,7 @@ def test_back_can_switch_ticketing_to_one_way_and_drops_return_step():
         # The return-date step no longer exists.
         assert "cabin class" in _last_text().lower()
         db.refresh(conv)
-        answers = conv.whatsapp_state_json["travel_enquiry"]["answers"]
+        answers = (conv.whatsapp_state_json or {})["travel_enquiry"]["answers"]
         assert answers["tkt_trip_type"] == "one_way"
     finally:
         db.close()
@@ -682,12 +692,12 @@ def test_help_inside_enquiry_keeps_the_current_step():
         _say(db, phone, "1")
         _say(db, phone, "Qatar")
         db.refresh(conv)
-        before = conv.whatsapp_state_json["travel_enquiry"]["index"]
+        before = (conv.whatsapp_state_json or {})["travel_enquiry"]["index"]
 
         res = _say(db, phone, "help")
         db.refresh(conv)
         assert res["status"] == "help_sent"
         assert conv.current_state == "TRAVEL_ENQUIRY"
-        assert conv.whatsapp_state_json["travel_enquiry"]["index"] == before
+        assert (conv.whatsapp_state_json or {})["travel_enquiry"]["index"] == before
     finally:
         db.close()
