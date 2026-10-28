@@ -72,3 +72,29 @@ class BaseFlowMixin:
     @classmethod
     def _prompt_journey_type(cls, conv: WhatsAppConversation) -> Dict[str, Any]:
         return {}
+
+    @classmethod
+    def _send_travel_services_menu(cls, db: Session, conv: WhatsAppConversation) -> Dict[str, Any]:
+        return {}
+
+    @classmethod
+    def _send_service_menu_for_category(
+        cls, db: Session, conv: WhatsAppConversation, category_name: Optional[str]
+    ) -> Dict[str, Any]:
+        return {}
+
+    @classmethod
+    def _state_travel_service_selection(
+        cls, db: Session, conv: WhatsAppConversation, user_text: str, input_id: Optional[str]
+    ) -> Dict[str, Any]:
+        return {}
+
+    @classmethod
+    def _state_travel_enquiry(
+        cls, db: Session, conv: WhatsAppConversation, user_text: str, input_id: Optional[str]
+    ) -> Dict[str, Any]:
+        return {}
+
+    @classmethod
+    def _travel_enquiry_back(cls, db: Session, conv: WhatsAppConversation) -> Optional[Dict[str, Any]]:
+        return None

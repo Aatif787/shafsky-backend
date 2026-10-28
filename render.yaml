@@ -135,7 +135,7 @@ services:
       - key: WHATSAPP_CUSTOMER_CONFIRMATION_TEMPLATE
         sync: false
       - key: WHATSAPP_CUSTOMER_TEMPLATE_LANG
-        value: en_US
+        value: en
       - key: AVIATIONSTACK_API_KEY
         sync: false
       - key: FLIGHT_PROVIDER
