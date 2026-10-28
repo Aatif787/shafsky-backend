@@ -109,22 +109,15 @@ def _ticketing_to_review(db, phone, return_trip=False, from_airport="DEL", to_ai
     _open_travel_menu(db, phone)
     _say(db, phone, "2")                                   # Flight Ticketing
     _say(db, phone, "2" if return_trip else "1")           # journey type
-    _say(db, phone, from_airport)
-    _say(db, phone, to_airport)
-    _say(db, phone, FUTURE_DATE)
+    _say(db, phone, from_airport)                          # origin
+    _say(db, phone, to_airport)                            # destination
+    _say(db, phone, FUTURE_DATE)                           # departure date
     if return_trip:
-        _say(db, phone, RETURN_DATE)
+        _say(db, phone, RETURN_DATE)                       # return date
     _say(db, phone, "1")                                   # cabin class
     _say(db, phone, "1")                                   # 1 adult
-    _say(db, phone, "Skip")                                # airline preference
-    _say(db, phone, "Aariz")                               # passenger 1 first name
-    _say(db, phone, "Khan")
-    _say(db, phone, "1")                                   # Male
-    _say(db, phone, "01/01/1990")                          # DOB
-    _say(db, phone, "Indian")                              # nationality
-    _say(db, phone, "Aariz Khan")                          # lead contact
-    _say(db, phone, email or _unique_email())
-    _say(db, phone, "Same")
+    _say(db, phone, "Aariz Khan")                          # lead passenger full name
+    _say(db, phone, email or _unique_email())              # email (or Skip)
 
 
 # ---------------------------------------------------------------------------
@@ -298,7 +291,7 @@ def test_visa_rejects_invalid_answers_and_past_dates():
 # ---------------------------------------------------------------------------
 
 
-def test_ticketing_field_set_matches_website_form():
+def test_ticketing_field_set_minimized():
     domestic = {
         "tkt_trip_type": "one_way",
         "tkt_from": "DEL",
@@ -307,19 +300,30 @@ def test_ticketing_field_set_matches_website_form():
         "tkt_travellers": {"adults": 1, "children": 0, "infants": 0},
     }
     keys = [step.key for step in te.plan(te.TICKETING, domestic)]
-    assert "tkt_return_date" not in keys
-    assert keys[:4] == ["tkt_trip_type", "tkt_from", "tkt_to", "tkt_depart_date"]
-    assert "tkt_cabin" in keys and "tkt_alliance" in keys
-    for field in ("first_name", "last_name", "gender", "date_of_birth", "nationality"):
-        assert f"tkt_pax_1_{field}" in keys
-    for field in ("passport_number", "passport_expiry", "passport_country"):
-        assert f"tkt_pax_1_{field}" not in keys
+    assert keys == [
+        "tkt_trip_type",
+        "tkt_from",
+        "tkt_to",
+        "tkt_depart_date",
+        "tkt_cabin",
+        "tkt_travellers",
+        "tkt_contact_name",
+        "tkt_contact_email",
+    ]
 
     international = dict(domestic, tkt_to="LHR", tkt_trip_type="round_trip")
     intl_keys = [step.key for step in te.plan(te.TICKETING, international)]
-    assert "tkt_return_date" in intl_keys
-    for field in ("passport_number", "passport_expiry", "passport_country"):
-        assert f"tkt_pax_1_{field}" in intl_keys
+    assert intl_keys == [
+        "tkt_trip_type",
+        "tkt_from",
+        "tkt_to",
+        "tkt_depart_date",
+        "tkt_return_date",
+        "tkt_cabin",
+        "tkt_travellers",
+        "tkt_contact_name",
+        "tkt_contact_email",
+    ]
 
     assert te.detect_itinerary_type("DEL", "BOM") == "DOMESTIC"
     assert te.detect_itinerary_type("DEL", "LHR") == "INTERNATIONAL"
@@ -345,22 +349,13 @@ def test_one_way_ticketing_enquiry_has_no_return_date():
         assert booking.service_category == "Travel Support"
         assert booking.origin_code == "DEL"
         assert booking.dest_code == "BOM"
-        assert booking.notes.startswith("Alliance: Any Alliance")
+        assert "Trip: One-way" in booking.notes
         details = booking.metadata_json["details"]
         assert details["trip_type"] == "one_way"
         assert details["return_date"] is None
         assert details["itinerary_type"] == "DOMESTIC"
         assert details["pax_adults"] == 1
-        assert details["passengers"][0] == {
-            "first_name": "Aariz",
-            "last_name": "Khan",
-            "gender": "Male",
-            "date_of_birth": "1990-01-01",
-            "nationality": "Indian",
-            "passport_number": "",
-            "passport_expiry": "",
-            "passport_issuing_country": "",
-        }
+        assert details["lead_passenger"] == "Aariz Khan"
     finally:
         db.close()
 
@@ -388,15 +383,8 @@ def test_return_ticketing_validates_return_date_and_keeps_it():
 
         _say(db, phone, "1")                      # cabin
         _say(db, phone, "1")                      # 1 adult
-        _say(db, phone, "Skip")                   # alliance
-        _say(db, phone, "Aariz")
-        _say(db, phone, "Khan")
-        _say(db, phone, "1")
-        _say(db, phone, "01/01/1990")
-        _say(db, phone, "Indian")
-        _say(db, phone, "Aariz Khan")
-        _say(db, phone, _unique_email())
-        _say(db, phone, "Same")
+        _say(db, phone, "Aariz Khan")             # lead name
+        _say(db, phone, _unique_email())          # email
 
         review = _last_text()
         assert "Return" in review
@@ -409,48 +397,38 @@ def test_return_ticketing_validates_return_date_and_keeps_it():
         details = booking.metadata_json["details"]
         assert details["trip_type"] == "round_trip"
         assert details["return_date"] == "2027-01-05"
-        assert booking.notes.startswith("Alliance: Any Alliance")
+        assert "Trip: Return" in booking.notes
     finally:
         db.close()
 
 
-def test_international_ticketing_collects_passport_details():
+def test_ticketing_email_can_be_skipped():
     db = SessionLocal()
     try:
         conv, phone = _new_conversation(db)
         _open_travel_menu(db, phone)
-        _say(db, phone, "2")
+        _say(db, phone, "2")                      # Flight Ticketing
         _say(db, phone, "1")                      # one-way
         _say(db, phone, "DEL")
         _say(db, phone, "LHR")                    # international
         _say(db, phone, FUTURE_DATE)
-        _say(db, phone, "1")
-        _say(db, phone, "1")
-        _say(db, phone, "Skip")
-        _say(db, phone, "Aariz")
-        _say(db, phone, "Khan")
-        _say(db, phone, "1")
-        _say(db, phone, "01/01/1990")
-        _say(db, phone, "Indian")
+        _say(db, phone, "1")                      # cabin
+        _say(db, phone, "2")                      # 2 passengers
+        _say(db, phone, "Aariz Khan")             # lead passenger
+        _say(db, phone, "Skip")                   # skip email!
 
-        assert "passport number" in _last_text().lower()
-        _say(db, phone, "A1234567")
-        assert "passport expiry" in _last_text().lower()
-        _say(db, phone, "01/01/2032")
-        assert "passport issuing country" in _last_text().lower()
-        _say(db, phone, "India")
+        review = _last_text()
+        assert "Skipped (WhatsApp contact)" in review
+        assert "Aariz Khan" in review
+        assert "2 passenger(s)" in review
 
-        _say(db, phone, "Aariz Khan")
-        _say(db, phone, _unique_email())
-        _say(db, phone, "Same")
         _say(db, phone, "1", input_id="btn_enquiry_confirm")
-
         db.refresh(conv)
+
         booking = db.query(Booking).filter_by(booking_ref=conv.booking_ref).one()
-        passenger = booking.metadata_json["details"]["passengers"][0]
-        assert passenger["passport_number"] == "A1234567"
-        assert passenger["passport_expiry"] == "2032-01-01"
-        assert passenger["passport_issuing_country"] == "India"
+        assert booking.passenger_name == "Aariz Khan"
+        assert "guest." in booking.passenger_email
+        assert booking.metadata_json["details"]["email_provided"] is False
     finally:
         db.close()
 

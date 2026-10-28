@@ -74,7 +74,7 @@ class TravelServicesFlowMixin:
     @classmethod
     def _sync_conversation(cls, conv: WhatsAppConversation, service: str, answers: Dict[str, Any]) -> None:
         """Keep the conversation columns ops already reads in step with the answers."""
-        for field, value in te.conversation_snapshot(service, answers).items():
+        for field, value in te.conversation_snapshot(service, answers, conv_phone=conv.phone_number).items():
             setattr(conv, field, value)
 
     # -- Travel Services menu --------------------------------------------
@@ -286,7 +286,7 @@ class TravelServicesFlowMixin:
         title = te.SERVICE_TITLES.get(service, "Travel Services")
         wa_delivery.send_text(
             conv.phone_number,
-            te.build_review(service, answers),
+            te.build_review(service, answers, conv_phone=conv.phone_number),
             client=whatsapp_client,
         )
         body_text = "Ready to send this enquiry to our team?"
@@ -354,7 +354,7 @@ class TravelServicesFlowMixin:
             )
             return {"status": "enquiry_already_submitted", "success": True}
 
-        payload = te.build_submission(service, answers)
+        payload = te.build_submission(service, answers, conv_phone=conv.phone_number)
         try:
             booking = BookingService.create_service_enquiry(db, **payload)
         except HTTPException as err:
