@@ -1338,18 +1338,45 @@ class NotificationService:
     WHATSAPP_CUSTOMER_CONFIRMATION_TEMPLATE_TYPE = "WHATSAPP_CUSTOMER_CONFIRMATION"
 
     @classmethod
+    def _resolve_customer_template_settings(cls) -> Tuple[str, str]:
+        """
+        Safely extracts and sanitizes the customer confirmation template name and language.
+        Gracefully handles values that were inadvertently pasted across multiple lines
+        or that contain KEY=VALUE pairs in dashboard environment variables.
+        """
+        raw_name = getattr(settings, "WHATSAPP_CUSTOMER_CONFIRMATION_TEMPLATE", None)
+        if raw_name is None:
+            raw_name = os.getenv("WHATSAPP_CUSTOMER_CONFIRMATION_TEMPLATE", "")
+
+        raw_lang = getattr(settings, "WHATSAPP_CUSTOMER_TEMPLATE_LANG", None)
+        if raw_lang is None:
+            raw_lang = os.getenv("WHATSAPP_CUSTOMER_TEMPLATE_LANG", "")
+
+        template_name = str(raw_name or "").strip()
+        template_lang = str(raw_lang or "").strip()
+
+        # If multiple lines were pasted into the template variable (e.g. on Render)
+        if "\n" in template_name or "\r" in template_name:
+            lines = [l.strip() for l in template_name.replace("\r", "\n").split("\n") if l.strip()]
+            if lines:
+                template_name = lines[0]
+                for extra in lines[1:]:
+                    if "WHATSAPP_CUSTOMER_TEMPLATE_LANG=" in extra:
+                        template_lang = extra.split("=", 1)[1].strip()
+                    elif not template_lang and "=" not in extra:
+                        template_lang = extra
+
+        if not template_lang:
+            template_lang = "en_US"
+
+        return template_name, template_lang
+
+    @classmethod
     def validate_customer_whatsapp_configuration(cls) -> Dict[str, Any]:
         """
         Diagnostic check for the customer WhatsApp booking confirmation notification path.
         """
-        template_name = (
-            getattr(settings, "WHATSAPP_CUSTOMER_CONFIRMATION_TEMPLATE", None)
-            or os.getenv("WHATSAPP_CUSTOMER_CONFIRMATION_TEMPLATE", "")
-        ).strip()
-        template_lang = (
-            getattr(settings, "WHATSAPP_CUSTOMER_TEMPLATE_LANG", None)
-            or os.getenv("WHATSAPP_CUSTOMER_TEMPLATE_LANG", "en_US")
-        ).strip()
+        template_name, template_lang = cls._resolve_customer_template_settings()
 
         is_client_ok = whatsapp_client.is_configured()
         problems: List[str] = []
@@ -1644,15 +1671,7 @@ class NotificationService:
         message_body = "\n".join(lines)
 
         # 8. Template Resolution & Dispatch
-        template_name = getattr(settings, "WHATSAPP_CUSTOMER_CONFIRMATION_TEMPLATE", None)
-        if template_name is None:
-            template_name = os.getenv("WHATSAPP_CUSTOMER_CONFIRMATION_TEMPLATE", "")
-        template_name = (template_name or "").strip()
-
-        template_lang = getattr(settings, "WHATSAPP_CUSTOMER_TEMPLATE_LANG", None)
-        if template_lang is None:
-            template_lang = os.getenv("WHATSAPP_CUSTOMER_TEMPLATE_LANG", "en_US")
-        template_lang = (template_lang or "en_US").strip()
+        template_name, template_lang = cls._resolve_customer_template_settings()
 
         masked_phone = WhatsAppDepartmentService._mask_phone(clean_phone)
 
