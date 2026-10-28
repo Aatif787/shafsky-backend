@@ -72,7 +72,34 @@ class NotificationTemplateEngine:
             {invoice_html}
             <p>Our 24/7 command desk: {support}</p>
             """
-            whatsapp = f"✈️ *Shafsky Aviation Services VIP Desk*\n\nDear *{name}*,\n\nWe are delighted to confirm your VIP service booking.\n\n*Reference:* {ref}\n*Airport:* {airport}\n*Flight:* {flight}\n*Date:* {date_str}\n\nOur 24/7 command desk is at your disposal: {support}.{invoice_wa}"
+            has_raw_flight = bool((data.get("flightNum") or data.get("flight_num") or "").strip())
+            clean_flight = _safe(data.get("flightNum") or data.get("flight_num")) if has_raw_flight else ""
+
+            has_raw_date = bool((data.get("departureTime") or data.get("departure_time") or data.get("service_date") or "").strip())
+            clean_date = _safe(data.get("departureTime") or data.get("departure_time") or data.get("service_date")) if has_raw_date else ""
+
+            service_label = journey or service or "VIP Airport Assistance"
+            status_label = _safe(data.get("status"), "CONFIRMED")
+
+            wa_items = [
+                "✈️ *Shafsky Aviation Services VIP Desk*",
+                "",
+                f"Dear *{name}*,",
+                "",
+                "We are delighted to confirm your VIP service booking.",
+                "",
+                f"*Reference:* {ref}",
+                f"*Airport:* {airport}",
+                f"*Service:* {service_label}",
+            ]
+            if clean_flight:
+                wa_items.append(f"*Flight:* {clean_flight}")
+            if clean_date:
+                wa_items.append(f"*Date:* {clean_date}")
+            wa_items.append(f"*Status:* {status_label}")
+            wa_items.append("")
+            wa_items.append(f"Our 24/7 command desk is at your disposal: {support}.{invoice_wa}")
+            whatsapp = "\n".join(wa_items)
 
         elif t_type == "BOOKING_RECEIVED":
             subject = f"Shafsky Aviation Services — Booking Received ({ref})"

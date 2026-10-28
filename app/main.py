@@ -111,6 +111,26 @@ async def lifespan(_app: FastAPI):
             "WhatsApp operations notification configuration check failed",
             extra={"error": str(wa_config_err)},
         )
+
+    try:
+        from app.services.notification_service import NotificationService
+
+        cust_wa_config = NotificationService.validate_customer_whatsapp_configuration()
+        if not cust_wa_config["ok"]:
+            log_config_problem = (
+                structured_logger.error if env not in ["development", "dev", "testing", "test"]
+                else structured_logger.warning
+            )
+            log_config_problem(
+                "Customer WhatsApp notifications are not fully configured: "
+                + "; ".join(cust_wa_config["problems"]),
+                extra=cust_wa_config,
+            )
+    except Exception as cust_wa_err:
+        structured_logger.warning(
+            "Customer WhatsApp notification configuration check failed",
+            extra={"error": str(cust_wa_err)},
+        )
     yield
 
 
@@ -146,7 +166,7 @@ app.add_middleware(SecurityMiddleware)
 # take precedence. See app/security/cors_origins.py.
 from app.security.cors_origins import allowed_origins, browser_origin_regex
 
-_CORS_ORIGIN_REGEX = browser_origin_regex()
+_CORS_ORIGIN_REGEX: str = browser_origin_regex().pattern
 _cors_kwargs = {
     "allow_origins": allowed_origins(),
     "allow_credentials": getattr(settings, "CORS_ALLOW_CREDENTIALS", False),

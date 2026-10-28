@@ -412,9 +412,91 @@ def test_window_closed_delivery_failure_keeps_the_meta_code_on_the_record():
     apply_delivery_status(rec, ids[4], "delivered", {"status": "delivered"})
 
     assert rec.status == NotificationStatus.FAILED
-    assert "131047" in rec.error_log
-    assert "24 hours" in rec.error_log
-    assert "4/5" in rec.error_log
+    assert "131047" in (rec.error_log or "")
+    assert "24 hours" in (rec.error_log or "")
+    assert "4/5" in (rec.error_log or "")
     failed_entries = [m for m in rec.payload["messages"] if m["status"] == "failed"]
     assert len(failed_entries) == 4
     assert all(m["error_code"] == 131047 for m in failed_entries)
+
+
+def test_all_five_recipients_attempted_independently_when_business_numbers_fail_window(monkeypatch):
+    """
+    Confirms all five recipients are attempted independently, and delivery failures
+    on the four business-app numbers outside the 24-hour window never prevent, interrupt,
+    or corrupt delivery to 8864931247.
+    """
+    from app.integrations.whatsapp.service import apply_delivery_status
+
+    monkeypatch.setattr("app.services.whatsapp_department_service.settings", _settings())
+
+    sent_order = []
+
+    def mock_send_text(phone, msg):
+        sent_order.append(phone)
+        return {"success": True, "message_id": f"wamid.INDEP_{phone[-4:]}"}
+
+    monkeypatch.setattr("app.integrations.whatsapp.client.WhatsAppClient.is_configured", lambda self: True)
+    monkeypatch.setattr(
+        "app.integrations.whatsapp.client.WhatsAppClient.send_text_message",
+        lambda self, phone, msg: mock_send_text(phone, msg),
+    )
+
+    context = {
+        "booking_ref": "SHF-FIVE-RECIPIENTS-001",
+        "service_category": "Meet & Greet",
+        "service_type": "Gold Package",
+    }
+
+    result = WhatsAppDepartmentService.dispatch_booking_or_enquiry_notification(context)
+
+    # 1. Verify all 5 recipients were attempted independently in sequence
+    assert len(sent_order) == 5
+    assert set(sent_order) == NORMALIZED_RECIPIENTS
+    assert result["recipients_attempted"] == 5
+    assert result["recipients_accepted"] == 5
+    assert result["status"] == "ACCEPTED"
+
+    # 2. Simulate webhook outcomes: 4 business numbers fail with 131047, personal 8864931247 succeeds
+    personal_phone = "918864931247"
+    personal_mid = f"wamid.INDEP_{personal_phone[-4:]}"
+
+    rec = _ops_record([f"wamid.INDEP_{p[-4:]}" for p in sent_order])
+
+    window_closed_failure = {
+        "status": "failed",
+        "errors": [
+            {
+                "code": 131047,
+                "title": "Re-engagement message",
+                "message": "Re-engagement message",
+                "error_data": {
+                    "details": "Message failed to send because more than 24 hours have passed since the customer last replied to this number."
+                },
+            }
+        ],
+    }
+
+    # Deliver to the personal number
+    apply_delivery_status(rec, personal_mid, "delivered", {"status": "delivered"})
+
+    # Fail the four business numbers
+    for p in sent_order:
+        if p != personal_phone:
+            apply_delivery_status(rec, f"wamid.INDEP_{p[-4:]}", "failed", window_closed_failure)
+
+    # 3. Verify per-message attribution
+    messages_by_mid = {m["message_id"]: m for m in rec.payload["messages"]}
+    assert messages_by_mid[personal_mid]["status"] == "delivered"
+    assert "error_code" not in messages_by_mid[personal_mid]
+
+    business_mids = [f"wamid.INDEP_{p[-4:]}" for p in sent_order if p != personal_phone]
+    for b_mid in business_mids:
+        assert messages_by_mid[b_mid]["status"] == "failed"
+        assert messages_by_mid[b_mid]["error_code"] == 131047
+
+    # Overall record captures the 4 failures with error 131047
+    assert rec.status == NotificationStatus.FAILED
+    assert "131047" in (rec.error_log or "")
+    assert "4/5" in (rec.error_log or "")
+

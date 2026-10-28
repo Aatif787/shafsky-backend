@@ -131,6 +131,11 @@ services:
         sync: false
       - key: WHATSAPP_DEPARTMENT_TEMPLATE_LANG
         value: en_US
+      # Approved Meta template for customer booking confirmation notifications.
+      - key: WHATSAPP_CUSTOMER_CONFIRMATION_TEMPLATE
+        sync: false
+      - key: WHATSAPP_CUSTOMER_TEMPLATE_LANG
+        value: en_US
       - key: AVIATIONSTACK_API_KEY
         sync: false
       - key: FLIGHT_PROVIDER
