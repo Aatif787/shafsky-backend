@@ -299,10 +299,12 @@ def test_scenario_07_airport_services_flow(mock_text):
         db.close()
 
 
-# 8. Travel Services Flow (Non-Airport) -> Direct to Date Selection
+# 8. Travel Services Flow (Non-Airport) -> two-option menu, then the website-form enquiry
 @patch("app.integrations.whatsapp.client.WhatsAppClient.send_text_message")
-def test_scenario_08_travel_services_flow(mock_text):
+@patch("app.integrations.whatsapp.client.WhatsAppClient.send_interactive_buttons")
+def test_scenario_08_travel_services_flow(mock_buttons, mock_text):
     mock_text.return_value = {"success": True, "message_id": "wamid.scen08"}
+    mock_buttons.return_value = {"success": True, "message_id": "wamid.scen08b"}
     from app.database import SessionLocal
     phone = f"91{uuid.uuid4().int % 10**10:010d}"
     db = SessionLocal()
@@ -312,11 +314,20 @@ def test_scenario_08_travel_services_flow(mock_text):
         conv.current_state = "SERVICE_SELECTION"
         db.commit()
 
-        # Select travel service (e.g., Visa Assistance or "1")
+        # A session parked on the old catalog state now lands on the two-option menu.
         WhatsAppBookingStateMachine.process_incoming_event(db, phone, "1")
         db.refresh(conv)
-        assert conv.requires_flight is True or conv.requires_airport is False
-        assert conv.current_state == "DATE_SELECTION"
+        assert conv.current_state == "TRAVEL_SERVICE_SELECTION"
+        assert conv.requires_airport is False
+        assert conv.requires_flight is False
+        titles = [b["title"] for b in mock_buttons.call_args.kwargs["buttons"]]
+        assert titles == ["Visa Assistance", "Flight Ticketing"]
+
+        # Visa Assistance starts the website-form enquiry, not the old date prompt.
+        WhatsAppBookingStateMachine.process_incoming_event(db, phone, "1")
+        db.refresh(conv)
+        assert conv.current_state == "TRAVEL_ENQUIRY"
+        assert "country are you applying to visit" in mock_text.call_args.args[1]
     finally:
         db.close()
 

@@ -89,7 +89,7 @@ class AirportFlowMixin(BaseFlowMixin):
 
         rows = [
             {"id": "cat_airport", "title": "Airport Services", "description": "Meet & Greet at supported airports"},
-            {"id": "cat_travel", "title": "Travel Services", "description": "Visa, insurance, travel support"},
+            {"id": "cat_travel", "title": "Travel Services", "description": "Visa assistance and flight ticketing"},
             {"id": "cat_charter", "title": "Private Charter", "description": "Private jet and helicopter"},
             {"id": "cat_hotel_transport", "title": "Hotel & Transportation", "description": "Hotels and airport transfers"},
         ]
@@ -123,7 +123,7 @@ class AirportFlowMixin(BaseFlowMixin):
             norm = user_text.strip().lower()
             if "1" in norm or "airport" in norm or "meet" in norm:
                 matched_category = "Airport Services"
-            elif "2" in norm or "travel" in norm or "visa" in norm or "insurance" in norm:
+            elif "2" in norm or "travel" in norm or "visa" in norm or "ticket" in norm:
                 matched_category = "Travel Services"
             elif "3" in norm or "charter" in norm or "jet" in norm:
                 matched_category = "Private Charter"
@@ -149,8 +149,7 @@ class AirportFlowMixin(BaseFlowMixin):
         elif matched_category == "Travel Services":
             conv.requires_airport = False
             conv.requires_flight = False
-            cls._transition_state(db, conv, "SERVICE_SELECTION")
-            return cls._send_service_menu(db, conv, "Travel Services")
+            return cls._send_travel_services_menu(db, conv)
 
         elif matched_category == "Private Charter":
             conv.requires_airport = False
@@ -896,7 +895,7 @@ class AirportFlowMixin(BaseFlowMixin):
 
     @classmethod
     def _send_service_menu(cls, db: Session, conv: WhatsAppConversation, category_name: str) -> Dict[str, Any]:
-        """Displays services for non-airport categories (Travel, Charter)."""
+        """Displays DB-catalog services for non-airport categories (Private Charter)."""
         category_obj = next((c for c in OFFICIAL_CATEGORIES if c["name"] == category_name), None)
         valid_db_cats: List[str] = list(category_obj["db_categories"]) if category_obj and isinstance(category_obj["db_categories"], list) else [category_name]
 
@@ -961,6 +960,10 @@ class AirportFlowMixin(BaseFlowMixin):
         category_name = conv.selected_category or "Airport Services"
         text_u = user_text.strip().upper()
 
+        if (category_name or "").strip().lower() == "travel services":
+            # Travel Services now owns a fixed two-option menu (Visa / Flight Ticketing).
+            return cls._send_travel_services_menu(db, conv)
+
         available_services: List[Dict[str, Any]] = []
         selected_svc = None
         stored_menu = cls._get_wa_menu(conv)
@@ -984,7 +987,7 @@ class AirportFlowMixin(BaseFlowMixin):
             if category_name == "Airport Services":
                 return cls._send_airport_services_menu(db, conv)
             else:
-                return cls._send_service_menu(db, conv, category_name)
+                return cls._send_service_menu_for_category(db, conv, category_name)
 
         selected_svc = None
         stored_menu = cls._get_wa_menu(conv)

@@ -32,6 +32,7 @@ from app.integrations.whatsapp.handlers import (
     FlightFlowMixin,
     DetailsFlowMixin,
     CharterHotelFlowMixin,
+    TravelServicesFlowMixin,
     ReviewPaymentFlowMixin,
     OFFICIAL_CATEGORIES,
 )
@@ -164,6 +165,7 @@ class WhatsAppBookingStateMachine(
     FlightFlowMixin,
     DetailsFlowMixin,
     CharterHotelFlowMixin,
+    TravelServicesFlowMixin,
     ReviewPaymentFlowMixin,
 ):
     """
@@ -637,6 +639,10 @@ class WhatsAppBookingStateMachine(
                 result = cls._state_terminal_selection(db, conv, user_input, input_id)
             elif state in ["SERVICE_SELECTION", "AIRPORT_PACKAGE_SELECTION"]:
                 result = cls._state_service_selection(db, conv, user_input, input_id)
+            elif state == "TRAVEL_SERVICE_SELECTION":
+                result = cls._state_travel_service_selection(db, conv, user_input, input_id)
+            elif state == "TRAVEL_ENQUIRY":
+                result = cls._state_travel_enquiry(db, conv, user_input, input_id)
             elif state == "HOTEL_TRANSPORT_SUBMENU":
                 result = cls._state_hotel_transport_submenu(db, conv, user_input, input_id)
             elif state == "CHARTER_ORIGIN":
@@ -683,6 +689,9 @@ class WhatsAppBookingStateMachine(
                 "invalid_transit_type",
                 "invalid_terminal",
                 "invalid_service",
+                "invalid_travel_service",
+                "invalid_travel_enquiry_answer",
+                "travel_enquiry_failed",
                 "invalid_flight_format",
                 "invalid_flight_confirmation",
                 "flight_type_mismatch",
@@ -982,7 +991,7 @@ class WhatsAppBookingStateMachine(
             if conv.requires_airport:
                 cls._send_airport_services_menu(db, conv)
             else:
-                cls._send_service_menu(db, conv, conv.selected_category or "Airport Services")
+                cls._send_service_menu_for_category(db, conv, conv.selected_category)
         elif curr == "DATE_SELECTION":
             conv.booking_date = None
             if conv.requires_flight:
@@ -997,7 +1006,7 @@ class WhatsAppBookingStateMachine(
                 if conv.requires_airport:
                     cls._send_airport_services_menu(db, conv)
                 else:
-                    cls._send_service_menu(db, conv, conv.selected_category or "Airport Services")
+                    cls._send_service_menu_for_category(db, conv, conv.selected_category)
         elif curr == "PASSENGER_COUNT":
             conv.passenger_count = 1
             conv.total_amount = None
@@ -1080,6 +1089,11 @@ class WhatsAppBookingStateMachine(
                 ),
                 client=whatsapp_client,
             )
+        elif curr == "TRAVEL_SERVICE_SELECTION":
+            cls._transition_state(db, conv, "CATEGORY_SELECTION")
+            cls._send_category_menu(db, conv)
+        elif curr == "TRAVEL_ENQUIRY":
+            cls._travel_enquiry_back(db, conv)
         elif curr in ["WAITING_PAYMENT", "PENDING_PAYMENT"]:
             cls._state_waiting_payment(db, conv, "resend")
             return

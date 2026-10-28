@@ -208,6 +208,7 @@ def test_db_booking_status_validation(monkeypatch):
     mock_send = MagicMock()
     monkeypatch.setattr(whatsapp_client, "is_configured", lambda: True)
     monkeypatch.setattr(whatsapp_client, "send_text_message", mock_send)
+    monkeypatch.setattr("app.services.notification_service.settings.WHATSAPP_CUSTOMER_CONFIRMATION_TEMPLATE", "")
 
     booking_ref = f"SHF-DB-PEND-{uuid.uuid4().hex[:6].upper()}"
 

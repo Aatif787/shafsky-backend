@@ -1,4 +1,4 @@
-﻿"""Customer-facing WhatsApp copy. Keep test-stable phrases intact."""
+"""Customer-facing WhatsApp copy. Keep test-stable phrases intact."""
 
 from typing import Any, Dict, List, Optional
 
@@ -53,6 +53,35 @@ CHARTER_ENQUIRY_REGISTERED = (
     "options and a tailored quote.\n\n"
     f"Need it sooner? Call our executive on *{EXECUTIVE_PHONE}*.\n\n"
     "Type *Hi* anytime to start a new booking."
+)
+
+# Travel Services offers exactly two services on WhatsApp.
+TRAVEL_SERVICES_BODY = (
+    "🧳 *Travel Services*\n\n"
+    "Please choose a service:\n\n"
+    "1️⃣ Visa Assistance\n"
+    "2️⃣ Flight Ticketing"
+)
+
+TRAVEL_ENQUIRY_INTRO = (
+    "*{service}*\n\n"
+    "I'll collect the same details as our website enquiry form, one step at a time.\n\n"
+    "Type *BACK* to change the previous answer, *CANCEL* to stop, or *Hi* to start over."
+)
+
+TRAVEL_ENQUIRY_REGISTERED = (
+    f"*{BRAND}*\n\n"
+    "Thank you — your *{service}* enquiry *{booking_ref}* has been received.\n\n"
+    "Our travel desk will review it and contact you shortly with the next steps "
+    "and a tailored quotation.\n\n"
+    f"Need it sooner? Call our executive on *{EXECUTIVE_PHONE}*.\n\n"
+    "Type *Hi* anytime to start a new enquiry."
+)
+
+TRAVEL_ENQUIRY_FAILED = (
+    f"*{BRAND}*\n\n"
+    "We could not register your enquiry just now, and nothing has been submitted.\n\n"
+    f"Please reply *Confirm* to try again, or call our executive on *{EXECUTIVE_PHONE}*."
 )
 
 CATEGORY_LINES = (

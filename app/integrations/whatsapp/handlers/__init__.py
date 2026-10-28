@@ -8,6 +8,7 @@ from app.integrations.whatsapp.handlers.airport_flow import AirportFlowMixin, OF
 from app.integrations.whatsapp.handlers.flight_flow import FlightFlowMixin
 from app.integrations.whatsapp.handlers.details_flow import DetailsFlowMixin
 from app.integrations.whatsapp.handlers.charter_hotel_flow import CharterHotelFlowMixin
+from app.integrations.whatsapp.handlers.travel_services_flow import TravelServicesFlowMixin
 from app.integrations.whatsapp.handlers.review_payment_flow import ReviewPaymentFlowMixin
 
 __all__ = [
@@ -16,6 +17,7 @@ __all__ = [
     "FlightFlowMixin",
     "DetailsFlowMixin",
     "CharterHotelFlowMixin",
+    "TravelServicesFlowMixin",
     "ReviewPaymentFlowMixin",
     "OFFICIAL_CATEGORIES",
 ]
