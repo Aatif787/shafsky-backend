@@ -63,15 +63,52 @@ class WhatsAppDepartmentExtMixin:
     ) -> Dict[str, Any]:
         """Sends one operations notification using the template path when configured."""
         whatsapp_client = _wds().whatsapp_client
-        if template_name:
-            components = cls.build_template_components(message_body)
-            return whatsapp_client.send_message(
-                to_phone=phone,
-                template_name=template_name,
-                template_language=template_lang,
-                template_components=components,
-            )
-        return whatsapp_client.send_text_message(phone, message_body)
+        logger = _wds().logger
+        if not template_name:
+            return whatsapp_client.send_text_message(phone, message_body)
+
+        components = cls.build_template_components(message_body)
+        res = whatsapp_client.send_message(
+            to_phone=phone,
+            template_name=template_name,
+            template_language=template_lang,
+            template_components=components,
+        )
+
+        # 132001 means the name/language pair does not exist on this WABA. It is rejected
+        # before a message is created, so one retry with the sibling language code is
+        # safe. Without this, a single wrong character in WHATSAPP_DEPARTMENT_TEMPLATE_LANG
+        # silently stops the alert for all five numbers.
+        if not res.get("success") and res.get("error_code") == 132001:
+            alt_lang = cls.alternate_template_language(template_lang)
+            if alt_lang and alt_lang != template_lang:
+                logger.error(
+                    "[WhatsApp Notify] Template '%s' is not approved for language '%s' (132001). "
+                    "Retrying once with '%s'. Align WHATSAPP_DEPARTMENT_TEMPLATE_LANG with the "
+                    "language registered in Meta.",
+                    template_name,
+                    template_lang,
+                    alt_lang,
+                )
+                retry = whatsapp_client.send_message(
+                    to_phone=phone,
+                    template_name=template_name,
+                    template_language=alt_lang,
+                    template_components=components,
+                )
+                if retry.get("success"):
+                    return retry
+                if retry.get("error_code") == 132001:
+                    logger.error(
+                        "[WhatsApp Notify] Template '%s' is not approved for '%s' either. "
+                        "Check WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE against the approved "
+                        "template list in Meta WhatsApp Manager.",
+                        template_name,
+                        alt_lang,
+                    )
+                return retry
+
+        return res
 
     @classmethod
     def _classify_meta_failure(cls, res: Dict[str, Any], error_text: str) -> Tuple[str, str]:
@@ -208,6 +245,7 @@ class WhatsAppDepartmentExtMixin:
         return {
             "ok": not problems,
             "recipients_configured": len(recipients),
+            "recipients_masked": [cls._mask_phone(phone) for phone in recipients],
             "template": template_name or None,
             "template_language": template_lang,
             "template_configured": bool(template_name),
