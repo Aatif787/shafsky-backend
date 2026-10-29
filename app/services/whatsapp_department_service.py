@@ -470,6 +470,24 @@ class WhatsAppDepartmentService(WhatsAppDepartmentExtMixin):
         return cleaned
 
     @classmethod
+    def alternate_template_language(cls, template_lang: Optional[str]) -> Optional[str]:
+        """Returns a second language code worth trying when Meta answers 132001.
+
+        Meta registers templates per language: `en` and `en_US` are different entries of
+        the same name. A deployment that uses one form for a template registered under the
+        other gets 132001 ("template does not exist in the translation") for every
+        recipient. 132001 is returned before a message is created, so trying the sibling
+        code once is safe and cannot duplicate a delivery.
+        """
+        clean = (template_lang or "").strip()
+        if not clean:
+            return None
+        if "_" in clean:
+            base = clean.split("_", 1)[0].strip()
+            return base or None
+        return f"{clean}_US"
+
+    @classmethod
     def get_recipient_phone_numbers(cls) -> List[str]:
         """
         Retrieves and normalizes the 5 configured recipient numbers from environment variables:
