@@ -35,7 +35,7 @@ _logger = logging.getLogger("shafsky.security.cors_origins")
 
 _DEV_ORIGIN_REGEX = (
     r"^https?://(localhost|127\.0\.0\.1|.*\.ngrok-free\.(dev|app)|.*\.ngrok\.io|"
-    r"(shafsky|shafsky-frontend|shafsky-admin-portal)\.vercel\.app|"
+    r"(shafsky[a-zA-Z0-9_-]*|shafsky)\.vercel\.app|"
     r"([a-zA-Z0-9_-]+\.)*shafskyaviation\.(in|com)|"
     r"([a-zA-Z0-9_-]+\.)*shafsky\.(in|com)"
     r")(:\d+)?$"
