@@ -15,6 +15,8 @@ EnquiryCategory = Literal[
     "Ticketing",
     "Lounge",
     "Airport Assistance",
+    "Hotel",
+    "Hotels",
 ]
 
 
@@ -46,6 +48,44 @@ class ServiceEnquiryCreate(BaseModel):
                 ln = str(data.get("last_name") or data.get("lastName") or "").strip()
                 if fn or ln:
                     data["passenger_name"] = f"{fn} {ln}".strip()
+
+            # Normalize service_category (case-insensitive and alias mapping)
+            raw_cat = data.get("service_category") or data.get("serviceCategory")
+            if isinstance(raw_cat, str):
+                cat_lower = raw_cat.strip().lower()
+                if cat_lower in ("hotel", "hotels", "hotel booking", "hotel reservation"):
+                    data["service_category"] = "Hotel"
+                    if "serviceCategory" in data:
+                        data["serviceCategory"] = "Hotel"
+                elif cat_lower in ("ticketing", "air ticketing", "flight ticket"):
+                    data["service_category"] = "Ticketing"
+                    if "serviceCategory" in data:
+                        data["serviceCategory"] = "Ticketing"
+                elif cat_lower in ("round trip", "round-trip", "roundtrip"):
+                    data["service_category"] = "Round Trip"
+                    if "serviceCategory" in data:
+                        data["serviceCategory"] = "Round Trip"
+                elif cat_lower in ("transport", "ground transport"):
+                    norm_trans = "Ground Transport" if "ground" in cat_lower else "Transport"
+                    data["service_category"] = norm_trans
+                    if "serviceCategory" in data:
+                        data["serviceCategory"] = norm_trans
+                elif cat_lower in ("lounge", "airport lounge"):
+                    data["service_category"] = "Lounge"
+                    if "serviceCategory" in data:
+                        data["serviceCategory"] = "Lounge"
+                elif cat_lower in ("cargo", "logistics", "cargo & logistics"):
+                    data["service_category"] = "Cargo & Logistics"
+                    if "serviceCategory" in data:
+                        data["serviceCategory"] = "Cargo & Logistics"
+                elif cat_lower in ("medical", "medical assistance", "ambulance"):
+                    data["service_category"] = "Medical Assistance"
+                    if "serviceCategory" in data:
+                        data["serviceCategory"] = "Medical Assistance"
+                elif cat_lower in ("travel support", "visa", "visa assistance"):
+                    data["service_category"] = "Travel Support"
+                    if "serviceCategory" in data:
+                        data["serviceCategory"] = "Travel Support" 
 
             # Normalize pickup/origin
             if not data.get("origin"):

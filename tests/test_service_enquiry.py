@@ -558,3 +558,49 @@ def test_valid_lounge_enquiry_success():
         assert booking.metadata_json["details"]["lounge_type"] == "VIP / First Class Lounge"
         assert booking.metadata_json["details"]["passengers_count"] == 2
 
+
+
+def test_api_endpoint_hotel_enquiry():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.database import get_db
+
+    mock_db = _db_with_unique_ref()
+    app.dependency_overrides[get_db] = lambda: mock_db
+    try:
+        client = TestClient(app)
+        with patch("app.integrations.whatsapp.client.whatsapp_client.send_text_message") as mock_wa:
+            mock_wa.return_value = {"success": True, "message_id": "wamid.hotel_test"}
+
+            payload = {
+                "passengerName": "Bhagwati Bhagwati",
+                "passengerEmail": "bhagwati@test-guest.com",
+                "passengerPhone": "+917705881139",
+                "serviceCategory": "Hotel",
+                "serviceType": "Hotel Booking Enquiry",
+                "origin": "Mumbai",
+                "destination": "Mumbai",
+                "serviceDate": "2026-10-30",
+                "notes": "Deluxe ocean view",
+                "details": {
+                    "first_name": "Bhagwati",
+                    "last_name": "Bhagwati",
+                    "service": "Hotel",
+                    "city": "Mumbai",
+                    "check_in": "2026-10-30",
+                    "check_out": "2026-10-31",
+                    "guests_count": 8,
+                    "rooms_count": 4,
+                },
+            }
+
+            response = client.post("/api/bookings/enquiries", json=payload)
+            assert response.status_code == 201
+            body = response.json()
+            assert body["success"] is True
+            assert body["data"]["serviceCategory"] == "Hotel"
+            assert body["data"]["serviceType"] == "Hotel Booking Enquiry"
+            assert body["data"]["status"] == "PENDING"
+            assert body["data"]["bookingRef"].startswith("SHF-")
+    finally:
+        app.dependency_overrides.pop(get_db, None)

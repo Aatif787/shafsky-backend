@@ -66,6 +66,15 @@ class ServiceValidator:
             "Wheelchair Support",
             "Medical Assistance"
         ],
+        "Hotel": [
+            "Hotel",
+            "Hotels",
+            "Hotel Booking",
+            "Hotel Booking Enquiry",
+            "Luxury Hotels",
+            "Transit Hotel",
+            "Hotel Accommodation",
+        ],
         "Travel Support": [
             "Visa Assistance",
             "Travel Insurance",
@@ -149,7 +158,7 @@ class ServiceValidator:
             cls._validate_cargo_logistics(payload, options)
         elif category == "Medical Assistance":
             cls._validate_medical_assistance(payload, options)
-        elif category == "Travel Support":
+        elif category in ("Travel Support", "Hotel", "Hotels"):
             cls._validate_travel_support(payload, options)
 
         return category
