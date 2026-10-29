@@ -579,6 +579,19 @@ class JourneyMultiServiceMixin:
                 "status": "PENDING",
                 "notes": record.notes,
             })
+            # A service query is a quotation request, never a confirmed booking.
+            NotificationService.send_customer_whatsapp_enquiry_acknowledgement(db, {
+                "booking_ref": record.query_ref,
+                "passenger_name": record.passenger_name,
+                "passenger_email": record.passenger_email,
+                "passenger_phone": record.passenger_phone,
+                "service_category": "Airport Assistance",
+                "service_name": "Service Query",
+                "service_type": "Service Query",
+                "origin_code": (record.itinerary or {}).get("departure_airport"),
+                "dest_code": (record.itinerary or {}).get("arrival_airport"),
+                "status": "PENDING",
+            })
         except Exception:
             pass
 

@@ -527,6 +527,12 @@ class LoungeService:
             from app.database import SessionLocal
             with SessionLocal() as db:
                 NotificationService.notify_booking_created(db, context)
+                # A lounge enquiry is a quotation request; acknowledge it to the guest
+                # without ever claiming a confirmed booking.
+                NotificationService.send_customer_whatsapp_enquiry_acknowledgement(db, {
+                    **context,
+                    "status": "PENDING",
+                })
         except Exception as e:
             logger.warning("NotificationService dispatch for lounge failed: %s", e)
 

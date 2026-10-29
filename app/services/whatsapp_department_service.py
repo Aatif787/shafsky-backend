@@ -425,24 +425,49 @@ class WhatsAppDepartmentService(WhatsAppDepartmentExtMixin):
     def normalize_phone_number(cls, raw: Optional[str]) -> Optional[str]:
         """
         Normalizes a phone number to international E.164 digits-only format without leading plus.
-        Specifically converts 10-digit Indian mobile numbers (e.g. 9599087957 -> 919599087957)
-        without duplicating the country code if already present.
+
+        Handles the formats the website booking form and the WhatsApp bot can produce:
+        * 10-digit Indian mobile numbers (9599087957 -> 919599087957).
+        * Numbers that already carry the country code (919599087957 stays unchanged).
+        * Indian trunk prefix variants (+91 0 98765 43210, 09876543210 -> 919876543210).
+        * International numbers (+1 415 555 2671 -> 14155552671, +44 20 7946 0958).
+        * International access prefix (0044... -> 44...).
+
+        The country code is never duplicated, and numbers that cannot be a valid
+        E.164 subscriber number are rejected instead of being sent to Meta.
         """
         cleaned = re.sub(r"\D", "", str(raw or "").strip())
         if not cleaned:
             return None
 
-        # Strip leading trunk prefix 0 (e.g. 09599087957 -> 9599087957)
-        if cleaned.startswith("0") and len(cleaned) == 11:
-            cleaned = cleaned[1:]
+        # 00 international access prefix (0044 20 7946 0958 -> 442079460958).
+        # Only when what follows is clearly an international number, not a bare
+        # national number that happens to start with two zeroes.
+        if cleaned.startswith("00") and len(cleaned) - 2 > 10:
+            cleaned = cleaned[2:]
 
-        # If 10 digits (standard Indian mobile starting with 6, 7, 8, or 9), prepend country code 91
+        # Indian trunk prefix 0: 09876543210 -> 9876543210, or 91 0 98765 43210 -> 91 98765 43210
+        if cleaned.startswith("0"):
+            cleaned = cleaned.lstrip("0")
+        elif cleaned.startswith("91") and len(cleaned) == 13 and cleaned[2] == "0":
+            cleaned = cleaned[:2] + cleaned[3:]
+
+        if not cleaned:
+            return None
+
+        # Bare national numbers: India is the documented default of the booking form.
         if len(cleaned) == 10:
             cleaned = f"91{cleaned}"
 
-        if len(cleaned) >= 10:
-            return cleaned
-        return None
+        # E.164 allows 8-15 significant digits including the country code.
+        if not 10 <= len(cleaned) <= 15:
+            return None
+
+        # Reject leading zeros that survived normalization (invalid country code).
+        if cleaned.startswith("0"):
+            return None
+
+        return cleaned
 
     @classmethod
     def get_recipient_phone_numbers(cls) -> List[str]:
@@ -501,12 +526,29 @@ class WhatsAppDepartmentService(WhatsAppDepartmentExtMixin):
         return clean
 
     @classmethod
+    def to_template_parameter(cls, text: str) -> str:
+        """Returns a value that is legal inside a Meta BODY parameter.
+
+        Meta rejects parameters containing new-line or tab characters, or more than
+        four consecutive spaces (the API accepts the request but the message is
+        rejected), so a formatted multi-line alert must be flattened before it is
+        placed in {{1}}.
+        """
+        clean = cls.sanitize_template_param(str(text or ""))
+        clean = clean.replace("\r\n", " ").replace("\r", " ").replace("\n", " ").replace("\t", " ")
+        clean = re.sub(r" {2,}", " ", clean).strip()
+        if len(clean) > cls.MAX_TEMPLATE_PARAM_CHARS:
+            clean = clean[: cls.MAX_TEMPLATE_PARAM_CHARS - 3].rstrip() + "..."
+        return clean
+
+    @classmethod
     def build_template_components(cls, message_body: str) -> List[Dict[str, Any]]:
         """
         Builds Meta-compliant template components.
-        Ensures all parameters strictly stay under Meta's 1024-character maximum.
+        Ensures all parameters stay under Meta's 1024-character maximum and contain
+        no new-line/tab characters or runs of more than four spaces.
         """
-        param_text = cls.sanitize_template_param(message_body)
+        param_text = cls.to_template_parameter(message_body)
         return [
             {
                 "type": "body",

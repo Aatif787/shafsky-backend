@@ -4,6 +4,7 @@ delivery helpers for NotificationService.
 """
 
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -18,10 +19,79 @@ def _ns():
     return ns_mod
 
 
+# Meta Cloud API rejects any template body parameter that contains a new-line or
+# tab character, or more than four consecutive spaces. A formatted multi-line
+# alert therefore cannot be used directly as {{1}} -- the request is accepted by
+# HTTP but Meta answers 132018 / 132000 and the customer never receives it.
+TEMPLATE_PARAM_MAX_CHARS = 900  # leaves headroom inside Meta's 1024-char BODY limit
+
+
+def build_template_parameter(value: Any, max_chars: int = TEMPLATE_PARAM_MAX_CHARS) -> str:
+    """Return a single-line string that is safe to place inside a template variable.
+
+    Enforces the three documented Meta rules for template parameters:
+    no new-line characters, no tabs, and never more than four consecutive spaces.
+    """
+    text = str(value or "")
+    text = text.replace("\r\n", " ").replace("\r", " ").replace("\n", " ").replace("\t", " ")
+    text = re.sub(r" {2,}", " ", text)
+    text = text.strip()
+    if max_chars and len(text) > max_chars:
+        text = text[: max_chars - 3].rstrip() + "..."
+    return text
+
+
+def build_customer_summary(
+    *,
+    reference_label: str,
+    reference: str,
+    guest_name: Optional[str] = None,
+    service: Optional[str] = None,
+    airport: Optional[str] = None,
+    location_label: str = "Airport",
+    date_time: Optional[str] = None,
+    flight_num: Optional[str] = None,
+    passengers: Optional[Any] = None,
+    amount: Optional[float] = None,
+    currency: Optional[str] = None,
+    status_label: Optional[str] = None,
+) -> str:
+    """Builds the single-line booking/enquiry summary used as the {{1}} value."""
+    parts: List[str] = [f"{reference_label}: {reference}"]
+    if guest_name:
+        parts.append(f"Guest: {guest_name}")
+    if service:
+        parts.append(f"Service: {service}")
+    if airport:
+        parts.append(f"{location_label}: {airport}")
+    if date_time:
+        parts.append(f"Date: {date_time}")
+    if flight_num:
+        parts.append(f"Flight: {flight_num}")
+    try:
+        pax = int(passengers) if passengers is not None else 0
+    except (TypeError, ValueError):
+        pax = 0
+    if pax > 0:
+        parts.append(f"Guests: {pax}")
+    if amount is not None:
+        try:
+            amount_value = float(amount)
+        except (TypeError, ValueError):
+            amount_value = 0.0
+        if amount_value > 0:
+            code = (currency or "INR").upper()
+            parts.append(f"Amount: {code} {amount_value:,.0f}")
+    if status_label:
+        parts.append(f"Status: {status_label}")
+    return build_template_parameter(" | ".join(parts))
+
+
 class NotificationServiceExtMixin:
     """Mixin providing extended WhatsApp and confirmation methods for NotificationService."""
 
     WHATSAPP_CUSTOMER_CONFIRMATION_TEMPLATE_TYPE = "WHATSAPP_CUSTOMER_CONFIRMATION"
+    WHATSAPP_CUSTOMER_ENQUIRY_TEMPLATE_TYPE = "WHATSAPP_CUSTOMER_ENQUIRY_ACK"
     WHATSAPP_INVOICE_TEMPLATE = "WHATSAPP_INVOICE_PDF"
 
     @classmethod
@@ -453,8 +523,14 @@ class NotificationServiceExtMixin:
                     elif not template_lang and "=" not in extra:
                         template_lang = extra
 
+        if template_lang.startswith("WHATSAPP_CUSTOMER_TEMPLATE_LANG="):
+            template_lang = template_lang.split("=", 1)[1].strip()
+
         if not template_lang:
-            template_lang = "en_US"
+            # The approved template `shafsky_booking_confirmation` is registered on the
+            # WhatsApp Business Account as language "en". Sending "en_US" for it returns
+            # 132001 (template does not exist in the requested language).
+            template_lang = "en"
 
         return template_name, template_lang
 
@@ -669,45 +745,11 @@ class NotificationServiceExtMixin:
 
         support_phone = getattr(settings, "SUPPORT_PHONE", None) or os.getenv("SUPPORT_PHONE") or "+91 9599087959"
 
-        payload = {
-            "booking_ref": booking_ref,
-            "customer_phone": clean_phone,
-            "passenger_name": customer_name,
-            "airport": airport_name,
-            "service_type": service_type,
-            "flight_num": flight_num,
-            "date_time": date_time_str,
-            "status": "CONFIRMED",
-            "support_phone": support_phone,
-        }
-
-        # 6. Idempotency Check & Atomic Claim
-        record, action = cls._acquire_notification_claim(
-            db,
-            template_type=cls.WHATSAPP_CUSTOMER_CONFIRMATION_TEMPLATE_TYPE,
-            booking_ref=booking_ref,
-            recipient=clean_phone,
-            channel="WHATSAPP",
-            payload=payload,
-        )
-
-        if action in ("ALREADY_DELIVERED", "IN_PROGRESS"):
-            logger.info(
-                "[Customer WhatsApp] Skipping duplicate customer notification (%s) for %s",
-                action,
-                booking_ref,
-            )
-            return {"status": "SKIPPED", "reason": "duplicate", "claim_status": action, "booking_ref": booking_ref}
-        if action == "MAX_ATTEMPTS_EXCEEDED":
-            logger.warning(
-                "[Customer WhatsApp] Max attempts exceeded for customer notification %s",
-                booking_ref,
-            )
-            return {"status": "FAILED", "error": "max_attempts_exceeded", "booking_ref": booking_ref}
-        if not record:
-            return {"status": "FAILED", "error": "claim_failed", "booking_ref": booking_ref}
-
-        # 7. Format Message Content
+        # 6. Format Message Content
+        #    `message_body` is only used for the freeform fallback (inside the 24h
+        #    window). The template variable MUST be a single line: Meta rejects
+        #    new-line/tab characters in body parameters, which silently dropped
+        #    every customer confirmation while the API still returned 200/4xx.
         lines = [
             "✈️ *Shafsky Aviation Services — Booking Confirmed*",
             "",
@@ -730,13 +772,197 @@ class NotificationServiceExtMixin:
         ])
         message_body = "\n".join(lines)
 
-        # 8. Template Resolution & Dispatch
-        template_name, template_lang = cls._resolve_customer_template_settings()
+        total_amount_raw = context.get("total_amount")
+        if total_amount_raw is None and booking is not None:
+            total_amount_raw = getattr(booking, "total_amount", None)
+        passengers_raw = (
+            context.get("passenger_count")
+            or context.get("passengerCount")
+            or meta.get("passenger_count")
+            or meta.get("guest_count")
+        )
+        template_param = build_customer_summary(
+            reference_label="Booking reference",
+            reference=booking_ref,
+            guest_name=customer_name,
+            service=service_type,
+            airport=airport_name,
+            date_time=date_time_str,
+            flight_num=flight_num,
+            passengers=passengers_raw,
+            amount=total_amount_raw,
+            currency=context.get("currency") or (getattr(booking, "currency", None) if booking else None),
+            status_label="CONFIRMED",
+        )
+
+        payload = {
+            "booking_ref": booking_ref,
+            "recipient_masked": WhatsAppDepartmentService._mask_phone(clean_phone),
+            "passenger_name": customer_name,
+            "airport": airport_name,
+            "service_type": service_type,
+            "flight_num": flight_num,
+            "date_time": date_time_str,
+            "status": "CONFIRMED",
+            "support_phone": support_phone,
+        }
+
+        # 7. Idempotency Claim, Template Resolution & Dispatch
+        return cls._dispatch_customer_whatsapp(
+            db,
+            booking_ref=booking_ref,
+            clean_phone=clean_phone,
+            template_type=cls.WHATSAPP_CUSTOMER_CONFIRMATION_TEMPLATE_TYPE,
+            message_body=message_body,
+            template_param=template_param,
+            payload=payload,
+        )
+
+    @classmethod
+    def _customer_notification_already_handled(
+        cls,
+        db: Session,
+        *,
+        template_type: str,
+        booking_ref: str,
+        recipient: str,
+    ) -> Optional[str]:
+        """Returns a claim action when this customer notification must not be sent again.
+
+        `NotificationRecord.COMPLETED` means Meta accepted the message but has not
+        confirmed delivery yet, and `PENDING` means a timeout left the outcome
+        unknown. Neither may be re-sent blindly: the Cloud API has no idempotency
+        key, so a retry would duplicate a message the customer may already have.
+        """
+        if db is None or not booking_ref:
+            return None
+        try:
+            records = list(
+                db.scalars(
+                    select(NotificationRecord)
+                    .where(NotificationRecord.template_type == template_type)
+                    .order_by(desc(NotificationRecord.created_at))
+                    .limit(50)
+                ).all()
+            )
+        except Exception as db_err:  # pragma: no cover - defensive
+            _ = db_err
+            return None
+
+        rec_clean = (recipient or "").strip()
+        for record in records:
+            payload = record.payload if isinstance(record.payload, dict) else {}
+            ref = str(payload.get("booking_ref") or payload.get("bookingRef") or "").strip()
+            if ref != booking_ref.strip():
+                continue
+            record_recipient = (record.recipient_email or record.recipient_phone or "").strip()
+            if rec_clean and not (
+                record_recipient == rec_clean
+                or (len(rec_clean) >= 10 and rec_clean[-10:] in record_recipient)
+            ):
+                continue
+            if record.status in (
+                NotificationStatus.DELIVERED,
+                NotificationStatus.BYPASSED,
+                NotificationStatus.COMPLETED,
+                NotificationStatus.READ,
+                NotificationStatus.OPENED,
+            ):
+                return "ALREADY_DELIVERED"
+            if record.status in (NotificationStatus.PENDING, NotificationStatus.PROCESSING):
+                return "IN_PROGRESS"
+        return None
+
+    @classmethod
+    def _dispatch_customer_whatsapp(
+        cls,
+        db: Session,
+        *,
+        booking_ref: str,
+        clean_phone: str,
+        template_type: str,
+        message_body: str,
+        template_param: str,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Claims, sends and records one customer WhatsApp notification.
+
+        Honest reporting rules:
+        * Meta acceptance (HTTP 200 + wamid) stores COMPLETED, not DELIVERED. Only the
+          delivery-status webhook may move a record to DELIVERED.
+        * A timeout is ambiguous, so the record is held as PENDING and never retried
+          automatically (the Cloud API has no idempotency key).
+        """
+        from app.services.whatsapp_department_service import WhatsAppDepartmentService
+
+        ns = _ns()
+        whatsapp_client = ns.whatsapp_client
+        logger = ns.logger
         masked_phone = WhatsAppDepartmentService._mask_phone(clean_phone)
 
+        prior_action = cls._customer_notification_already_handled(
+            db,
+            template_type=template_type,
+            booking_ref=booking_ref,
+            recipient=clean_phone,
+        )
+        if prior_action:
+            logger.info(
+                "[Customer WhatsApp] Skipping duplicate customer notification (%s, template=%s) for %s",
+                prior_action,
+                template_type,
+                booking_ref,
+            )
+            return {
+                "status": "SKIPPED",
+                "reason": "duplicate",
+                "claim_status": prior_action,
+                "booking_ref": booking_ref,
+            }
+
+        # A booking workflow must never fail because a notification claim failed
+        # (a stub/non-ORM session also lands here; the booking itself is already committed).
         try:
+            record, action = cls._acquire_notification_claim(
+                db,
+                template_type=template_type,
+                booking_ref=booking_ref,
+                recipient=clean_phone,
+                channel="WHATSAPP",
+                payload=payload,
+            )
+        except Exception as claim_err:
+            logger.error(
+                "[Customer WhatsApp] Could not claim %s for %s: %s",
+                template_type,
+                booking_ref,
+                type(claim_err).__name__,
+            )
+            return {"status": "FAILED", "error": "claim_failed", "booking_ref": booking_ref}
+
+        if action in ("ALREADY_DELIVERED", "IN_PROGRESS"):
+            logger.info(
+                "[Customer WhatsApp] Skipping duplicate customer notification (%s, template=%s) for %s",
+                action,
+                template_type,
+                booking_ref,
+            )
+            return {"status": "SKIPPED", "reason": "duplicate", "claim_status": action, "booking_ref": booking_ref}
+        if action == "MAX_ATTEMPTS_EXCEEDED":
+            logger.warning(
+                "[Customer WhatsApp] Max attempts exceeded for customer notification %s (template=%s)",
+                booking_ref,
+                template_type,
+            )
+            return {"status": "FAILED", "error": "max_attempts_exceeded", "booking_ref": booking_ref}
+        if not record:
+            return {"status": "FAILED", "error": "claim_failed", "booking_ref": booking_ref}
+
+        template_name, template_lang = cls._resolve_customer_template_settings()
+        param_text = build_template_parameter(template_param)
+
+        def _send(language: str) -> Dict[str, Any]:
             if template_name:
-                param_text = WhatsAppDepartmentService.sanitize_template_param(message_body)
                 components = [
                     {
                         "type": "body",
@@ -745,17 +971,24 @@ class NotificationServiceExtMixin:
                         ]
                     }
                 ]
-                res = whatsapp_client.send_message(
+                return whatsapp_client.send_message(
                     to_phone=clean_phone,
                     template_name=template_name,
-                    template_language=template_lang,
+                    template_language=language,
                     template_components=components,
                 )
-            else:
-                res = whatsapp_client.send_text_message(
-                    to_phone=clean_phone,
-                    message_body=message_body,
-                )
+            logger.warning(
+                "[Customer WhatsApp] No approved template configured; falling back to freeform text "
+                "for %s. Meta only accepts freeform text inside the 24-hour service window (131047 otherwise).",
+                booking_ref,
+            )
+            return whatsapp_client.send_text_message(
+                to_phone=clean_phone,
+                message_body=message_body,
+            )
+
+        try:
+            res = _send(template_lang)
         except Exception as send_err:
             logger.exception(
                 "[Customer WhatsApp] Exception sending notification for %s to %s: %s",
@@ -769,43 +1002,104 @@ class NotificationServiceExtMixin:
                 "status": "failed",
             }
 
-        # 9. Update NotificationRecord & Safely Return
+        # 132001 = the template is not registered under the configured language. It is
+        # rejected before any message is created (no wamid), so a single retry cannot
+        # duplicate a delivery. The usual cause is a regional code (en_US) configured for
+        # a template approved as the base language (en).
+        if (
+            template_name
+            and not res.get("success")
+            and res.get("error_code") == 132001
+            and "_" in template_lang
+        ):
+            base_lang = template_lang.split("_", 1)[0].strip()
+            if base_lang and base_lang != template_lang:
+                logger.error(
+                    "[Customer WhatsApp] Template '%s' is not approved for language '%s' (132001). "
+                    "Retrying once with '%s'. Fix WHATSAPP_CUSTOMER_TEMPLATE_LANG in the deployment "
+                    "environment so it matches the approved template language.",
+                    template_name,
+                    template_lang,
+                    base_lang,
+                )
+                try:
+                    retry_res = _send(base_lang)
+                except Exception as retry_err:
+                    logger.error(
+                        "[Customer WhatsApp] Language fallback send raised for %s: %s",
+                        booking_ref,
+                        type(retry_err).__name__,
+                    )
+                    retry_res = None
+                if retry_res and retry_res.get("success"):
+                    res = retry_res
+                    template_lang = base_lang
+
         is_success = res.get("success") is True
         message_id = res.get("message_id")
+        error_code = res.get("error_code")
+        http_status = res.get("status_code")
         now = datetime.now(timezone.utc)
 
+        delivery_diag: Dict[str, Any] = {
+            "template": template_name or None,
+            "template_language": template_lang if template_name else None,
+            "parameter_chars": len(param_text),
+            "api_status": res.get("status"),
+            "http_status": http_status,
+            "error_code": error_code,
+            "message_id": str(message_id) if message_id else None,
+            "updated_at": now.isoformat(),
+        }
+        record.payload = {**(record.payload or payload), "delivery": delivery_diag}
+
         if is_success and message_id:
-            record.status = NotificationStatus.DELIVERED
-            record.delivered_at = now
+            record.status = NotificationStatus.COMPLETED
             record.message_id = str(message_id)
             record.error_log = None
             outcome = "ACCEPTED"
             logger.info(
-                "[Customer WhatsApp] Booking confirmation accepted by Meta for %s (to=%s, message_id=%s)",
+                "[Customer WhatsApp] %s accepted by Meta for %s (to=%s, template=%s/%s, message_id=%s, "
+                "http=%s). Delivery is unconfirmed until the status webhook arrives.",
+                template_type,
                 booking_ref,
                 masked_phone,
+                template_name or "freeform",
+                template_lang if template_name else "-",
                 message_id,
+                http_status,
             )
         elif res.get("status") == "timeout_unverified":
             record.status = NotificationStatus.PENDING
-            record.error_log = "Timeout connecting to Meta WhatsApp API; delivery state unknown."
+            record.error_log = "Timeout connecting to Meta WhatsApp API; delivery state unknown (not retried automatically)."
             outcome = "UNKNOWN"
             logger.error(
-                "[Customer WhatsApp] Send timed out for %s (to=%s); delivery state unknown.",
+                "[Customer WhatsApp] Send timed out for %s (to=%s, template=%s/%s); delivery state unknown, "
+                "not retrying to avoid a duplicate.",
                 booking_ref,
                 masked_phone,
+                template_name or "freeform",
+                template_lang if template_name else "-",
             )
         else:
             record.status = NotificationStatus.FAILED
             err_text = str(res.get("error") or res.get("error_user_msg") or "delivery_failed")
+            if error_code == 132001:
+                err_text = (
+                    f"{err_text} | template '{template_name}' is not approved for language "
+                    f"'{template_lang}'; align WHATSAPP_CUSTOMER_TEMPLATE_LANG with Meta"
+                )
             record.error_log = err_text[:400]
             outcome = "FAILED"
-            error_code = res.get("error_code")
             logger.error(
-                "[Customer WhatsApp] Send failed for %s to %s (code=%s): %s",
+                "[Customer WhatsApp] Send failed for %s (to=%s, template=%s/%s, http=%s, code=%s, subcode=%s): %s",
                 booking_ref,
                 masked_phone,
+                template_name or "freeform",
+                template_lang if template_name else "-",
+                http_status,
                 error_code,
+                res.get("error_subcode"),
                 err_text,
             )
 
@@ -822,8 +1116,212 @@ class NotificationServiceExtMixin:
             "recipient_phone": masked_phone,
             "message_id": message_id,
             "template_configured": bool(template_name),
+            "template_language": template_lang if template_name else None,
+            "error_code": error_code,
             "error": record.error_log if outcome == "FAILED" else None,
         }
+
+    @classmethod
+    def send_customer_whatsapp_enquiry_acknowledgement(
+        cls,
+        db: Session,
+        context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Sends the customer an acknowledgement for a quote-only website enquiry.
+
+        Enquiries (hotel, ground transport, lounge, ticketing, visa, service query) are
+        persisted as PENDING zero-value bookings and are NOT confirmed bookings. They
+        must never receive the "Booking Confirmed" wording, so this path reuses the
+        same approved Meta template (its body says the request "has been received")
+        with an enquiry-specific summary and its own idempotency key.
+        """
+        from unittest.mock import MagicMock
+        from app.services.whatsapp_department_service import WhatsAppDepartmentService
+
+        ns = _ns()
+        settings = ns.settings
+        whatsapp_client = ns.whatsapp_client
+        logger = ns.logger
+
+        booking_ref = str(context.get("booking_ref") or context.get("bookingRef") or "").strip()
+        if not booking_ref:
+            logger.warning("[Customer WhatsApp] Enquiry acknowledgement skipped: missing reference")
+            return {"status": "SKIPPED", "reason": "missing_booking_ref"}
+
+        # Without a real ORM session the idempotency claim cannot be persisted, so a
+        # send here could not be deduplicated (duplicate customer messages on retry).
+        from sqlalchemy.orm import Session as _OrmSession
+        if not isinstance(db, _OrmSession):
+            logger.warning(
+                "[Customer WhatsApp] Enquiry acknowledgement skipped for %s: no ORM session to record the claim",
+                booking_ref,
+            )
+            return {"status": "SKIPPED", "reason": "no_orm_session", "booking_ref": booking_ref}
+
+        booking = None
+        if db is not None and not isinstance(db, MagicMock):
+            try:
+                from app.models.schema import Booking
+                booking = db.scalar(select(Booking).where(Booking.booking_ref == booking_ref))
+            except Exception as db_err:
+                logger.debug("[Customer WhatsApp] DB lookup for booking %s: %s", booking_ref, db_err)
+
+        if booking is not None and not isinstance(booking, MagicMock):
+            from app.models.schema import BookingStatus
+            if isinstance(booking.status, BookingStatus) and booking.status in (
+                BookingStatus.CONFIRMED,
+                BookingStatus.CANCELLED,
+                BookingStatus.REJECTED,
+                BookingStatus.COMPLETED,
+            ):
+                logger.info(
+                    "[Customer WhatsApp] Enquiry acknowledgement skipped for %s: booking is already '%s'",
+                    booking_ref,
+                    booking.status.value if hasattr(booking.status, "value") else booking.status,
+                )
+                return {
+                    "status": "SKIPPED",
+                    "reason": "not_an_open_enquiry",
+                    "booking_ref": booking_ref,
+                }
+
+        raw_phone = (
+            context.get("passenger_phone")
+            or context.get("passengerPhone")
+            or context.get("phone")
+            or context.get("contact_phone")
+        )
+        if not raw_phone and booking is not None and not isinstance(booking, MagicMock):
+            raw_phone = getattr(booking, "passenger_phone", None)
+
+        if not raw_phone or not str(raw_phone).strip():
+            logger.warning(
+                "[Customer WhatsApp] Enquiry acknowledgement skipped for %s: missing customer mobile number",
+                booking_ref,
+            )
+            return {"status": "SKIPPED", "reason": "missing_customer_phone", "booking_ref": booking_ref}
+
+        clean_phone = WhatsAppDepartmentService.normalize_phone_number(raw_phone)
+        if not clean_phone or len(clean_phone) < 10:
+            logger.warning(
+                "[Customer WhatsApp] Enquiry acknowledgement failed for %s: invalid customer phone '%s'",
+                booking_ref,
+                WhatsAppDepartmentService._mask_phone(str(raw_phone)),
+            )
+            return {"status": "FAILED", "reason": "invalid_customer_phone", "booking_ref": booking_ref}
+
+        if not whatsapp_client.is_configured():
+            logger.warning(
+                "[Customer WhatsApp] Enquiry acknowledgement skipped for %s: Meta WhatsApp Cloud API credentials not configured",
+                booking_ref,
+            )
+            return {"status": "BYPASSED", "reason": "whatsapp_client_unconfigured", "booking_ref": booking_ref}
+
+        meta_details = (context.get("details") or {}) if isinstance(context.get("details"), dict) else {}
+        options = (context.get("service_options") or {}) if isinstance(context.get("service_options"), dict) else {}
+        booking_meta = (getattr(booking, "metadata_json", None) or {}) if booking is not None and not isinstance(booking, MagicMock) else {}
+        if not isinstance(booking_meta, dict):
+            booking_meta = {}
+        booking_details = booking_meta.get("details") or {}
+        if not isinstance(booking_details, dict):
+            booking_details = {}
+
+        customer_name = str(
+            context.get("passenger_name")
+            or context.get("passengerName")
+            or (getattr(booking, "passenger_name", None) if booking is not None and not isinstance(booking, MagicMock) else None)
+            or "Valued Guest"
+        ).strip()
+
+        service_type = str(
+            context.get("service_name")
+            or context.get("service_type")
+            or context.get("serviceType")
+            or meta_details.get("service_type")
+            or (getattr(booking, "service_type", None) if booking is not None and not isinstance(booking, MagicMock) else None)
+            or "Travel Service"
+        ).strip()
+
+        service_category = str(
+            context.get("service_category")
+            or context.get("serviceCategory")
+            or booking_meta.get("service_category")
+            or (getattr(booking, "service_category", None) if booking is not None and not isinstance(booking, MagicMock) else None)
+            or "Enquiry"
+        ).strip()
+
+        route_bits = [
+            str(context.get("origin_code") or context.get("origin") or "").strip(),
+            str(context.get("dest_code") or context.get("destination") or "").strip(),
+        ]
+        route = " → ".join(bit for bit in route_bits if bit)
+
+        date_raw = (
+            context.get("departure_time")
+            or context.get("service_date")
+            or meta_details.get("service_date")
+            or booking_details.get("service_date")
+        )
+        date_time_str = None
+        if date_raw:
+            if isinstance(date_raw, datetime):
+                date_time_str = date_raw.strftime("%d %b %Y, %H:%M")
+            else:
+                date_time_str = str(date_raw).strip()[:40]
+
+        support_phone = getattr(settings, "SUPPORT_PHONE", None) or os.getenv("SUPPORT_PHONE") or "+91 9599087959"
+
+        message_body = "\n".join(
+            [
+                "✈️ *Shafsky Aviation Services — Enquiry Received*",
+                "",
+                f"Dear *{customer_name}*,",
+                "",
+                "Thank you for contacting Shafsky Aviation Services. Your request has been received and is with our desk.",
+                "",
+                f"• *Enquiry Reference:* {booking_ref}",
+                f"• *Service:* {service_type}",
+            ]
+            + ([f"• *Route:* {route}"] if route else [])
+            + ([f"• *Date:* {date_time_str}"] if date_time_str else [])
+            + [
+                "• *Status:* Enquiry received — quotation to follow (no payment has been taken)",
+                "",
+                f"Our 24/7 command desk is at your disposal: {support_phone}.",
+            ]
+        )
+
+        template_param = build_customer_summary(
+            reference_label="Enquiry reference",
+            reference=booking_ref,
+            guest_name=customer_name,
+            service=f"{service_category} - {service_type}" if service_category and service_category not in service_type else service_type,
+            airport=route or None,
+            location_label="Route",
+            date_time=date_time_str,
+            status_label="Enquiry received, quotation to follow (no payment taken)",
+        )
+
+        payload = {
+            "booking_ref": booking_ref,
+            "recipient_masked": WhatsAppDepartmentService._mask_phone(clean_phone),
+            "passenger_name": customer_name,
+            "service_category": service_category,
+            "service_type": service_type,
+            "date_time": date_time_str,
+            "status": "ENQUIRY",
+            "support_phone": support_phone,
+        }
+
+        return cls._dispatch_customer_whatsapp(
+            db,
+            booking_ref=booking_ref,
+            clean_phone=clean_phone,
+            template_type=cls.WHATSAPP_CUSTOMER_ENQUIRY_TEMPLATE_TYPE,
+            message_body=message_body,
+            template_param=template_param,
+            payload=payload,
+        )
 
     @classmethod
     def _already_sent_whatsapp_invoice(cls, db: Session, booking_ref: str) -> bool:
