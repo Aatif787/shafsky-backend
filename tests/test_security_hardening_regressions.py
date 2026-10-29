@@ -42,6 +42,10 @@ def test_cors_origin_regex_blocks_dev_origins_in_production(monkeypatch):
         assert rx.match("https://my-tunnel.ngrok-free.app") is None
         assert rx.match("https://evil-attacker.vercel.app") is None
         assert rx.match("https://notshafsky.vercel.app") is None
+        assert rx.match("https://shafsky-attacker.vercel.app") is None
+        assert rx.match("https://shafsky-fake.vercel.app") is None
+        assert rx.match("https://shafsky-frontend.vercel.app") is not None
+        assert rx.match("https://shafsky.vercel.app") is not None
     finally:
         cors_origins._COMPILED.clear()
         cors_origins._ALLOWED_CACHE.clear()
@@ -398,3 +402,45 @@ def test_whatsapp_timeout_is_not_retried(monkeypatch):
     res = whatsapp_client.send_message(to_phone="+919999999999", message_body="hi")
     assert calls["n"] == 1
     assert res.get("status") == "timeout_unverified"
+
+
+# =============================================================================
+# S1: Cryptographic domain separation for payment session secret
+# =============================================================================
+
+def test_payment_session_secret_domain_separation(monkeypatch):
+    import os
+    from app.security.payment_token import payment_session_secret
+
+    monkeypatch.setenv("PAYMENT_SESSION_SECRET", "")
+    monkeypatch.setenv("JWT_SECRET", "super-secret-jwt-key-for-test-32bytes!!")
+    monkeypatch.setattr(settings, "PAYMENT_SESSION_SECRET", "")
+    monkeypatch.setattr(settings, "JWT_SECRET", "super-secret-jwt-key-for-test-32bytes!!")
+
+    secret1 = payment_session_secret()
+    # Must NOT equal raw JWT_SECRET bytes
+    assert secret1 != b"super-secret-jwt-key-for-test-32bytes!!"
+    assert len(secret1) == 32  # SHA256 digest length
+
+    # Explicit secret wins when set
+    monkeypatch.setenv("PAYMENT_SESSION_SECRET", "explicit-payment-secret-1234567890")
+    monkeypatch.setattr(settings, "PAYMENT_SESSION_SECRET", "explicit-payment-secret-1234567890")
+    assert payment_session_secret() == b"explicit-payment-secret-1234567890"
+
+
+# =============================================================================
+# S2: Status & enquiry rate limit policy prevents enumeration
+# =============================================================================
+
+def test_status_lookup_rate_limit_policy():
+    from app.security.middleware import get_rate_limit_policy
+
+    policy1 = get_rate_limit_policy("GET", "/api/bookings/SHF-123456/status")
+    assert policy1 is not None
+    assert policy1["category"] == "status_lookup"
+    assert policy1["max_requests"] == 30
+
+    policy2 = get_rate_limit_policy("GET", "/api/lounges/enquiries/ENQ-999")
+    assert policy2 is not None
+    assert policy2["category"] == "status_lookup"
+    assert policy2["max_requests"] == 30

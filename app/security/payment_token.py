@@ -28,18 +28,36 @@ def _b64url_decode(raw: str) -> bytes:
 
 
 def payment_session_secret() -> bytes:
-    raw = (
+    """Return the HMAC key used to sign guest payment session tokens.
+
+    If PAYMENT_SESSION_SECRET is explicitly configured, it is used directly.
+    If only JWT_SECRET is available, derive a cryptographically isolated key
+    via HMAC-SHA256 domain separation to prevent cross-protocol key reuse.
+    """
+    explicit = (
         os.getenv("PAYMENT_SESSION_SECRET")
         or getattr(settings, "PAYMENT_SESSION_SECRET", "")
-        or os.getenv("JWT_SECRET")
+        or ""
+    ).strip()
+    if explicit:
+        return explicit.encode("utf-8")
+
+    jwt_sec = (
+        os.getenv("JWT_SECRET")
         or getattr(settings, "JWT_SECRET", "")
         or ""
     ).strip()
-    if not raw:
-        if settings.is_production:
-            raise RuntimeError("PAYMENT_SESSION_SECRET (or JWT_SECRET) must be configured.")
-        raw = "dev-payment-session-secret-not-for-production"
-    return raw.encode("utf-8")
+    if jwt_sec:
+        # Cryptographic domain separation prevents key-reuse across auth & payment contexts
+        return hmac.new(
+            jwt_sec.encode("utf-8"),
+            b"shafsky-payment-session-token-v1",
+            hashlib.sha256,
+        ).digest()
+
+    if settings.is_production:
+        raise RuntimeError("PAYMENT_SESSION_SECRET (or JWT_SECRET) must be configured.")
+    return b"dev-payment-session-secret-not-for-production" 
 
 
 def payment_session_ttl_seconds() -> int:

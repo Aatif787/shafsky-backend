@@ -116,6 +116,13 @@ def get_rate_limit_policy(method: str, path: str) -> Optional[Dict[str, Any]]:
     ):
         return {"category": "booking_create", "key_prefix": "rate_limit_booking_create", "max_requests": 15, "window_seconds": 60}
 
+    # 8b. Reference Status & Enquiry Lookups (prevents high-speed reference enumeration)
+    if m == "GET" and (
+        (p.startswith("/api/bookings/") and p.endswith("/status"))
+        or p.startswith("/api/lounges/enquiries/")
+    ):
+        return {"category": "status_lookup", "key_prefix": "rate_limit_status_lookup", "max_requests": 30, "window_seconds": 60}
+
     # 9. Broad /api/ bucket
     if p.startswith("/api/"):
         return {"category": "api", "key_prefix": "rate_limit_api", "max_requests": 200, "window_seconds": 60}
