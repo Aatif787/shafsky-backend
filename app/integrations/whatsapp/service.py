@@ -166,13 +166,13 @@ PROTECTED_STATES = {
 
 
 class WhatsAppBookingStateMachine(
+    WhatsAppStateMachineExtMixin,
     AirportFlowMixin,
     FlightFlowMixin,
     DetailsFlowMixin,
     CharterHotelFlowMixin,
     TravelServicesFlowMixin,
     ReviewPaymentFlowMixin,
-    WhatsAppStateMachineExtMixin,
 ):
     """
     Persistent state machine processor for Shafsky Aviation WhatsApp Booking Flow.
@@ -773,3 +773,91 @@ class WhatsAppBookingStateMachine(
                 ),
             )
             return {"status": "error", "error": str(e)}
+
+    @classmethod
+    def _merge_flight_details(
+        cls, db: Session, conv: WhatsAppConversation, extra: Dict[str, Any]
+    ) -> None:
+        meta = dict(conv.flight_details_json) if isinstance(conv.flight_details_json, dict) else {}
+        meta.update(extra)
+        conv.flight_details_json = meta
+        flag_modified(conv, "flight_details_json")
+        db.commit()
+
+    @classmethod
+    def _set_wa_state_key(
+        cls, db: Session, conv: WhatsAppConversation, key: str, value: Any
+    ) -> None:
+        """Set (or remove, when value is None) a key in the transient WhatsApp UI state."""
+        state = dict(conv.whatsapp_state_json) if isinstance(conv.whatsapp_state_json, dict) else {}
+        if value is None:
+            state.pop(key, None)
+        else:
+            state[key] = value
+        conv.whatsapp_state_json = state
+        flag_modified(conv, "whatsapp_state_json")
+        db.commit()
+
+    @classmethod
+    def _get_wa_state_key(cls, conv: WhatsAppConversation, key: str) -> Any:
+        if isinstance(conv.whatsapp_state_json, dict):
+            return conv.whatsapp_state_json.get(key)
+        return None
+
+    @staticmethod
+    def _parse_utc_iso(raw: Any) -> Optional[datetime]:
+        """Parse an ISO timestamp stored in JSON state. Naive values are treated as UTC."""
+        if not raw:
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(raw))
+        except (TypeError, ValueError):
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+
+    @classmethod
+    def _payment_options_active(cls, conv: WhatsAppConversation) -> bool:
+        """
+        True only while the Continue Payment / Cancel & Start New prompt is live.
+        Bare "1"/"2" must not cancel a booking outside this window.
+        """
+        prompted_at = cls._parse_utc_iso(
+            cls._get_wa_state_key(conv, "payment_options_prompted_at")
+        )
+        if prompted_at is None:
+            return False
+        age = cls._inactivity_seconds(prompted_at, datetime.now(timezone.utc))
+        return age <= _PAYMENT_OPTIONS_TTL_SECONDS
+
+    @classmethod
+    def _store_wa_menu(cls, db: Session, conv: WhatsAppConversation, menu_items: list) -> None:
+        """Store WhatsApp UI menu state in whatsapp_state_json (not flight_details_json)."""
+        from decimal import Decimal as _Decimal
+
+        def _json_safe(value):
+            if isinstance(value, _Decimal):
+                return float(value)
+            if isinstance(value, dict):
+                return {k: _json_safe(v) for k, v in value.items()}
+            if isinstance(value, (list, tuple)):
+                return [_json_safe(v) for v in value]
+            return value
+
+        cls._set_wa_state_key(db, conv, "_wa_menu", _json_safe(list(menu_items)))
+
+    @classmethod
+    def _get_wa_menu(cls, conv: WhatsAppConversation) -> list:
+        """Retrieve stored menu from whatsapp_state_json, with backward-compat fallback."""
+        if isinstance(conv.whatsapp_state_json, dict):
+            menu = conv.whatsapp_state_json.get("_wa_menu")
+            if menu is not None:
+                return list(menu)
+        # Backward compatibility: check flight_details_json for legacy _wa_menu
+        if isinstance(conv.flight_details_json, dict):
+            menu = conv.flight_details_json.get("_wa_menu")
+            if menu is not None:
+                return list(menu)
+        return []
+

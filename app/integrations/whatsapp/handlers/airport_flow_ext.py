@@ -171,6 +171,7 @@ class AirportServiceMenuMixin(BaseFlowMixin):
             new_meta["flight_type"] = derived
             conv.flight_details_json = new_meta
             flag_modified(conv, "flight_details_json")
+            db.commit()
         return derived or tt, None
 
     @classmethod

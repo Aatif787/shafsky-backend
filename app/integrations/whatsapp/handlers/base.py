@@ -34,18 +34,6 @@ class BaseFlowMixin:
         return []
 
     @classmethod
-    def _store_wa_menu(cls, db: Session, conv: WhatsAppConversation, menu_items: List[Dict[str, Any]]) -> None:
-        pass
-
-    @classmethod
-    def _get_wa_menu(cls, conv: WhatsAppConversation) -> List[Dict[str, Any]]:
-        return []
-
-    @classmethod
-    def _set_wa_state_key(cls, db: Session, conv: WhatsAppConversation, key: str, value: Any) -> None:
-        pass
-
-    @classmethod
     def _commit_accepted_flight(
         cls, db: Session, conv: WhatsAppConversation, pending: Dict[str, Any], *, verification_status: str, extra_meta: Optional[Dict[str, Any]] = None
     ) -> None:
