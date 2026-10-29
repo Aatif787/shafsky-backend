@@ -20,10 +20,9 @@ loopback and ngrok entries are filtered out of that list (with a one-time
 warning) so stale development allowlists cannot silently re-open the API to
 developer tooling.
 
-Known tradeoff (documented, accepted for Vercel preview deployments): the
-``shafsky*`` Vercel tenant prefix still admits any Vercel project whose name
-starts with "shafsky" over HTTPS. Pin exact origins via ALLOWED_ORIGINS to
-close that gap; the regex is the fallback, not the primary control.
+Vercel production subdomains are strictly pinned to verified deployments
+(shafsky, shafsky-frontend, shafsky-admin-portal) to prevent cross-site tenant
+hijacking. Additional preview origins should be pinned via ALLOWED_ORIGINS.
 """
 import logging
 import re
@@ -44,7 +43,7 @@ _DEV_ORIGIN_REGEX = (
 
 # HTTPS-only, no localhost, no tunnels.
 _PROD_ORIGIN_REGEX = (
-    r"^https://((shafsky[a-zA-Z0-9_-]*|shafsky)\.vercel\.app|"
+    r"^https://((shafsky|shafsky-frontend|shafsky-admin-portal)\.vercel\.app|"
     r"([a-zA-Z0-9_-]+\.)*shafskyaviation\.(in|com)|"
     r"([a-zA-Z0-9_-]+\.)*shafsky\.(in|com)"
     r")(:\d+)?$"

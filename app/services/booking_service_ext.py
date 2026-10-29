@@ -236,10 +236,38 @@ class BookingServiceExtMixin:
                         "notes": notes,
                         "details": enquiry_details,
                         "service_options": options,
+                        "is_enquiry": True,
                     })
                 except Exception:
                     logger.exception(
                         "Enquiry persisted but notification dispatch failed for %s",
+                        new_booking.booking_ref,
+                    )
+
+                # Customer acknowledgement: the enquiry has been received, no booking is
+                # confirmed and no payment has been taken, so this must never use the
+                # "Booking Confirmed" wording.
+                try:
+                    from app.services.notification_service import NotificationService
+                    NotificationService.send_customer_whatsapp_enquiry_acknowledgement(db, {
+                        "booking_ref": new_booking.booking_ref,
+                        "passenger_name": new_booking.passenger_name,
+                        "passenger_email": new_booking.passenger_email,
+                        "passenger_phone": new_booking.passenger_phone,
+                        "passenger_count": enquiry_pax,
+                        "service_category": resolved_category,
+                        "service_type": new_booking.service_type,
+                        "service_name": new_booking.service_type,
+                        "origin_code": resolved_origin,
+                        "dest_code": resolved_dest,
+                        "departure_time": resolved_date,
+                        "details": enquiry_details,
+                        "service_options": options,
+                        "status": "PENDING",
+                    })
+                except Exception:
+                    logger.exception(
+                        "Enquiry persisted but customer acknowledgement failed for %s",
                         new_booking.booking_ref,
                     )
                 return new_booking
@@ -515,16 +543,53 @@ class BookingServiceExtMixin:
                 detail=f"Concurrency conflict: Booking version mismatch (expected version {expected_version}, but entity is at version {booking.version})."
             )
 
+        previous_status = booking.status
         booking.status = new_status
         booking.updated_at = datetime.now(timezone.utc)
 
         try:
             db.commit()
             db.refresh(booking)
-            return booking
         except StaleDataError:
             db.rollback()
             raise ConcurrencyException()
+
+        # The desk confirming a booking (paid, or force-confirmed with an audited reason)
+        # is the business moment the customer must be told. This is the only path that
+        # confirms an enquiry/quote booking, so without it those customers never hear back.
+        # The notification layer is idempotent per booking, so a booking already notified
+        # by payment verification is skipped instead of messaged twice.
+        if new_status == BookingStatus.CONFIRMED and previous_status != BookingStatus.CONFIRMED:
+            try:
+                from app.services.notification_service import NotificationService
+                meta = booking.metadata_json or {}
+                NotificationService.notify_booking_confirmed(db, {
+                    "booking_ref": booking.booking_ref,
+                    "passenger_name": booking.passenger_name,
+                    "passenger_email": booking.passenger_email,
+                    "passenger_phone": booking.passenger_phone,
+                    "passenger_count": meta.get("passenger_count") or meta.get("guest_count"),
+                    "service_category": getattr(booking, "service_category", None),
+                    "service_type": booking.service_type,
+                    "service_name": meta.get("package") or booking.service_type,
+                    "flight_num": booking.flight_num,
+                    "origin_code": booking.origin_code,
+                    "dest_code": booking.dest_code,
+                    "airport_code": meta.get("service_airport") or booking.origin_code or booking.dest_code,
+                    "journey_type": meta.get("journey_type"),
+                    "departure_time": booking.departure_time.isoformat() if booking.departure_time else None,
+                    "terminal": meta.get("terminal"),
+                    "total_amount": float(booking.total_amount or 0.0),
+                    "currency": booking.currency or "INR",
+                    "status": "CONFIRMED",
+                })
+            except Exception as notif_err:
+                logger.exception(
+                    "Booking %s confirmed but customer confirmation dispatch failed: %s",
+                    booking.booking_ref,
+                    type(notif_err).__name__,
+                )
+        return booking
 
     @classmethod
     def format_booking_dict(cls, booking: Booking) -> Dict[str, Any]:

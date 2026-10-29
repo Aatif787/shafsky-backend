@@ -106,6 +106,25 @@ class CharterService:
         except Exception as wa_err:
             logger.warning("Charter WhatsApp department notification failed: %s", wa_err)
 
+        # A charter request is an enquiry until the desk issues a quote.
+        try:
+            from app.services.notification_service import NotificationService
+            NotificationService.send_customer_whatsapp_enquiry_acknowledgement(db, {
+                "booking_ref": request_record.request_reference,
+                "passenger_name": request_record.customer_name,
+                "passenger_email": request_record.email,
+                "passenger_phone": request_record.phone,
+                "service_category": "Private Charter",
+                "service_name": "Private Charter",
+                "service_type": request_record.aircraft_preference or "Private Charter",
+                "origin_code": request_record.origin,
+                "dest_code": request_record.destination,
+                "departure_time": request_record.departure_date,
+                "status": "PENDING",
+            })
+        except Exception as ack_err:
+            logger.warning("Charter customer acknowledgement failed: %s", ack_err)
+
         return request_record
 
     @classmethod

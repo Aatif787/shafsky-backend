@@ -139,6 +139,32 @@ class TicketingService:
                 "Ticket booking notification dispatch skipped or failed for %s: %s", ref, notify_err
             )
 
+        # A ticketing request starts as NEW_BOOKING and is quoted by the desk, so the
+        # customer gets an acknowledgement (never a confirmation) at this point.
+        if booking.status == AirTicketStatus.NEW_BOOKING:
+            try:
+                from app.services.notification_service import NotificationService
+                NotificationService.send_customer_whatsapp_enquiry_acknowledgement(db, {
+                    "booking_ref": ref,
+                    "passenger_name": booking.contact_name,
+                    "passenger_email": booking.contact_email,
+                    "passenger_phone": booking.contact_phone,
+                    "passenger_count": booking.passenger_count,
+                    "flight_num": booking.flight_number,
+                    "origin_code": booking.origin_iata,
+                    "dest_code": booking.destination_iata,
+                    "service_category": "Ticketing",
+                    "service_type": booking.cabin_class,
+                    "service_name": f"Air Ticket ({booking.airline_name} {booking.flight_number})",
+                    "departure_time": booking.departure_time.isoformat() if booking.departure_time else None,
+                    "status": "PENDING",
+                })
+            except Exception as ack_err:
+                import logging
+                logging.getLogger("shafsky.ticketing").warning(
+                    "Ticket booking customer acknowledgement failed for %s: %s", ref, ack_err
+                )
+
         return booking
 
     @classmethod
