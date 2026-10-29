@@ -9,8 +9,45 @@ COMPANY_KNOWLEDGE: Dict[str, Any] = {
     "company": {
         "name": "Shafsky Aviation Services",
         "tagline": "World-Class Luxury Airport Concierge & Escort Services",
-        "support_email": "concierge@shafsky.com",
-        "hotline": "+91 1800-SHAFSKY"
+        "support_email": "Gro.shafskyaviation@gmail.com",
+        "hotline": "+91-9599087959",
+        "departments": [
+            {
+                "id": "dept-1",
+                "title": "Air Ticketing, Event Management, Transportation & Hotels",
+                "badge": "Aviation & Logistics",
+                "phone": "+91-9599087957",
+                "email": "shafskyaviation.social@gmail.com"
+            },
+            {
+                "id": "dept-2",
+                "title": "Visa Assistance, Air Ticketing, Hotels & General Inquiry",
+                "badge": "Visa & General Desks",
+                "phone": "+91 92175 22660",
+                "email": "commercialshafskyaviation@gmail.com"
+            },
+            {
+                "id": "dept-3",
+                "title": "Whole Guest Relationship Department",
+                "badge": "Guest Relations & VIP Care",
+                "phones": ["+91-9599087959", "+91 95996 15459"],
+                "email": "Gro.shafskyaviation@gmail.com"
+            },
+            {
+                "id": "dept-4",
+                "title": "Escalation",
+                "badge": "Management & HR Escalation",
+                "phones": ["+91 98188 50755", "+91 95992 24680"],
+                "emails": ["gm.shafskyaviation@gmail.com", "hr.shafskyaviation@gmail.com"]
+            },
+            {
+                "id": "dept-5",
+                "title": "Finance",
+                "badge": "Billing & Accounts",
+                "phone": "+91 88006 98554",
+                "email": "financeshafskyaviation@gmail.com"
+            }
+        ]
     },
     "supported_airports": [
         {"iata": "AMD", "city": "Ahmedabad", "name": "Sardar Vallabhbhai Patel International Airport"},
@@ -74,7 +111,7 @@ COMPANY_KNOWLEDGE: Dict[str, Any] = {
     "escalation_rules": {
         "auto_handoff_triggers": ["complaint", "human", "vip", "operator", "urgent"],
         "max_failed_attempts": 3,
-        "escalation_contact": "senior_ops_desk@shafsky.com"
+        "escalation_contact": "gm.shafskyaviation@gmail.com (+91 98188 50755)"
     }
 }
 
