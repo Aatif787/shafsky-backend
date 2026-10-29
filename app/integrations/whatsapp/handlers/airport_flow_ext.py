@@ -1,0 +1,622 @@
+"""
+Airport Service Package Menu & Selection Mixin for WhatsApp Booking State Machine.
+"""
+
+from decimal import Decimal
+import logging
+import sys
+from typing import Dict, Any, Optional, List, Tuple
+from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
+from sqlalchemy import select
+
+from app.models.whatsapp_models import WhatsAppConversation
+from app.models.journey_models import SupportedAirport, Service, AirportService
+from app.integrations.whatsapp.client import whatsapp_client as _default_whatsapp_client
+from app.integrations.whatsapp import copy as _default_wa_copy
+from app.integrations.whatsapp import delivery as _default_wa_delivery
+from app.services.service_config_service import ServiceConfigService, DEFAULT_SERVICE_CATALOG
+from app.integrations.whatsapp.handlers.base import BaseFlowMixin
+
+logger = logging.getLogger(__name__)
+
+
+def _af_mod():
+    return sys.modules.get("app.integrations.whatsapp.handlers.airport_flow")
+
+
+def _wa_client():
+    mod = _af_mod()
+    return getattr(mod, "whatsapp_client", _default_whatsapp_client) if mod else _default_whatsapp_client
+
+
+def _wa_copy():
+    mod = _af_mod()
+    return getattr(mod, "wa_copy", _default_wa_copy) if mod else _default_wa_copy
+
+
+def _wa_delivery():
+    mod = _af_mod()
+    return getattr(mod, "wa_delivery", _default_wa_delivery) if mod else _default_wa_delivery
+
+
+def _official_categories():
+    mod = _af_mod()
+    if mod and hasattr(mod, "OFFICIAL_CATEGORIES"):
+        return mod.OFFICIAL_CATEGORIES
+    return [
+        {"id": "cat_airport", "name": "Airport Services", "db_categories": ["Airport Assistance", "Airport Services"]},
+        {"id": "cat_travel", "name": "Travel Services", "db_categories": ["Travel Support", "Travel Services"]},
+        {"id": "cat_charter", "name": "Private Charter", "db_categories": ["Private Charter"]},
+        {"id": "cat_hotel_transport", "name": "Hotel & Transportation", "db_categories": ["Ground Transport", "Transportation Services", "Travel Support", "Hotel Services"]},
+    ]
+
+
+class AirportServiceMenuMixin(BaseFlowMixin):
+    """Mixin for Airport package retrieval, menu presentation, and service selection."""
+
+    @classmethod
+    def _get_authoritative_airport_packages(
+        cls,
+        db: Session,
+        airport_id: Any,
+        journey_type: str,
+        flight_types: List[str],
+        terminal: Optional[str] = None
+    ) -> List[Tuple[AirportService, Service]]:
+        """Retrieves authoritative packages for the airport + journey + flight types."""
+        PACKAGE_SLUGS = {
+            "silver", "silver-service", "gold", "gold-service",
+            "elite", "elite-service", "elite_plus", "elite-plus",
+            "platinum", "platinum-service", "essential", "premium", "vip"
+        }
+        STANDALONE_SLUGS = {"meet_greet", "fast_track", "lounge", "porter", "buggy", "wheelchair", "transport"}
+
+        stmt = (
+            select(AirportService, Service)
+            .join(Service, AirportService.service_id == Service.id)
+            .where(
+                AirportService.airport_id == airport_id,
+                AirportService.journey_type == journey_type,
+                AirportService.flight_type.in_(flight_types),
+                AirportService.is_available.is_(True),
+                Service.is_active.is_(True)
+            )
+            .order_by(AirportService.display_priority, Service.display_order)
+        )
+        all_rows = db.execute(stmt).all()
+
+        if not all_rows:
+            return []
+
+        if terminal:
+            term_norm = terminal.strip().upper()
+            matching_term = []
+            for aps, svc in all_rows:
+                if aps.terminal:
+                    aps_term = aps.terminal.strip().upper()
+                    if (term_norm in aps_term or 
+                        ("T3" in term_norm and "TERMINAL 3" in aps_term) or 
+                        ("T1" in term_norm and "TERMINAL 1" in aps_term) or 
+                        ("T2" in term_norm and "TERMINAL 2" in aps_term)):
+                        matching_term.append((aps, svc))
+                else:
+                    matching_term.append((aps, svc))
+            if matching_term:
+                all_rows = matching_term
+
+        package_rows = []
+        for aps, svc in all_rows:
+            slug = (svc.slug or "").lower().strip()
+            name = (svc.name or "").strip()
+            is_pkg = slug in PACKAGE_SLUGS or ("Service" in name and slug not in STANDALONE_SLUGS)
+            if is_pkg:
+                package_rows.append((aps, svc))
+
+        if not package_rows:
+            # ATQ (and transit at BOM/DEL/HYD) sell meet_greet as the catalog product.
+            # Never leak porter/buggy/wheelchair/transport/fast_track/lounge as packages.
+            allowed_standalone = {"meet_greet"}
+            return [
+                (aps, svc)
+                for aps, svc in all_rows
+                if (svc.slug or "").lower().strip() in allowed_standalone
+            ]
+
+        return package_rows
+
+    @classmethod
+    def _authoritative_catalog_travel_type(
+        cls,
+        db: Session,
+        conv: WhatsAppConversation,
+        journey_type: str,
+        travel_type: str,
+    ) -> Tuple[str, Optional[str]]:
+        """Derives DOMESTIC/INTERNATIONAL from route if origin/destination known."""
+        from app.services.service_airport_rules import (
+            derive_flight_type_from_route,
+            normalize_iata,
+            normalize_journey_type,
+        )
+
+        jt = normalize_journey_type(journey_type)
+        tt = (travel_type or "DOMESTIC").upper()
+        if jt == "TRANSIT":
+            return tt, None
+
+        metadata = conv.flight_details_json if isinstance(conv.flight_details_json, dict) else {}
+        origin = normalize_iata(
+            metadata.get("origin_iata")
+            or metadata.get("departure_iata")
+            or metadata.get("origin_code")
+        )
+        dest = normalize_iata(
+            metadata.get("destination_iata")
+            or metadata.get("arrival_iata")
+            or metadata.get("dest_code")
+            or metadata.get("destination_code")
+        )
+        if not origin or not dest:
+            return tt, None
+
+        try:
+            derived = derive_flight_type_from_route(db, origin, dest, jt)
+        except ValueError as exc:
+            return tt, str(exc)
+
+        if derived and derived != tt:
+            new_meta = dict(metadata)
+            new_meta["travel_type"] = derived
+            new_meta["flight_type"] = derived
+            conv.flight_details_json = new_meta
+            flag_modified(conv, "flight_details_json")
+        return derived or tt, None
+
+    @classmethod
+    def _send_route_classification_error(cls, conv: WhatsAppConversation, message: str) -> Dict[str, Any]:
+        _wa_delivery().send_text(
+            conv.phone_number,
+            f"*Shafsky Aviation Services*\n\n{message}",
+            client=_wa_client(),
+        )
+        return {"status": "route_classification_error", "success": False, "error": message}
+
+    @classmethod
+    def _send_airport_services_menu(cls, db: Session, conv: WhatsAppConversation) -> Dict[str, Any]:
+        """Queries and presents configured services/packages with compact dynamic inheritance."""
+        whatsapp_client = _wa_client()
+        wa_copy = _wa_copy()
+        wa_delivery = _wa_delivery()
+
+        iata = conv.selected_airport_iata
+        metadata = conv.flight_details_json if isinstance(conv.flight_details_json, dict) else {}
+        jt = metadata.get("journey_type", "DEPARTURE").upper()
+        tt = metadata.get("travel_type", "DOMESTIC").upper()
+        tt, route_err = cls._authoritative_catalog_travel_type(db, conv, jt, tt)
+        if route_err:
+            return cls._send_route_classification_error(conv, route_err)
+        metadata = conv.flight_details_json if isinstance(conv.flight_details_json, dict) else metadata
+
+        airport = db.execute(select(SupportedAirport).where(SupportedAirport.iata_code == iata)).scalar_one_or_none()
+        if not airport:
+            wa_delivery.send_text(
+                conv.phone_number,
+                "*Shafsky Aviation Services*\n\nWe regret to inform you that Airport Services are currently unavailable at this airport. Please type *BACK* to select a different airport.",
+                client=whatsapp_client,
+            )
+            return {"status": "unsupported_airport"}
+
+        if jt == "TRANSIT":
+            if tt in ["DOMESTIC_DOMESTIC", "DOMESTIC"]:
+                flight_types = ["DOMESTIC_DOMESTIC", "DOMESTIC", "ALL"]
+            elif tt == "DOMESTIC_INTERNATIONAL":
+                flight_types = ["DOMESTIC_INTERNATIONAL", "ALL"]
+            elif tt == "INTERNATIONAL_DOMESTIC":
+                flight_types = ["INTERNATIONAL_DOMESTIC", "ALL"]
+            elif tt in ["INTERNATIONAL_INTERNATIONAL", "INTERNATIONAL"]:
+                flight_types = ["INTERNATIONAL_INTERNATIONAL", "INTERNATIONAL", "ALL"]
+            else:
+                flight_types = [tt, "ALL"]
+        else:
+            if tt == "DOMESTIC":
+                flight_types = ["DOMESTIC", "ALL"]
+            elif tt == "INTERNATIONAL":
+                flight_types = ["INTERNATIONAL", "ALL"]
+            else:
+                flight_types = [tt, "ALL"]
+
+        selected_terminal = metadata.get("terminal")
+        rows = cls._get_authoritative_airport_packages(
+            db, airport.id, jt, flight_types, terminal=selected_terminal
+        )
+        logger.info(f"[WhatsApp Airport Flow] package_query_count={len(rows)}")
+
+        if not rows:
+            tt_label = "Domestic" if tt == "DOMESTIC" else ("International" if tt == "INTERNATIONAL" else tt.replace("_", " → ").title())
+            jt_label = jt.title()
+            empty_msg = (
+                f"Sorry, there are currently no *{tt_label} {jt_label}* services available at *{airport.airport_name}*.\n\n"
+                "Please choose an option to continue:"
+            )
+            buttons = [
+                {"id": "btn_change_travel_type", "title": "Change Travel Type"},
+                {"id": "btn_change_airport", "title": "Change Airport"},
+                {"id": "btn_main_menu", "title": "Main Menu"}
+            ]
+            wa_delivery.send_buttons(
+                phone=conv.phone_number,
+                body_text=empty_msg,
+                buttons=buttons,
+                header_text="No Services Found",
+                fallback_text=(
+                    f"{empty_msg}\n\n"
+                    "1. Change Travel Type\n"
+                    "2. Change Airport\n"
+                    "3. Main Menu\n\n"
+                    "Reply *1*, *2*, or *3*."
+                ),
+                client=whatsapp_client,
+            )
+            logger.info("[WhatsApp Airport Flow] response_send=SUCCESS")
+            return {"status": "no_services_found", "success": True}
+
+        tt_display = "Domestic" if tt == "DOMESTIC" else ("International" if tt == "INTERNATIONAL" else tt.replace("_", " → ").title())
+
+        available_services = []
+        for aps, svc in rows:
+            features = list(aps.features if isinstance(getattr(aps, "features", None), list) else [])
+            addl = list(aps.additional_benefits if isinstance(getattr(aps, "additional_benefits", None), list) else [])
+            combined_features = features + [b for b in addl if b not in features]
+            raw_p = aps.price
+            price_flt = float(raw_p) if isinstance(raw_p, (int, float, str, Decimal)) else 0.0
+            available_services.append({
+                "id": str(svc.id),
+                "title": svc.name,
+                "price": price_flt,
+                "description": aps.short_description or svc.description or "Airport service",
+                "features": combined_features,
+            })
+
+        body_text = wa_copy.airport_packages_body(
+            airport_name=airport.airport_name,
+            iata=airport.iata_code or iata,
+            journey_label=jt.title(),
+            travel_label=tt_display,
+            services=available_services,
+            terminal=selected_terminal,
+        )
+
+        inheritance_info = wa_copy.compute_package_inheritance(available_services)
+        list_rows = []
+        for i, svc in enumerate(available_services[:10]):
+            info = inheritance_info[i] if i < len(inheritance_info) else None
+            list_rows.append({
+                "id": f"svc_id_{svc['id']}",
+                "title": wa_copy.list_row_title(svc["title"], svc["price"]),
+                "description": wa_copy.list_row_description(svc["price"], svc.get("features"), info)[:72]
+            })
+
+        sections = [{"title": "Select Package", "rows": list_rows}]
+        fallback = body_text + "\n\nPlease reply with the number of your choice (e.g. 1)."
+
+        wa_delivery.send_list(
+            phone=conv.phone_number,
+            body_text=body_text,
+            button_title="View Packages",
+            sections=sections,
+            header_text="Service Packages",
+            fallback_text=fallback,
+            client=whatsapp_client,
+        )
+        cls._store_wa_menu(db, conv, available_services)
+
+        logger.info("[WhatsApp Airport Flow] response_send=SUCCESS")
+        return {"status": "services_menu_sent", "success": True}
+
+    @classmethod
+    def _send_service_menu(cls, db: Session, conv: WhatsAppConversation, category_name: str) -> Dict[str, Any]:
+        """Displays DB-catalog services for non-airport categories (Private Charter)."""
+        whatsapp_client = _wa_client()
+        wa_copy = _wa_copy()
+        wa_delivery = _wa_delivery()
+        categories_list = _official_categories()
+
+        category_obj = next((c for c in categories_list if c["name"] == category_name), None)
+        valid_db_cats: List[str] = list(category_obj["db_categories"]) if category_obj and isinstance(category_obj["db_categories"], list) else [category_name]
+
+        try:
+            all_services = ServiceConfigService.get_admin_catalog(db)
+        except Exception:
+            all_services = DEFAULT_SERVICE_CATALOG
+        cat_services = [s for s in all_services if str(s.get("category") or "") in valid_db_cats or str(s.get("category") or "") == category_name]
+        if not cat_services:
+            cat_services = [s for s in DEFAULT_SERVICE_CATALOG if str(s.get("category") or "") in valid_db_cats or str(s.get("category") or "") == category_name]
+
+        if not cat_services:
+            wa_delivery.send_text(
+                conv.phone_number,
+                f"*{category_name}* is available on request.\n\n"
+                "Type *BACK* to choose another category, or *HELP* to reach our team.",
+                client=whatsapp_client,
+            )
+            return {"status": "no_services_found", "success": True}
+
+        menu_items = []
+        for svc in cat_services[:10]:
+            raw_price = svc.get("base_price") or svc.get("price") or 0.0
+            price_val = float(raw_price) if isinstance(raw_price, (int, float, str, Decimal)) else 0.0
+            menu_items.append({
+                "id": str(svc.get("id")),
+                "title": svc.get("title", svc.get("name", "Service")),
+                "price": price_val,
+                "description": svc.get("description") or "",
+                "name": svc.get("title", svc.get("name", "Service")),
+                "base_price": price_val,
+            })
+
+        body_text = wa_copy.catalog_services_body(category_name, menu_items)
+        rows = []
+        for svc in menu_items:
+            rows.append({
+                "id": f"svc_id_{svc.get('id')}",
+                "title": wa_copy.list_row_title(str(svc["title"]), svc["price"]),
+                "description": (f"₹{int(svc['price']):,} - {str(svc.get('description') or '')[:40]}" if float(svc["price"] or 0) > 0 else (str(svc.get('description') or '')[:40] or "Price on request"))
+            })
+
+        sections = [{"title": category_name[:24], "rows": rows}]
+        fallback = body_text + "\n\nPlease reply with the number of your choice (e.g. 1)."
+
+        wa_delivery.send_list(
+            phone=conv.phone_number,
+            body_text=body_text,
+            button_title="Select Option",
+            sections=sections,
+            header_text=category_name,
+            fallback_text=fallback,
+            client=whatsapp_client,
+        )
+        cls._store_wa_menu(db, conv, menu_items)
+
+        return {"status": "service_menu_sent", "success": True}
+
+    @classmethod
+    def _state_service_selection(cls, db: Session, conv: WhatsAppConversation, user_text: str, input_id: Optional[str]) -> Dict[str, Any]:
+        """Handles service package selection from list reply or text reply."""
+        whatsapp_client = _wa_client()
+        wa_copy = _wa_copy()
+        categories_list = _official_categories()
+
+        category_name = conv.selected_category or "Airport Services"
+        text_u = user_text.strip().upper()
+
+        if (category_name or "").strip().lower() == "travel services":
+            # Travel Services now owns a fixed two-option menu (Visa / Flight Ticketing).
+            return cls._send_travel_services_menu(db, conv)
+
+        available_services: List[Dict[str, Any]] = []
+        selected_svc = None
+        stored_menu = cls._get_wa_menu(conv)
+
+        if text_u in ["BTN_CHANGE_TRAVEL_TYPE", "CHANGE TRAVEL TYPE", "TRAVEL TYPE"]:
+            metadata = conv.flight_details_json if isinstance(conv.flight_details_json, dict) else {}
+            jt = metadata.get("journey_type", "DEPARTURE").upper()
+            if jt == "TRANSIT":
+                cls._transition_state(db, conv, "AIRPORT_TRANSIT_TYPE")
+                return cls._prompt_transit_type(conv)
+            else:
+                cls._transition_state(db, conv, "AIRPORT_TRAVEL_TYPE")
+                return cls._prompt_travel_type(conv, jt.title())
+
+        if text_u in ["BTN_CHANGE_AIRPORT", "CHANGE AIRPORT"]:
+            cls._transition_state(db, conv, "AIRPORT_SELECTION")
+            whatsapp_client.send_text_message(conv.phone_number, "Please enter your Airport Name, City, or IATA Code (e.g., Delhi, DEL, Lucknow):")
+            return {"status": "airport_prompt_sent"}
+
+        if text_u in ["VIEW PACKAGES", "VIEW_PACKAGES", "BTN_VIEW_PACKAGES", "PACKAGES", "VIEW", "VIEW PACKAGE", "SERVICES", "SERVICE PACKAGES", "PACKAGES LIST"] or (input_id and "view_packages" in input_id.lower()):
+            if category_name == "Airport Services":
+                return cls._send_airport_services_menu(db, conv)
+            else:
+                return cls._send_service_menu_for_category(db, conv, category_name)
+
+        selected_svc = None
+        stored_menu = cls._get_wa_menu(conv)
+
+        if category_name == "Airport Services":
+            metadata = conv.flight_details_json if isinstance(conv.flight_details_json, dict) else {}
+            jt = metadata.get("journey_type", "DEPARTURE").upper()
+            tt = metadata.get("travel_type", "DOMESTIC").upper()
+
+            if text_u in ["DOMESTIC", "INTERNATIONAL", "INTL"]:
+                new_tt = "DOMESTIC" if "DOMESTIC" in text_u else "INTERNATIONAL"
+                new_meta = dict(metadata)
+                new_meta["travel_type"] = new_tt
+                new_meta["flight_type"] = new_tt
+                conv.flight_details_json = new_meta
+                flag_modified(conv, "flight_details_json")
+                db.commit()
+                return cls._send_airport_services_menu(db, conv)
+
+            tt, route_err = cls._authoritative_catalog_travel_type(db, conv, jt, tt)
+            if route_err:
+                return cls._send_route_classification_error(conv, route_err)
+            metadata = conv.flight_details_json if isinstance(conv.flight_details_json, dict) else metadata
+
+            if jt == "TRANSIT":
+                if tt in ["DOMESTIC_DOMESTIC", "DOMESTIC"]:
+                    flight_types = ["DOMESTIC_DOMESTIC", "DOMESTIC", "ALL"]
+                elif tt == "DOMESTIC_INTERNATIONAL":
+                    flight_types = ["DOMESTIC_INTERNATIONAL", "ALL"]
+                elif tt == "INTERNATIONAL_DOMESTIC":
+                    flight_types = ["INTERNATIONAL_DOMESTIC", "ALL"]
+                elif tt in ["INTERNATIONAL_INTERNATIONAL", "INTERNATIONAL"]:
+                    flight_types = ["INTERNATIONAL_INTERNATIONAL", "INTERNATIONAL", "ALL"]
+                else:
+                    flight_types = [tt, "ALL"]
+            else:
+                if tt == "DOMESTIC":
+                    flight_types = ["DOMESTIC", "ALL"]
+                elif tt == "INTERNATIONAL":
+                    flight_types = ["INTERNATIONAL", "ALL"]
+                else:
+                    flight_types = [tt, "ALL"]
+
+            iata = conv.selected_airport_iata
+            airport = db.execute(select(SupportedAirport).where(SupportedAirport.iata_code == iata)).scalar_one_or_none()
+
+            available_services = []
+            if airport:
+                selected_terminal = metadata.get("terminal") or getattr(conv, "selected_terminal", None)
+                for aps, svc in cls._get_authoritative_airport_packages(
+                    db, airport.id, jt, flight_types, terminal=selected_terminal
+                ):
+                    available_services.append({
+                        "id": str(svc.id),
+                        "title": svc.name,
+                        "price": aps.price,
+                        "description": aps.short_description or svc.description or "VIP Service"
+                    })
+
+            if not available_services:
+                return cls._send_airport_services_menu(db, conv)
+
+            if input_id:
+                raw_id = input_id.replace("svc_id_", "")
+                selected_svc = next((s for s in available_services if str(s["id"]) == raw_id or str(s.get("id")) == input_id), None)
+            if not selected_svc:
+                clean = user_text.strip().lower()
+                pick_from = stored_menu if stored_menu else available_services
+                if clean.isdigit():
+                    idx = int(clean) - 1
+                    if 0 <= idx < len(pick_from):
+                        selected_svc = pick_from[idx]
+                else:
+                    for s in pick_from:
+                        s_title = str(s.get("title") or s.get("name") or "").lower()
+                        if s_title in clean or clean in s_title or clean == s_title.replace(" service", ""):
+                            selected_svc = s
+                            break
+
+        else:
+            category_obj = next((c for c in categories_list if c["name"] == category_name), None)
+            valid_db_cats: List[str] = list(category_obj["db_categories"]) if category_obj and isinstance(category_obj["db_categories"], list) else [category_name]
+            try:
+                all_services = ServiceConfigService.get_admin_catalog(db)
+            except Exception:
+                all_services = DEFAULT_SERVICE_CATALOG
+            cat_services = [s for s in all_services if str(s.get("category") or "") in valid_db_cats or str(s.get("category") or "") == category_name]
+
+            if input_id:
+                raw_id = input_id.replace("svc_id_", "")
+                selected_svc = next((s for s in cat_services if str(s.get("id")) == raw_id or str(s.get("id")) == input_id), None)
+            if not selected_svc:
+                clean = user_text.strip().lower()
+                pick_from = stored_menu if stored_menu else cat_services
+                if clean.isdigit():
+                    idx = int(clean) - 1
+                    if 0 <= idx < len(pick_from):
+                        selected_svc = pick_from[idx]
+                else:
+                    for s in pick_from:
+                        title = str(s.get("title", s.get("name", ""))).lower()
+                        if title in clean or clean in title:
+                            selected_svc = s
+                            break
+
+        if not selected_svc:
+            if category_name == "Airport Services":
+                return cls._send_airport_services_menu(db, conv)
+            else:
+                whatsapp_client.send_text_message(conv.phone_number, "Service not found. Please select a valid service from the list.")
+                return {"status": "invalid_service", "success": False}
+
+        svc_id = str(selected_svc.get("id"))
+        svc_title = str(selected_svc.get("title", selected_svc.get("name", "VIP Service")))
+        raw_price = selected_svc.get("base_price") or selected_svc.get("price") or 0.0
+        price = float(raw_price) if isinstance(raw_price, (int, float, str, Decimal)) else 0.0
+        if category_name != "Private Charter" and price <= 0:
+            # Priced categories keep the legacy default when the catalog omits a price.
+            price = 2500.0
+
+        conv.selected_service_id = svc_id
+        conv.selected_service_name = svc_title
+        passengers = max(1, conv.passenger_count or 1)
+        conv.total_amount = price * passengers
+
+        meta = dict(conv.flight_details_json) if isinstance(conv.flight_details_json, dict) else {}
+        meta["unit_price"] = price
+        meta["base_price"] = price
+        conv.flight_details_json = meta
+        flag_modified(conv, "flight_details_json")
+        db.commit()
+
+        if category_name == "Airport Services":
+            meta = dict(conv.flight_details_json) if isinstance(conv.flight_details_json, dict) else {}
+            pending_fl = meta.get("_pending_verified_flight")
+            if (
+                isinstance(pending_fl, dict)
+                and pending_fl.get("flight_number")
+                and pending_fl.get("origin_iata")
+                and pending_fl.get("destination_iata")
+            ):
+                from app.services.service_airport_rules import derive_flight_type_from_route
+                curr_tt = meta.get("travel_type", "DOMESTIC")
+                jt = meta.get("journey_type", "DEPARTURE")
+                try:
+                    fl_tt = derive_flight_type_from_route(db, pending_fl.get("origin_iata"), pending_fl.get("destination_iata"), jt)
+                except Exception:
+                    fl_tt = None
+
+                if fl_tt == curr_tt:
+                    cls._commit_accepted_flight(db, conv, pending_fl, verification_status="verified")
+                    db.commit()
+                    inclusions_block = wa_copy.selected_package_details_text(
+                        selected_svc, all_services=stored_menu or available_services or [selected_svc]
+                    )
+                    detail_part = f"\n\n{inclusions_block}" if inclusions_block else ""
+                    msg = (
+                        f"Selected: *{svc_title}* ({wa_copy.format_inr(price)}/person)"
+                        f"{detail_part}\n\n"
+                        f"✈️ Flight: *{conv.flight_num}* (Verified)\n\n"
+                        "Please enter your Date of Travel in DD/MM/YYYY format (e.g., 25/08/2026):"
+                    )
+                    whatsapp_client.send_text_message(conv.phone_number, msg)
+                    return {"status": "date_prompt_sent", "success": True}
+
+            cls._transition_state(db, conv, "FLIGHT_INPUT")
+            inclusions_block = wa_copy.selected_package_details_text(
+                selected_svc, all_services=stored_menu or available_services or [selected_svc]
+            )
+            detail_part = f"\n\n{inclusions_block}" if inclusions_block else ""
+            msg = (
+                f"Selected: *{svc_title}* ({wa_copy.format_inr(price)}/person)"
+                f"{detail_part}\n\n"
+                "Please enter your Flight Number (e.g., *EK501*, *AI2424*, *6E224*) - "
+                "or tap the button if your flight isn't confirmed yet:"
+            )
+            res = whatsapp_client.send_interactive_buttons(
+                to_phone=conv.phone_number,
+                body_text=msg,
+                buttons=[
+                    {"id": "btn_enter_flight", "title": "Enter Flight Number"},
+                    {"id": "btn_flight_not_confirmed", "title": "Flight Not Confirmed"},
+                ],
+                header_text="Flight Details",
+            )
+            if not res.get("success"):
+                whatsapp_client.send_text_message(
+                    conv.phone_number,
+                    msg + "\n\n(If your flight isn't confirmed yet, reply *Later*.)"
+                )
+            return {"status": "flight_prompt_sent", "success": True}
+
+        elif category_name == "Private Charter":
+            cls._transition_state(db, conv, "CHARTER_ORIGIN")
+            whatsapp_client.send_text_message(conv.phone_number, f"Selected Charter: *{svc_title}*\n\nPlease enter your departure city / airport:")
+            return {"status": "charter_origin_prompt", "success": True}
+
+        else:
+            cls._transition_state(db, conv, "DATE_SELECTION")
+            whatsapp_client.send_text_message(conv.phone_number, f"Selected Service: *{svc_title}*\n\nPlease enter your Date of Travel in DD/MM/YYYY format (e.g., 25/08/2026):")
+            return {"status": "date_prompt_sent", "success": True}
+
