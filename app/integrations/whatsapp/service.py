@@ -48,6 +48,44 @@ logger = logging.getLogger(__name__)
 _DELIVERED_STATES = {"delivered", "read"}
 
 
+def _meta_failure_remedy(code: Any) -> Optional[str]:
+    """Actionable remedy for a Meta delivery error code, from the shared catalogue.
+
+    Delivery failures arrive on the status webhook after Meta already accepted the
+    message (HTTP 200 + wamid), so the send path cannot surface them. Without this,
+    a customer notification killed by 131042 (WABA has no payment method) reads as
+    an opaque JSON dump in the admin queue.
+    """
+    try:
+        code_int = int(code) if code is not None else None
+    except (TypeError, ValueError):
+        return None
+    if code_int is None:
+        return None
+    try:
+        from app.services.whatsapp_department_service import WhatsAppDepartmentService
+    except Exception:  # pragma: no cover - defensive import guard
+        return None
+    entry = WhatsAppDepartmentService.META_FAILURE_REMEDIES.get(code_int)
+    if not entry:
+        return None
+    return f"{entry[1]} (classified: {entry[0]})"
+
+
+def _format_delivery_failure(first_error: Dict[str, Any], detail: Optional[str]) -> str:
+    """One readable, bounded line for a failed Meta delivery."""
+    code = first_error.get("code")
+    title = first_error.get("title") or first_error.get("message")
+    bits = [f"code {code}"] if code is not None else []
+    if title:
+        bits.append(str(title))
+    prefix = f"Meta delivery failed ({', '.join(bits)})" if bits else "Meta delivery failed"
+    text = str(detail or title or "").strip()
+    if len(text) > 400:
+        text = text[:397] + "..."
+    return f"{prefix}: {text}" if text else prefix
+
+
 def apply_delivery_status(rec, message_id: str, status_value: str, status_payload: dict) -> None:
     """Record one Meta delivery status against the message it belongs to.
 
@@ -96,10 +134,11 @@ def apply_delivery_status(rec, message_id: str, status_value: str, status_payloa
     if failed:
         codes = sorted({item.get("error_code") for item in failed if item.get("error_code")})
         detail = next((item.get("error_detail") for item in failed if item.get("error_detail")), None)
+        bounded_detail = str(detail)[:300] if detail else ""
         rec.status = NotificationStatus.FAILED
         rec.error_log = (
             f"Meta delivery failed for {len(failed)}/{len(states)} recipients "
-            f"(codes: {codes}). {detail or ''}"
+            f"(codes: {codes}). {bounded_detail}"
         ).strip()
         logger.error(
             "[WhatsApp Webhook Status] Delivery failed for %d/%d recipients on record %s (codes %s): %s",
@@ -109,12 +148,15 @@ def apply_delivery_status(rec, message_id: str, status_value: str, status_payloa
             codes,
             detail or "no detail",
         )
-        if any(code == 131047 for code in codes):
-            logger.error(
-                "[WhatsApp Webhook Status] Error 131047: recipient is outside the 24-hour customer "
-                "service window. Configure an approved WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE so "
-                "operations alerts are delivered as a template, not as freeform text."
-            )
+        for code in codes:
+            remedy = _meta_failure_remedy(code)
+            if remedy:
+                logger.error(
+                    "[WhatsApp Webhook Status] Error %s on record %s: %s",
+                    code,
+                    getattr(rec, "id", "?"),
+                    remedy,
+                )
         return
 
     if states and all(state in _DELIVERED_STATES for state in states):
@@ -127,13 +169,39 @@ def apply_delivery_status(rec, message_id: str, status_value: str, status_payloa
         rec.status = NotificationStatus.COMPLETED
         return
 
-    # Legacy record without a per-message map (single-message notifications).
+    # Legacy record without a per-message map (single-message notifications —
+    # the customer confirmation / enquiry acknowledgement path).
     if status_value in _DELIVERED_STATES:
         rec.status = NotificationStatus.DELIVERED
         rec.delivered_at = datetime.now(timezone.utc)
     elif status_value == "failed":
         rec.status = NotificationStatus.FAILED
-        rec.error_log = f"Meta delivery failed: {errors}"
+        rec.error_log = _format_delivery_failure(first_error, error_detail)
+        delivery = dict(payload.get("delivery") or {})
+        delivery.update(
+            {
+                "api_status": "failed",
+                "error_code": first_error.get("code"),
+                "error_detail": str(error_detail or "")[:400] or None,
+                "failed_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        rec.payload = {**payload, "delivery": delivery}
+        flag_modified(rec, "payload")
+        logger.error(
+            "[WhatsApp Webhook Status] Delivery failed for record %s (message %s): %s",
+            getattr(rec, "id", "?"),
+            message_id,
+            rec.error_log,
+        )
+        remedy = _meta_failure_remedy(first_error.get("code"))
+        if remedy:
+            logger.error(
+                "[WhatsApp Webhook Status] Error %s on record %s: %s",
+                first_error.get("code"),
+                getattr(rec, "id", "?"),
+                remedy,
+            )
 
 
 CANCEL_COMMANDS = {"cancel", "stop", "abort"}
