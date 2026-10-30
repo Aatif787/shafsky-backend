@@ -500,3 +500,107 @@ def test_all_five_recipients_attempted_independently_when_business_numbers_fail_
     assert "131047" in (rec.error_log or "")
     assert "4/5" in (rec.error_log or "")
 
+
+# ---------------------------------------------------------------------------
+# 7. Customer records are single-message: the billing block must be actionable
+# ---------------------------------------------------------------------------
+
+def _customer_record(message_id="wamid.CUST1"):
+    """A customer notification record has no payload["messages"] map: one wamid per record."""
+    return NotificationRecord(
+        template_type="WHATSAPP_CUSTOMER_ENQUIRY_ACK",
+        channel="WHATSAPP",
+        payload={
+            "booking_ref": "SHF-20261029-7D58B18A",
+            "status": "ENQUIRY",
+            "delivery": {
+                "template": "shafsky_booking_confirmation",
+                "template_language": "en",
+                "api_status": "sent",
+                "http_status": 200,
+                "message_id": message_id,
+            },
+        },
+        status=NotificationStatus.COMPLETED,
+        message_id=message_id,
+    )
+
+
+def test_customer_billing_block_is_persisted_with_the_meta_code_and_remedy():
+    """Regression: 131042 was stored as a raw dict, so the admin saw FAILED with no cause."""
+    from app.integrations.whatsapp.service import apply_delivery_status
+
+    mid = "wamid.CUST131042"
+    rec = _customer_record(mid)
+    failure = {
+        "status": "failed",
+        "errors": [
+            {
+                "code": 131042,
+                "title": "Business eligibility payment issue",
+                "message": "Business eligibility payment issue",
+                "error_data": {
+                    "details": "Message failed to send because no payment method is set up "
+                    "for your WhatsApp Business account."
+                },
+            }
+        ],
+    }
+
+    apply_delivery_status(rec, mid, "failed", failure)
+
+    assert rec.status == NotificationStatus.FAILED
+    assert "131042" in rec.error_log
+    assert "Business eligibility payment issue" in rec.error_log
+    assert "no payment method" in rec.error_log
+    assert "{" not in rec.error_log, "raw dict repr must not leak into the admin error log"
+    assert rec.delivered_at is None
+    assert rec.payload["delivery"]["error_code"] == 131042
+    assert "no payment method" in rec.payload["delivery"]["error_detail"]
+
+
+def test_customer_window_closed_failure_stays_readable():
+    from app.integrations.whatsapp.service import apply_delivery_status
+
+    mid = "wamid.CUST131047"
+    rec = _customer_record(mid)
+    failure = {
+        "status": "failed",
+        "errors": [
+            {
+                "code": 131047,
+                "title": "Re-engagement message",
+                "message": "Re-engagement message",
+                "error_data": {
+                    "details": "Message failed to send because more than 24 hours have passed "
+                    "since the customer last replied to this number."
+                },
+            }
+        ],
+    }
+
+    apply_delivery_status(rec, mid, "failed", failure)
+
+    assert rec.status == NotificationStatus.FAILED
+    assert "131047" in rec.error_log
+    assert "24 hours" in rec.error_log
+    assert rec.payload["delivery"]["error_code"] == 131047
+
+
+def test_customer_delivery_confirmation_still_marks_the_record_delivered():
+    from app.integrations.whatsapp.service import apply_delivery_status
+
+    mid = "wamid.CUSTOK"
+    rec = _customer_record(mid)
+
+    apply_delivery_status(rec, mid, "delivered", {"status": "delivered"})
+
+    assert rec.status == NotificationStatus.DELIVERED
+    assert rec.delivered_at is not None
+
+
+def test_billing_code_has_a_documented_remedy():
+    label, remedy = WhatsAppDepartmentService.META_FAILURE_REMEDIES[131042]
+    assert label == "BILLING_ISSUE"
+    assert "billing_hub" in remedy
+    assert "payment" in remedy.lower()

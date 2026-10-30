@@ -102,7 +102,12 @@ class WhatsAppDepartmentService(WhatsAppDepartmentExtMixin):
         ),
         131042: (
             "BILLING_ISSUE",
-            "Meta billing for this WhatsApp Business Account is unhealthy. Fix the payment method in Meta Business Manager.",
+            "Meta will not deliver any template message because this WhatsApp Business Account has "
+            "no usable payment method. Add a card or prepaid balance in Meta Business Manager -> "
+            "Billing (business.facebook.com/billing_hub); the exact ADD_PM link is in the error "
+            "detail. If a card is already on file, the account instead reports 'payment restricted' "
+            "and the restriction must be cleared. Meta still accepts the send (HTTP 200 + wamid), "
+            "so this only becomes visible on the delivery-status webhook.",
         ),
         132000: (
             "TEMPLATE_PARAM_MISMATCH",
