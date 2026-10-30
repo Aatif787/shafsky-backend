@@ -5,7 +5,7 @@ delivery helpers for NotificationService.
 
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import desc, select
@@ -874,6 +874,60 @@ class NotificationServiceExtMixin:
         return None
 
     @classmethod
+    def _customer_service_window_open(cls, db: Session, clean_phone: str) -> bool:
+        """True when the customer messaged the business inside Meta's 24-hour window.
+
+        A free-form message is the only customer notification that Meta delivers
+        without a billing method on the WhatsApp Business Account, but it is legal
+        only inside this window. The window is opened by the customer's own inbound
+        message (`last_user_activity_at`, falling back to the inbound message log),
+        so it cannot be manufactured by the business. One hour of margin keeps a
+        stale clock from selecting free-form just after the window expires.
+        """
+        if not clean_phone:
+            return False
+        from sqlalchemy.orm import Session as _OrmSession
+        if not isinstance(db, _OrmSession):
+            return False
+
+        last_activity = None
+        try:
+            from app.models.whatsapp_models import WhatsAppConversation
+            last_activity = db.scalar(
+                select(WhatsAppConversation.last_user_activity_at).where(
+                    WhatsAppConversation.phone_number == clean_phone
+                )
+            )
+            if last_activity is None:
+                from sqlalchemy import func
+                from app.models.whatsapp_models import WhatsAppMessage
+
+                last_activity = db.scalar(
+                    select(func.max(WhatsAppMessage.created_at))
+                    .join(
+                        WhatsAppConversation,
+                        WhatsAppMessage.conversation_id == WhatsAppConversation.id,
+                    )
+                    .where(
+                        WhatsAppConversation.phone_number == clean_phone,
+                        WhatsAppMessage.direction == "INBOUND",
+                    )
+                )
+        except Exception as db_err:  # pragma: no cover - defensive
+            _ns().logger.debug(
+                "[Customer WhatsApp] Service-window lookup failed: %s",
+                type(db_err).__name__,
+            )
+            return False
+
+        if not last_activity:
+            return False
+        if last_activity.tzinfo is None:
+            last_activity = last_activity.replace(tzinfo=timezone.utc)
+        age = datetime.now(timezone.utc) - last_activity
+        return age < timedelta(hours=23)
+
+    @classmethod
     def _dispatch_customer_whatsapp(
         cls,
         db: Session,
@@ -960,8 +1014,15 @@ class NotificationServiceExtMixin:
 
         template_name, template_lang = cls._resolve_customer_template_settings()
         param_text = build_template_parameter(template_param)
+        window_open = cls._customer_service_window_open(db, clean_phone)
 
-        def _send(language: str) -> Dict[str, Any]:
+        def _send_freeform() -> Dict[str, Any]:
+            return whatsapp_client.send_text_message(
+                to_phone=clean_phone,
+                message_body=message_body,
+            )
+
+        def _send_template(language: str) -> Dict[str, Any]:
             if template_name:
                 components = [
                     {
@@ -982,10 +1043,17 @@ class NotificationServiceExtMixin:
                 "for %s. Meta only accepts freeform text inside the 24-hour service window (131047 otherwise).",
                 booking_ref,
             )
-            return whatsapp_client.send_text_message(
-                to_phone=clean_phone,
-                message_body=message_body,
-            )
+            return _send_freeform()
+
+        def _send(language: str) -> Dict[str, Any]:
+            # A free-form message needs no payment method, but Meta only allows it inside
+            # the customer's 24-hour service window. Everywhere else the approved
+            # template is the only legal channel.
+            if window_open:
+                return _send_freeform()
+            return _send_template(language)
+
+        channel_used = "freeform" if window_open else ("template" if template_name else "freeform")
 
         try:
             res = _send(template_lang)
@@ -1001,6 +1069,35 @@ class NotificationServiceExtMixin:
                 "error": f"Exception during send: {type(send_err).__name__}",
                 "status": "failed",
             }
+
+        # A stale window estimate surfaces as 131047, which is rejected before a message
+        # is created. The approved template can therefore still be tried once safely.
+        if (
+            window_open
+            and template_name
+            and not res.get("success")
+            and res.get("error_code") == 131047
+        ):
+            logger.warning(
+                "[Customer WhatsApp] Free-form rejected for %s (131047); retrying with template %s/%s",
+                booking_ref,
+                template_name,
+                template_lang,
+            )
+            try:
+                res = _send_template(template_lang)
+                channel_used = "template"
+            except Exception as fallback_err:
+                logger.error(
+                    "[Customer WhatsApp] Template fallback raised for %s: %s",
+                    booking_ref,
+                    type(fallback_err).__name__,
+                )
+                res = {
+                    "success": False,
+                    "error": f"Exception during template fallback: {type(fallback_err).__name__}",
+                    "status": "failed",
+                }
 
         # 132001 = the template is not registered under the configured language. It is
         # rejected before any message is created (no wamid), so a single retry cannot
@@ -1042,6 +1139,7 @@ class NotificationServiceExtMixin:
         now = datetime.now(timezone.utc)
 
         delivery_diag: Dict[str, Any] = {
+            "channel": channel_used,
             "template": template_name or None,
             "template_language": template_lang if template_name else None,
             "parameter_chars": len(param_text),
@@ -1059,11 +1157,12 @@ class NotificationServiceExtMixin:
             record.error_log = None
             outcome = "ACCEPTED"
             logger.info(
-                "[Customer WhatsApp] %s accepted by Meta for %s (to=%s, template=%s/%s, message_id=%s, "
-                "http=%s). Delivery is unconfirmed until the status webhook arrives.",
+                "[Customer WhatsApp] %s accepted by Meta for %s (to=%s, channel=%s, template=%s/%s, "
+                "message_id=%s, http=%s). Delivery is unconfirmed until the status webhook arrives.",
                 template_type,
                 booking_ref,
                 masked_phone,
+                channel_used,
                 template_name or "freeform",
                 template_lang if template_name else "-",
                 message_id,
@@ -1092,9 +1191,11 @@ class NotificationServiceExtMixin:
             record.error_log = err_text[:400]
             outcome = "FAILED"
             logger.error(
-                "[Customer WhatsApp] Send failed for %s (to=%s, template=%s/%s, http=%s, code=%s, subcode=%s): %s",
+                "[Customer WhatsApp] Send failed for %s (to=%s, channel=%s, template=%s/%s, http=%s, "
+                "code=%s, subcode=%s): %s",
                 booking_ref,
                 masked_phone,
+                channel_used,
                 template_name or "freeform",
                 template_lang if template_name else "-",
                 http_status,
@@ -1115,6 +1216,7 @@ class NotificationServiceExtMixin:
             "booking_ref": booking_ref,
             "recipient_phone": masked_phone,
             "message_id": message_id,
+            "channel": channel_used,
             "template_configured": bool(template_name),
             "template_language": template_lang if template_name else None,
             "error_code": error_code,
