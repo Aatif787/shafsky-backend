@@ -15,13 +15,14 @@ Verifies:
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 import pytest
 
 from app.database import SessionLocal
 from app.models.schema import Booking, BookingStatus, NotificationRecord, NotificationStatus
+from app.models.whatsapp_models import WhatsAppConversation
 from app.services.notification_service import NotificationService
 from app.services.whatsapp_department_service import WhatsAppDepartmentService
 from app.integrations.whatsapp.client import whatsapp_client
@@ -384,6 +385,9 @@ def test_template_dispatch_when_configured(monkeypatch):
         "en_US",
     )
 
+    # No recent inbound conversation: the customer is outside the 24-hour window.
+    _clear_conversation("919876543210")
+
     with SessionLocal() as db:
         context = {
             "booking_ref": "SHF-TMPL-TEST",
@@ -532,3 +536,169 @@ def test_notify_booking_confirmed_includes_customer_whatsapp(monkeypatch):
     assert summary["customer"]["status"] == "DELIVERED"
     assert summary["customer_whatsapp"]["status"] == "ACCEPTED"
     assert summary["customer_whatsapp"]["message_id"] == "wamid.conf.mock"
+
+
+# ==============================================================================
+# 10. Service-window routing: free-form inside 24h, template outside
+# ==============================================================================
+
+def _seed_conversation(phone: str, last_activity: datetime) -> None:
+    from sqlalchemy import delete
+
+    with SessionLocal() as db:
+        db.execute(delete(WhatsAppConversation).where(WhatsAppConversation.phone_number == phone))
+        db.add(
+            WhatsAppConversation(
+                phone_number=phone,
+                current_state="START",
+                last_user_activity_at=last_activity,
+            )
+        )
+        db.commit()
+
+
+def _clear_conversation(phone: str) -> None:
+    from sqlalchemy import delete
+
+    with SessionLocal() as db:
+        db.execute(delete(WhatsAppConversation).where(WhatsAppConversation.phone_number == phone))
+        db.commit()
+
+
+def _configure_customer_template(monkeypatch):
+    monkeypatch.setattr(whatsapp_client, "is_configured", lambda: True)
+    monkeypatch.setattr(
+        "app.services.notification_service.settings.WHATSAPP_CUSTOMER_CONFIRMATION_TEMPLATE",
+        "shafsky_booking_confirmation",
+    )
+    monkeypatch.setattr(
+        "app.services.notification_service.settings.WHATSAPP_CUSTOMER_TEMPLATE_LANG",
+        "en",
+    )
+
+
+def test_open_service_window_uses_freeform_even_when_a_template_is_configured(monkeypatch):
+    """A customer who messaged us inside 24h can receive free-form, which needs no billing."""
+    phone = "919876500011"
+    mock_template = MagicMock(return_value={"success": True, "message_id": "wamid.tmpl.win"})
+    mock_text = MagicMock(return_value={"success": True, "message_id": "wamid.free.win"})
+    _configure_customer_template(monkeypatch)
+    monkeypatch.setattr(whatsapp_client, "send_message", mock_template)
+    monkeypatch.setattr(whatsapp_client, "send_text_message", mock_text)
+
+    _seed_conversation(phone, datetime.now(timezone.utc) - timedelta(hours=2))
+
+    try:
+        with SessionLocal() as db:
+            res = NotificationService.send_customer_whatsapp_confirmation(
+                db,
+                {
+                    "booking_ref": "SHF-WINDOW-OPEN-01",
+                    "passenger_phone": "9876500011",
+                    "passenger_name": "Window Open",
+                    "status": "CONFIRMED",
+                },
+            )
+    finally:
+        _clear_conversation(phone)
+
+    assert res["status"] == "ACCEPTED"
+    assert res["channel"] == "freeform"
+    mock_text.assert_called_once()
+    mock_template.assert_not_called()
+    assert mock_text.call_args[1]["to_phone"] == phone
+
+
+def test_closed_service_window_uses_the_approved_template(monkeypatch):
+    phone = "919876500012"
+    mock_template = MagicMock(return_value={"success": True, "message_id": "wamid.tmpl.closed"})
+    mock_text = MagicMock()
+    _configure_customer_template(monkeypatch)
+    monkeypatch.setattr(whatsapp_client, "send_message", mock_template)
+    monkeypatch.setattr(whatsapp_client, "send_text_message", mock_text)
+
+    _seed_conversation(phone, datetime.now(timezone.utc) - timedelta(hours=48))
+
+    try:
+        with SessionLocal() as db:
+            res = NotificationService.send_customer_whatsapp_confirmation(
+                db,
+                {
+                    "booking_ref": "SHF-WINDOW-CLOSED-01",
+                    "passenger_phone": "9876500012",
+                    "passenger_name": "Window Closed",
+                    "status": "CONFIRMED",
+                },
+            )
+    finally:
+        _clear_conversation(phone)
+
+    assert res["status"] == "ACCEPTED"
+    assert res["channel"] == "template"
+    mock_template.assert_called_once()
+    mock_text.assert_not_called()
+
+
+def test_no_conversation_uses_the_approved_template(monkeypatch):
+    phone = "919876500013"
+    mock_template = MagicMock(return_value={"success": True, "message_id": "wamid.tmpl.none"})
+    mock_text = MagicMock()
+    _configure_customer_template(monkeypatch)
+    monkeypatch.setattr(whatsapp_client, "send_message", mock_template)
+    monkeypatch.setattr(whatsapp_client, "send_text_message", mock_text)
+
+    _clear_conversation(phone)
+
+    with SessionLocal() as db:
+        res = NotificationService.send_customer_whatsapp_confirmation(
+            db,
+            {
+                "booking_ref": "SHF-WINDOW-NONE-01",
+                "passenger_phone": "9876500013",
+                "passenger_name": "No Conversation",
+                "status": "CONFIRMED",
+            },
+        )
+
+    assert res["status"] == "ACCEPTED"
+    assert res["channel"] == "template"
+    mock_template.assert_called_once()
+    mock_text.assert_not_called()
+
+
+def test_freeform_rejected_with_131047_falls_back_to_template(monkeypatch):
+    """If the window estimate is stale, Meta rejects free-form before creating a message."""
+    phone = "919876500014"
+    mock_template = MagicMock(return_value={"success": True, "message_id": "wamid.tmpl.fallback"})
+    mock_text = MagicMock(
+        return_value={
+            "success": False,
+            "error": "Re-engagement message",
+            "error_code": 131047,
+            "status": "failed",
+        }
+    )
+    _configure_customer_template(monkeypatch)
+    monkeypatch.setattr(whatsapp_client, "send_message", mock_template)
+    monkeypatch.setattr(whatsapp_client, "send_text_message", mock_text)
+
+    _seed_conversation(phone, datetime.now(timezone.utc) - timedelta(hours=1))
+
+    try:
+        with SessionLocal() as db:
+            res = NotificationService.send_customer_whatsapp_confirmation(
+                db,
+                {
+                    "booking_ref": "SHF-WINDOW-STALE-01",
+                    "passenger_phone": "9876500014",
+                    "passenger_name": "Stale Window",
+                    "status": "CONFIRMED",
+                },
+            )
+    finally:
+        _clear_conversation(phone)
+
+    assert res["status"] == "ACCEPTED"
+    assert res["channel"] == "template"
+    mock_text.assert_called_once()
+    mock_template.assert_called_once()
