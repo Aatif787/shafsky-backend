@@ -39,16 +39,28 @@ class WhatsAppDepartmentExtMixin:
         template_lang = (template_lang or "en_US").strip()
 
         if not template_name:
-            message = (
-                "[WhatsApp Notify] WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE is not set. "
-                "Falling back to freeform text, which Meta only accepts inside the recipient's "
-                "24-hour customer service window; outside it every send fails with error 131047. "
-                "Set WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE to an approved template and "
-                "WHATSAPP_DEPARTMENT_TEMPLATE_LANG to its language code to make delivery window-independent."
-            )
             if bool(getattr(settings, "is_production", False)):
-                logger.error(message)
+                # The WABA has this operations template approved. Without it, every
+                # alert is freeform and Meta rejects recipients outside the 24-hour
+                # window with 131047. Default to the approved template so department
+                # numbers keep receiving booking alerts after their window closes.
+                template_name = "shafsky_ops_alert"
+                template_lang = "en_US"
+                logger.warning(
+                    "[WhatsApp Notify] WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE is not set; "
+                    "using the approved default template '%s' (%s) so department alerts are "
+                    "not limited by the 24-hour window.",
+                    template_name,
+                    template_lang,
+                )
             else:
+                message = (
+                    "[WhatsApp Notify] WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE is not set. "
+                    "Falling back to freeform text, which Meta only accepts inside the recipient's "
+                    "24-hour customer service window; outside it every send fails with error 131047. "
+                    "Set WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE to an approved template and "
+                    "WHATSAPP_DEPARTMENT_TEMPLATE_LANG to its language code to make delivery window-independent."
+                )
                 logger.warning(message)
 
         return template_name, template_lang

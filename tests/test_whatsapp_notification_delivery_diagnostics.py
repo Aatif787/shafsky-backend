@@ -216,20 +216,23 @@ def test_template_rejection_keeps_meta_status_and_subcode(monkeypatch):
 # 2. Missing template is a production-level error
 # ---------------------------------------------------------------------------
 
-def test_missing_template_logs_error_in_production(monkeypatch, caplog):
+def test_missing_template_uses_approved_default_in_production(monkeypatch, caplog):
+    """A production deployment without the env value must still use the approved template."""
     monkeypatch.setattr(
         "app.services.whatsapp_department_service.settings", _settings(production=True)
     )
     _accept_all(monkeypatch)
 
-    with caplog.at_level(logging.ERROR, logger="shafsky.whatsapp_department"):
-        WhatsAppDepartmentService.dispatch_booking_or_enquiry_notification(
+    with caplog.at_level(logging.WARNING, logger="shafsky.whatsapp_department"):
+        result = WhatsAppDepartmentService.dispatch_booking_or_enquiry_notification(
             {"booking_ref": "SHF-NOTPLATE-001", "service_category": "Lounge"}
         )
 
-    messages = [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR]
-    assert any("WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE is not set" in m for m in messages)
-    assert any("131047" in m for m in messages)
+    assert result["template_configured"] is True
+    assert result["status"] == "ACCEPTED"
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("using the approved default template" in m for m in messages)
+    assert not any("131047" in m for m in messages)
 
 
 # ---------------------------------------------------------------------------
