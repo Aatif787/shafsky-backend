@@ -72,6 +72,7 @@ class WhatsAppDepartmentExtMixin:
         message_body: str,
         template_name: str,
         template_lang: str,
+        template_text: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Sends one operations notification using the template path when configured."""
         whatsapp_client = _wds().whatsapp_client
@@ -79,7 +80,7 @@ class WhatsAppDepartmentExtMixin:
         if not template_name:
             return whatsapp_client.send_text_message(phone, message_body)
 
-        components = cls.build_template_components(message_body)
+        components = cls.build_template_components(template_text or message_body)
         res = whatsapp_client.send_message(
             to_phone=phone,
             template_name=template_name,

@@ -190,7 +190,7 @@ def test_customer_confirmation_template_param_is_meta_legal(monkeypatch):
     assert "SHF-WA-FIX-001" in value
     assert "Rohan Sharma" in value
     assert "6E-2045" in value
-    assert "CONFIRMED" in value
+    assert "Confirmed" in value
 
 
 def test_customer_confirmation_uses_freeform_text_on_fallback(monkeypatch):

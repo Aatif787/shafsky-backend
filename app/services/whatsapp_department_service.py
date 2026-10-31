@@ -684,12 +684,11 @@ class WhatsAppDepartmentService(WhatsAppDepartmentExtMixin):
         )
         dest = context.get("dest_code") or context.get("destination")
         flight_num = context.get("flight_num") or context.get("flightNum") or "N/A"
-        date_time = (
+        date_time = cls._display_when(
             context.get("departure_time")
             or context.get("service_date")
             or context.get("serviceDate")
-            or "N/A"
-        )
+        ) or "N/A"
         terminal = context.get("terminal")
 
         # Amount & Status
@@ -812,6 +811,113 @@ class WhatsAppDepartmentService(WhatsAppDepartmentExtMixin):
             lines.append(f"• *Notes*: {clean_notes}")
 
         return "\n".join(lines)
+
+    @staticmethod
+    def _display_when(value: Any) -> str:
+        """Renders a stored date/time as a clean value for staff messages."""
+        if value is None:
+            return ""
+        text = str(value).strip()
+        if not text:
+            return ""
+        if len(text) > 10 and ("T" in text or " " in text):
+            try:
+                from datetime import datetime
+
+                parsed = datetime.fromisoformat(text.replace("Z", "+00:00").replace(" ", "T"))
+                return parsed.strftime("%d %b %Y, %H:%M")
+            except ValueError:
+                return text[:40]
+        if len(text) == 10 and text[4] == "-" and text[7] == "-":
+            try:
+                from datetime import datetime
+
+                return datetime.strptime(text, "%Y-%m-%d").strftime("%d %b %Y")
+            except ValueError:
+                return text
+        return text[:40]
+
+    @classmethod
+    def format_booking_notification_summary(
+        cls,
+        context: Dict[str, Any],
+        department: Department,
+        service_label: str,
+    ) -> str:
+        """A compact, scannable line for the approved operations template.
+
+        The full formatted alert is kept for the free-form path; the template
+        wrapper already supplies the greeting and call to action, so this value
+        carries only the facts an operator needs at a glance.
+        """
+        booking_ref = str(context.get("booking_ref") or context.get("bookingRef") or "N/A").strip()
+        customer_name = str(context.get("passenger_name") or context.get("passengerName") or "").strip()
+        customer_phone = str(context.get("passenger_phone") or context.get("passengerPhone") or "").strip()
+        service_type = str(
+            context.get("service_name")
+            or context.get("service_type")
+            or context.get("package")
+            or ""
+        ).strip()
+        airport = str(
+            context.get("airport_code")
+            or context.get("origin_code")
+            or context.get("origin")
+            or ""
+        ).strip()
+        origin = str(context.get("origin_code") or context.get("origin") or airport).strip()
+        dest = str(context.get("dest_code") or context.get("destination") or "").strip()
+        flight_num = str(context.get("flight_num") or context.get("flightNum") or "").strip()
+        date_time = cls._display_when(
+            context.get("departure_time")
+            or context.get("service_date")
+            or context.get("serviceDate")
+        )
+        pax = context.get("passenger_count") or context.get("passengerCount") or 1
+        status = str(context.get("status") or "PENDING").upper()
+
+        raw_amount = context.get("total_amount") if context.get("total_amount") is not None else context.get("totalAmount")
+        currency = str(context.get("currency") or "INR").upper()
+        amount_text = "Quote"
+        if raw_amount is not None:
+            try:
+                amount_value = float(raw_amount)
+            except (TypeError, ValueError):
+                amount_value = 0.0
+            if amount_value > 0:
+                amount_text = f"₹{amount_value:,.0f}" if currency == "INR" else f"{currency} {amount_value:,.0f}"
+
+        is_enquiry = status in {"PENDING", "ENQUIRY", "NEW_BOOKING", "QUOTED"} or "enquir" in service_type.lower()
+        parts: List[str] = ["NEW ENQUIRY" if is_enquiry else "NEW BOOKING", booking_ref]
+        if service_type and service_label and service_label.lower() in service_type.lower():
+            # "Ticketing · Air Ticketing" is redundant; the specific label is enough.
+            parts.append(service_type)
+        elif service_label or service_type:
+            parts.append(
+                f"{service_label} · {service_type}"
+                if service_type and service_type.lower() != service_label.lower()
+                else (service_label or service_type)
+            )
+        if customer_name and customer_name.upper() != "N/A":
+            parts.append(customer_name)
+        if customer_phone and customer_phone.upper() != "N/A":
+            parts.append(customer_phone)
+        route = f"{origin} → {dest}" if origin and dest and origin != dest else (airport or dest)
+        if route and route.upper() != "N/A":
+            parts.append(route)
+        if date_time and date_time.upper() != "N/A":
+            parts.append(date_time)
+        if flight_num and flight_num.upper() != "N/A":
+            parts.append(f"Flight {flight_num}")
+        try:
+            pax_value = int(pax)
+        except (TypeError, ValueError):
+            pax_value = 1
+        if pax_value > 0:
+            parts.append(f"{pax_value} pax")
+        parts.append(amount_text)
+        parts.append(status)
+        return cls.to_template_parameter(" · ".join(part for part in parts if part))
 
     @classmethod
     def format_charter_notification(cls, charter_req: Any) -> str:
