@@ -78,6 +78,8 @@ The window comes from `whatsapp_conversations.last_user_activity_at`, which is w
 
 This makes bot-originated bookings and customers who recently chatted receive their confirmation immediately. It does **not** cover a first-time website customer, who has no window: that customer still needs the billing fix in section 6.
 
+**Live proof (30 Oct, 14:38 IST):** booking `SHF-20261030-F520C284` was sent free-form because that customer's window was open; the record moved `COMPLETED → DELIVERED` 15 seconds later with `payload.delivery.channel = freeform`. An earlier customer notification that day (12:15 IST), before the change, failed with `131042`.
+
 Department notifications are a separate path and were not modified.
 
 ## 6. The action that actually makes every customer receive messages
