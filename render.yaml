@@ -128,7 +128,7 @@ services:
         sync: false
       # Approved Meta template. Required for delivery outside the 24-hour window.
       - key: WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE
-        sync: false
+        value: shafsky_ops_alert
       - key: WHATSAPP_DEPARTMENT_TEMPLATE_LANG
         value: en_US
       # Approved Meta template for customer booking confirmation notifications.
