@@ -123,27 +123,12 @@ class NotificationTemplateEngine:
             """
             whatsapp = f"✈️ *Shafsky Aviation Services VIP Desk*\n\nDear *{name}*,\n\nWe have received your VIP service booking request.\n\n*Reference:* {ref}\n*Airport:* {airport}\n*Flight:* {flight}\n*Date:* {date_str}\n\nYour booking is currently pending payment confirmation. Please complete the payment to finalize your booking.\n\nSupport: {support}."
 
-        elif t_type == "ADMIN_NEW_BOOKING":
-            subject = f"[Shafsky Ops] New booking {ref} — {airport}"
-            html = f"""
-            <h2>New booking received</h2>
-            <ul>
-                <li><strong>Reference:</strong> {ref}</li>
-                <li><strong>Customer:</strong> {name}</li>
-                <li><strong>Email:</strong> {data.get("passengerEmail") or data.get("passenger_email") or ""}</li>
-                <li><strong>Phone:</strong> {phone}</li>
-                <li><strong>Airport:</strong> {airport}</li>
-                <li><strong>Journey:</strong> {journey}</li>
-                <li><strong>Package / service:</strong> {service}</li>
-                <li><strong>Flight:</strong> {flight} ({origin} &rarr; {dest})</li>
-                <li><strong>Date / time:</strong> {date_str}</li>
-                {f"<li><strong>Passengers:</strong> {passengers}</li>" if passengers else ""}
-                {f"<li><strong>Terminal:</strong> {terminal}</li>" if terminal else ""}
-                <li><strong>Total Amount:</strong> {currency} {amount}</li>
-                <li><strong>Status:</strong> {status}</li>
-            </ul>
-            """
-            whatsapp = f"🚨 *Operations Alert*\n\nNew booking received:\n*Ref:* {ref}\n*Guest:* {name}\n*Airport:* {airport}\n*Flight:* {flight}"
+        elif t_type in ("ADMIN_NEW_BOOKING", "WHATSAPP_OPERATIONS_ALERT", "OPERATIONS_ALERT"):
+            from app.services.whatsapp_notification_template_service import render_whatsapp_operations_alert_html
+            
+            subject = f"[Shafsky Ops] New Operations Alert: {ref} — {service or airport}"
+            html = render_whatsapp_operations_alert_html(data)
+            whatsapp = f"🚨 *New Operations Alert*\n\n*Booking / Enquiry Received*\n*Reference:* {ref}\n*Service:* {service}\n*Customer:* {name}\n*Contact:* {phone}\n*Status:* {status}"
 
         elif t_type == "BOOKING_CANCELLED":
             reason = data.get("reason", "Cancelled upon request")
