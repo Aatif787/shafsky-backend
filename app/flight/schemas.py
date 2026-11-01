@@ -228,6 +228,9 @@ class FlightValidateRequest(BaseModel):
 
 class FlightValidateResponseData(BaseModel):
     valid: bool
+    is_bookable: bool = True
+    is_expired: bool = False
+    rejection_reason: Optional[str] = None
     flight_data: Optional[FlightStatusData] = Field(default=None, alias="flightData")
 
     model_config = ConfigDict(populate_by_name=True)

@@ -72,6 +72,8 @@ class WhatsAppDepartmentExtMixin:
         message_body: str,
         template_name: str,
         template_lang: str,
+        template_text: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Sends one operations notification using the template path when configured."""
         whatsapp_client = _wds().whatsapp_client
@@ -79,7 +81,11 @@ class WhatsAppDepartmentExtMixin:
         if not template_name:
             return whatsapp_client.send_text_message(phone, message_body)
 
-        components = cls.build_template_components(message_body)
+        components = cls.build_template_components(
+            template_text or message_body,
+            template_name=template_name,
+            context=context,
+        )
         res = whatsapp_client.send_message(
             to_phone=phone,
             template_name=template_name,
@@ -338,7 +344,7 @@ class WhatsAppDepartmentExtMixin:
             for phone in recipients:
                 masked = cls._mask_phone(phone)
                 try:
-                    res = cls._send_to_recipient(phone, message_body, template_name, template_lang)
+                    res = cls._send_to_recipient(phone, message_body, template_name, template_lang, context=context)
                 except Exception as item_err:
                     logger.error(
                         "[WhatsApp Notify] Exception during send for %s to %s: %s",
@@ -503,7 +509,7 @@ class WhatsAppDepartmentExtMixin:
             for phone in recipients:
                 masked = cls._mask_phone(phone)
                 try:
-                    res = cls._send_to_recipient(phone, message_body, template_name, template_lang)
+                    res = cls._send_to_recipient(phone, message_body, template_name, template_lang, context=charter_dict)
                 except Exception as item_err:
                     logger.error(
                         "[WhatsApp Notify] Exception during charter send for %s to %s: %s",

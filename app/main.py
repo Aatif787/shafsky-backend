@@ -179,6 +179,7 @@ _cors_kwargs = {
         "Content-Language",
         "Origin",
         "X-Device-ID",
+        "X-Draft-Token",
         "Idempotency-Key",
         "X-Idempotency-Key",
         "X-Correlation-ID",
@@ -260,6 +261,7 @@ from app.routers import journey_router
 from app.routers import operations_router
 from app.routers import charter_router
 from app.routers import lounge_router
+from app.routers import booking_draft_router
 from app.routers import contact_settings_router
 from app.ai import router as ai_router
 from app.integrations.whatsapp.router import router as whatsapp_router
@@ -287,6 +289,7 @@ app.include_router(journey_router.router)
 app.include_router(operations_router.router)
 app.include_router(charter_router.router)
 app.include_router(lounge_router.router)
+app.include_router(booking_draft_router.router)
 
 # Direct Razorpay Standard Checkout Root Endpoints
 @app.post("/api/create-order", tags=["Razorpay Checkout"], status_code=201)

@@ -1,5 +1,5 @@
 """
-Authoritative booking cutoff: 12h domestic / 24h international.
+Authoritative booking cutoff: 6h domestic / 12h international.
 
 Uses the flight API scheduled datetime at the service airport, in the
 airport timezone. Transit classification is not altered here.
@@ -18,15 +18,15 @@ from app.services.service_airport_rules import (
     normalize_journey_type,
 )
 
-DOMESTIC_MIN_HOURS = 12
-INTERNATIONAL_MIN_HOURS = 24
+DOMESTIC_MIN_HOURS = 6
+INTERNATIONAL_MIN_HOURS = 12
 EXECUTIVE_PHONE = "+91-9599087959"
 WHATSAPP_BRAND = "Shafsky Aviation Services"
 IST = timezone(timedelta(hours=5, minutes=30))
 
 
 def airport_min_notice_hours(flight_type: Optional[str]) -> int:
-    """12h domestic / 24h if any international leg (including transit mixes)."""
+    """6h domestic / 12h if any international leg (including transit mixes)."""
     ft = (flight_type or "").upper().replace("-", "_").replace(" ", "_")
     if "INTERNATIONAL" in ft:
         return INTERNATIONAL_MIN_HOURS

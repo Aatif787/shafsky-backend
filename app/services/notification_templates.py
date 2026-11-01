@@ -145,6 +145,13 @@ class NotificationTemplateEngine:
             """
             whatsapp = f"🚨 *Operations Alert*\n\nNew booking received:\n*Ref:* {ref}\n*Guest:* {name}\n*Airport:* {airport}\n*Flight:* {flight}"
 
+        elif t_type in ("WHATSAPP_OPERATIONS_ALERT", "OPERATIONS_ALERT"):
+            from app.services.whatsapp_notification_template_service import render_whatsapp_operations_alert_html
+            
+            subject = f"[Shafsky Ops] New Operations Alert: {ref} — {service or airport}"
+            html = render_whatsapp_operations_alert_html(data)
+            whatsapp = f"🚨 *New Operations Alert*\n\n*Booking / Enquiry Received*\n*Reference:* {ref}\n*Service:* {service}\n*Customer:* {name}\n*Contact:* {phone}\n*Status:* {status}"
+
         elif t_type == "BOOKING_CANCELLED":
             reason = data.get("reason", "Cancelled upon request")
             subject = f"Shafsky Aviation Services - Booking Cancelled ({ref})"

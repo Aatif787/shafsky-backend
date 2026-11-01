@@ -41,6 +41,26 @@ def build_template_parameter(value: Any, max_chars: int = TEMPLATE_PARAM_MAX_CHA
     return text
 
 
+def _format_datetime(value: Any) -> Optional[str]:
+    """Renders a booking date as a clean, human-readable value."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.strftime("%d %b %Y, %H:%M")
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        normalized = text.replace("Z", "+00:00").replace(" ", "T")
+        parsed = datetime.fromisoformat(normalized)
+        if len(text) == 10:
+            return parsed.strftime("%d %b %Y")
+        return parsed.strftime("%d %b %Y, %H:%M")
+    except ValueError:
+        return text[:40]
+
+
+
 def build_customer_summary(
     *,
     reference_label: str,
@@ -56,24 +76,43 @@ def build_customer_summary(
     currency: Optional[str] = None,
     status_label: Optional[str] = None,
 ) -> str:
-    """Builds the single-line booking/enquiry summary used as the {{1}} value."""
-    parts: List[str] = [f"{reference_label}: {reference}"]
+    """Builds the clean single-line summary used inside the approved template.
+
+    The Meta body already introduces the booking, so this value starts with the
+    reference and then reads as a scannable sequence of facts. No new-lines or
+    pipe characters: only the middle dot separator.
+    """
+    parts: List[str] = [str(reference).strip()]
+
+    if status_label:
+        status = str(status_label).strip()
+        if "enquir" in status.lower():
+            status = "Enquiry received"
+        elif status.upper().startswith("CONFIRMED"):
+            status = "Confirmed"
+        else:
+            status = status.split("(")[0].strip().title()
+        if status:
+            parts.append(status)
+
     if guest_name:
-        parts.append(f"Guest: {guest_name}")
+        parts.append(str(guest_name).strip())
     if service:
-        parts.append(f"Service: {service}")
+        parts.append(str(service).strip())
     if airport:
-        parts.append(f"{location_label}: {airport}")
+        parts.append(str(airport).strip())
     if date_time:
-        parts.append(f"Date: {date_time}")
+        parts.append(str(date_time).strip())
     if flight_num:
-        parts.append(f"Flight: {flight_num}")
+        parts.append(f"Flight {str(flight_num).strip()}")
+
     try:
         pax = int(passengers) if passengers is not None else 0
     except (TypeError, ValueError):
         pax = 0
     if pax > 0:
-        parts.append(f"Guests: {pax}")
+        parts.append(f"{pax} guest" + ("" if pax == 1 else "s"))
+
     if amount is not None:
         try:
             amount_value = float(amount)
@@ -81,10 +120,12 @@ def build_customer_summary(
             amount_value = 0.0
         if amount_value > 0:
             code = (currency or "INR").upper()
-            parts.append(f"Amount: {code} {amount_value:,.0f}")
-    if status_label:
-        parts.append(f"Status: {status_label}")
-    return build_template_parameter(" | ".join(parts))
+            if code == "INR":
+                parts.append(f"₹{amount_value:,.0f}")
+            else:
+                parts.append(f"{code} {amount_value:,.0f}")
+
+    return build_template_parameter(" · ".join(part for part in parts if part))
 
 
 class NotificationServiceExtMixin:
@@ -736,12 +777,7 @@ class NotificationServiceExtMixin:
             or (booking.departure_time if booking else None)
             or (booking.arrival_time if booking else None)
         )
-        date_time_str = None
-        if date_time_raw:
-            if isinstance(date_time_raw, datetime):
-                date_time_str = date_time_raw.strftime("%d %b %Y, %H:%M")
-            else:
-                date_time_str = str(date_time_raw).strip()
+        date_time_str = _format_datetime(date_time_raw)
 
         support_phone = getattr(settings, "SUPPORT_PHONE", None) or os.getenv("SUPPORT_PHONE") or "+91 9599087959"
 
@@ -1364,12 +1400,7 @@ class NotificationServiceExtMixin:
             or meta_details.get("service_date")
             or booking_details.get("service_date")
         )
-        date_time_str = None
-        if date_raw:
-            if isinstance(date_raw, datetime):
-                date_time_str = date_raw.strftime("%d %b %Y, %H:%M")
-            else:
-                date_time_str = str(date_raw).strip()[:40]
+        date_time_str = _format_datetime(date_raw)
 
         support_phone = getattr(settings, "SUPPORT_PHONE", None) or os.getenv("SUPPORT_PHONE") or "+91 9599087959"
 
