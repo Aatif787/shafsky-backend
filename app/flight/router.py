@@ -52,6 +52,95 @@ def get_flight_service() -> FlightIntelligenceService:
     return FlightIntelligenceService(provider=provider)
 
 
+def check_flight_expiry(
+    flight_data: FlightStatusData,
+    direction: Optional[str],
+    flight_date: str,
+) -> tuple[bool, Optional[str]]:
+    """
+    Returns (is_expired, rejection_message).
+    Evaluates whether the flight event corresponding to the selected direction has already passed.
+    """
+    from datetime import datetime, timezone
+    from app.services.booking_cutoff import lookup_airport_timezone, airport_tzinfo
+
+    dir_clean = (direction or "").strip().lower()
+    if dir_clean not in ("departure", "arrival", "transit"):
+        return False, None
+
+    status_clean = (flight_data.status or "").strip().upper()
+    if status_clean in ("CANCELLED", "CANCELED", "DIVERTED"):
+        return True, "This flight has been cancelled. Please select an active future flight."
+
+    if dir_clean == "departure" and status_clean in ("DEPARTED", "ACTIVE", "EN ROUTE", "IN-AIR", "IN FLIGHT", "LANDED", "ARRIVED"):
+        return True, "This flight has already departed. Please select a future flight."
+
+    if dir_clean in ("arrival", "transit") and status_clean in ("LANDED", "ARRIVED"):
+        msg = "This flight has already arrived. Please select a future flight." if dir_clean == "arrival" else "This flight has already arrived/departed. Please select a future flight."
+        return True, msg
+
+    now_utc = datetime.now(timezone.utc)
+
+    # 1. Evaluate Departure
+    if dir_clean == "departure":
+        dep_sched = flight_data.departure.scheduled if flight_data.departure else None
+        dep_ap = flight_data.departure.airport if flight_data.departure else None
+        tz_name = (flight_data.departure.timezone if flight_data.departure else None) or lookup_airport_timezone(None, dep_ap)
+        tz = airport_tzinfo(tz_name)
+        sched_dt = None
+        if dep_sched:
+            sched_str = str(dep_sched).strip()
+            if "T" not in sched_str and "-" not in sched_str:
+                sched_str = f"{flight_date}T{sched_str}"
+            try:
+                parsed = datetime.fromisoformat(sched_str.replace("Z", "+00:00"))
+                sched_dt = parsed if parsed.tzinfo else parsed.replace(tzinfo=tz)
+            except Exception:
+                pass
+        if sched_dt and sched_dt.astimezone(timezone.utc) <= now_utc:
+            return True, "This flight has already departed. Please select a future flight."
+
+    # 2. Evaluate Arrival
+    if dir_clean == "arrival":
+        arr_sched = flight_data.arrival.scheduled if flight_data.arrival else None
+        arr_ap = flight_data.arrival.airport if flight_data.arrival else None
+        tz_name = (flight_data.arrival.timezone if flight_data.arrival else None) or lookup_airport_timezone(None, arr_ap)
+        tz = airport_tzinfo(tz_name)
+        sched_dt = None
+        if arr_sched:
+            sched_str = str(arr_sched).strip()
+            if "T" not in sched_str and "-" not in sched_str:
+                sched_str = f"{flight_date}T{sched_str}"
+            try:
+                parsed = datetime.fromisoformat(sched_str.replace("Z", "+00:00"))
+                sched_dt = parsed if parsed.tzinfo else parsed.replace(tzinfo=tz)
+            except Exception:
+                pass
+        if sched_dt and sched_dt.astimezone(timezone.utc) <= now_utc:
+            return True, "This flight has already arrived. Please select a future flight."
+
+    # 3. Evaluate Transit
+    if dir_clean == "transit":
+        arr_sched = flight_data.arrival.scheduled if flight_data.arrival else None
+        arr_ap = flight_data.arrival.airport if flight_data.arrival else None
+        tz_name = (flight_data.arrival.timezone if flight_data.arrival else None) or lookup_airport_timezone(None, arr_ap)
+        tz = airport_tzinfo(tz_name)
+        sched_arr_dt = None
+        if arr_sched:
+            sched_str = str(arr_sched).strip()
+            if "T" not in sched_str and "-" not in sched_str:
+                sched_str = f"{flight_date}T{sched_str}"
+            try:
+                parsed = datetime.fromisoformat(sched_str.replace("Z", "+00:00"))
+                sched_arr_dt = parsed if parsed.tzinfo else parsed.replace(tzinfo=tz)
+            except Exception:
+                pass
+        if sched_arr_dt and sched_arr_dt.astimezone(timezone.utc) <= now_utc:
+            return True, "This flight has already arrived/departed. Please select a future flight."
+
+    return False, None
+
+
 @router.post("/validate", response_model=FlightValidateResponse)
 @flights_router.post("/validate", response_model=FlightValidateResponse)
 def validate_flight(
@@ -141,9 +230,33 @@ def validate_flight(
                 aircraft=aircraft_details,
                 status="Scheduled"
             )
+
+            is_exp, exp_msg = check_flight_expiry(flight_data, direction, dep_date)
+            if is_exp:
+                return JSONResponse(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    content={
+                        "success": False,
+                        "error": exp_msg,
+                        "code": "FLIGHT_EXPIRED",
+                        "data": {
+                            "valid": False,
+                            "is_bookable": False,
+                            "is_expired": True,
+                            "rejection_reason": exp_msg,
+                            "flightData": flight_data.model_dump(by_alias=True),
+                        }
+                    }
+                )
+
             return FlightValidateResponse(
                 success=True,
-                data=FlightValidateResponseData(valid=True, flightData=flight_data)
+                data=FlightValidateResponseData(
+                    valid=True,
+                    is_bookable=True,
+                    is_expired=False,
+                    flightData=flight_data
+                )
             )
 
         flight_num = (payload.resolved_flight_num or "").strip().upper()
@@ -177,9 +290,33 @@ def validate_flight(
             destination_code=payload.resolved_destination_code,
             airport_code=payload.airport_code,
         )
+
+        is_exp, exp_msg = check_flight_expiry(flight_data, direction, flight_date)
+        if is_exp:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={
+                    "success": False,
+                    "error": exp_msg,
+                    "code": "FLIGHT_EXPIRED",
+                    "data": {
+                        "valid": False,
+                        "is_bookable": False,
+                        "is_expired": True,
+                        "rejection_reason": exp_msg,
+                        "flightData": flight_data.model_dump(by_alias=True),
+                    }
+                }
+            )
+
         return FlightValidateResponse(
             success=True,
-            data=FlightValidateResponseData(valid=True, flightData=flight_data)
+            data=FlightValidateResponseData(
+                valid=True,
+                is_bookable=True,
+                is_expired=False,
+                flightData=flight_data
+            )
         )
     except FlightRateLimitExceededException:
         logger.warning(

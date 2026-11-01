@@ -216,26 +216,34 @@ class BookingService(BookingServiceExtMixin):
         selected_services = payload.selected_services or service_options
         metadata_json = payload.metadata_json or payload.metadata or {}
 
-        # 3. Handle Flight Datetimes if present
-        dep_time = payload.departure_time
-        arr_time = payload.arrival_time
-        try:
-            import zoneinfo
-            ist_tz = zoneinfo.ZoneInfo("Asia/Kolkata")
-        except Exception:
-            ist_tz = timezone(timedelta(hours=5, minutes=30))
-        if dep_time is not None and dep_time.tzinfo is None:
-            dep_time = dep_time.replace(tzinfo=ist_tz)
-        if arr_time is not None and arr_time.tzinfo is None:
-            arr_time = arr_time.replace(tzinfo=ist_tz)
+        # 3. Handle Flight Datetimes & Airport Timezones
+        from app.services.booking_cutoff import lookup_airport_timezone, airport_tzinfo
+        from app.services.service_airport_rules import normalize_journey_type as _norm_jt
 
         early_meta = payload.metadata_json or payload.metadata or {}
-        from app.services.service_airport_rules import normalize_journey_type as _norm_jt
         early_jt = _norm_jt(
             (early_meta or {}).get("journey_type")
             or (early_meta or {}).get("direction")
             or payload.service_category
         )
+
+        svc_apt = str(
+            (early_meta or {}).get("service_airport")
+            or (early_meta or {}).get("airport_code")
+            or (payload.dest_code if early_jt == "ARRIVAL" else payload.origin_code)
+            or ""
+        ).strip().upper()
+
+        orig_tz = airport_tzinfo(lookup_airport_timezone(db, payload.origin_code or svc_apt))
+        dest_tz = airport_tzinfo(lookup_airport_timezone(db, payload.dest_code or svc_apt))
+        svc_tz = airport_tzinfo(lookup_airport_timezone(db, svc_apt or (payload.dest_code if early_jt == "ARRIVAL" else payload.origin_code)))
+
+        dep_time = payload.departure_time
+        arr_time = payload.arrival_time
+        if dep_time is not None and dep_time.tzinfo is None:
+            dep_time = dep_time.replace(tzinfo=orig_tz)
+        if arr_time is not None and arr_time.tzinfo is None:
+            arr_time = arr_time.replace(tzinfo=dest_tz)
 
         # Checkout sends a single service clock. Map it onto the journey type
         # so arrival bookings are not rejected for a missing arrivalTime field.
@@ -246,17 +254,58 @@ class BookingService(BookingServiceExtMixin):
 
         service_clock = arr_time if early_jt == "ARRIVAL" else dep_time
         if early_jt == "TRANSIT":
-            service_clock = dep_time or arr_time
+            service_clock = arr_time or dep_time
 
+        # Validate live flight status from metadata
+        fl_status = str(
+            (early_meta or {}).get("flight_status")
+            or (early_meta or {}).get("status")
+            or ""
+        ).strip().upper()
+        if fl_status in ("CANCELLED", "CANCELED", "DIVERTED"):
+            raise HTTPException(
+                status_code=400,
+                detail="This flight has been cancelled. Please select an active future flight."
+            )
+        if early_jt == "DEPARTURE" and fl_status in ("DEPARTED", "ACTIVE", "EN ROUTE", "IN-AIR", "IN FLIGHT", "LANDED", "ARRIVED"):
+            raise HTTPException(
+                status_code=400,
+                detail="This flight has already departed. Please select a future flight."
+            )
+        if early_jt in ("ARRIVAL", "TRANSIT") and fl_status in ("LANDED", "ARRIVED"):
+            detail_msg = "This flight has already arrived. Please select a future flight." if early_jt == "ARRIVAL" else "This flight has already arrived/departed. Please select a future flight."
+            raise HTTPException(
+                status_code=400,
+                detail=detail_msg
+            )
+
+        now_aware = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
         if service_clock is not None:
             if service_clock.tzinfo is None:
-                service_clock = service_clock.replace(tzinfo=timezone.utc)
-            now_aware = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
-            if service_clock.astimezone(timezone.utc) < now_aware.astimezone(timezone.utc):
+                service_clock = service_clock.replace(tzinfo=svc_tz)
+            if service_clock.astimezone(timezone.utc) <= now_aware.astimezone(timezone.utc):
+                if early_jt == "ARRIVAL":
+                    detail_msg = "This flight has already arrived. Please select a future flight."
+                elif early_jt == "TRANSIT":
+                    detail_msg = "This flight has already arrived/departed. Please select a future flight."
+                else:
+                    detail_msg = "This flight has already departed. Please select a future flight."
                 raise HTTPException(
                     status_code=400,
-                    detail="This flight time is in the past and cannot be booked."
+                    detail=detail_msg
                 )
+
+        # Check connecting flight for Transit
+        if early_jt == "TRANSIT":
+            dep2 = payload.departure_time_2
+            if dep2 is not None:
+                if dep2.tzinfo is None:
+                    dep2 = dep2.replace(tzinfo=svc_tz)
+                if dep2.astimezone(timezone.utc) <= now_aware.astimezone(timezone.utc):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="This flight has already departed. Please select a future flight."
+                    )
 
         if service_category == "Airport Assistance" and service_clock is not None:
             from app.services.booking_cutoff import (

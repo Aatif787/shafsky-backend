@@ -132,6 +132,27 @@ async def create_order_endpoint(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Booking '{booking_ref}' cannot accept payment in its current state.",
             )
+        # Revalidate that the flight has not expired between booking initiation and payment
+        if booking.service_category == "Airport Assistance":
+            from datetime import datetime, timezone
+            from app.services.booking_cutoff import lookup_airport_timezone, airport_tzinfo
+            now_utc = datetime.now(timezone.utc)
+            meta = booking.metadata_json or {}
+            jt = str(meta.get("journey_type") or meta.get("direction") or "").upper()
+            svc_apt = str(meta.get("service_airport") or (booking.dest_code if jt == "ARRIVAL" else booking.origin_code) or "").upper()
+            tz = airport_tzinfo(lookup_airport_timezone(db, svc_apt))
+            svc_clock = booking.arrival_time if jt == "ARRIVAL" else booking.departure_time
+            if jt == "TRANSIT":
+                svc_clock = booking.arrival_time or booking.departure_time
+            if svc_clock is not None:
+                svc_dt = svc_clock if svc_clock.tzinfo else svc_clock.replace(tzinfo=tz)
+                if svc_dt.astimezone(timezone.utc) <= now_utc:
+                    msg = "This flight has already arrived. Please select a future flight." if jt == "ARRIVAL" else ("This flight has already arrived/departed. Please select a future flight." if jt == "TRANSIT" else "This flight has already departed. Please select a future flight.")
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=msg,
+                    )
+
         if booking.total_amount is None or float(booking.total_amount) <= 0:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Booking has no payable total amount.")
         authoritative_amount_rupees = float(booking.total_amount)
