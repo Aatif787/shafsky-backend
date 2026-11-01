@@ -227,57 +227,57 @@ def test_packages_filter_and_inclusion_source_from_db():
         db.close()
 
 
-def test_cutoff_domestic_exact_12h_allow():
+def test_cutoff_domestic_exact_6h_allow():
+    now = datetime(2026, 8, 27, 10, 0, tzinfo=IST)
+    scheduled = now + timedelta(hours=6)
+    result = evaluate_booking_cutoff(
+        scheduled_dt=scheduled,
+        now_utc=now.astimezone(timezone.utc),
+        airport_tz_name="Asia/Kolkata",
+        flight_type="DOMESTIC",
+    )
+    assert result.allowed is True
+
+
+def test_cutoff_domestic_5h59_reject():
+    now = datetime(2026, 8, 27, 10, 0, tzinfo=IST)
+    scheduled = now + timedelta(hours=5, minutes=59)
+    result = evaluate_booking_cutoff(
+        scheduled_dt=scheduled,
+        now_utc=now.astimezone(timezone.utc),
+        airport_tz_name="Asia/Kolkata",
+        flight_type="DOMESTIC",
+    )
+    assert result.allowed is False
+    assert "6 hours" in result.customer_message
+    assert "domestic" in result.customer_message
+    assert "9599087959" in result.customer_message
+    assert "Shafsky Aviation Services" in result.customer_message
+
+
+def test_cutoff_international_exact_12h_allow():
     now = datetime(2026, 8, 27, 10, 0, tzinfo=IST)
     scheduled = now + timedelta(hours=12)
     result = evaluate_booking_cutoff(
         scheduled_dt=scheduled,
         now_utc=now.astimezone(timezone.utc),
         airport_tz_name="Asia/Kolkata",
-        flight_type="DOMESTIC",
+        flight_type="INTERNATIONAL",
     )
     assert result.allowed is True
 
 
-def test_cutoff_domestic_11h59_reject():
+def test_cutoff_international_11h59_reject():
     now = datetime(2026, 8, 27, 10, 0, tzinfo=IST)
     scheduled = now + timedelta(hours=11, minutes=59)
     result = evaluate_booking_cutoff(
         scheduled_dt=scheduled,
         now_utc=now.astimezone(timezone.utc),
         airport_tz_name="Asia/Kolkata",
-        flight_type="DOMESTIC",
+        flight_type="INTERNATIONAL",
     )
     assert result.allowed is False
     assert "12 hours" in result.customer_message
-    assert "domestic" in result.customer_message
-    assert "9599087959" in result.customer_message
-    assert "Shafsky Aviation Services" in result.customer_message
-
-
-def test_cutoff_international_exact_24h_allow():
-    now = datetime(2026, 8, 27, 10, 0, tzinfo=IST)
-    scheduled = now + timedelta(hours=24)
-    result = evaluate_booking_cutoff(
-        scheduled_dt=scheduled,
-        now_utc=now.astimezone(timezone.utc),
-        airport_tz_name="Asia/Kolkata",
-        flight_type="INTERNATIONAL",
-    )
-    assert result.allowed is True
-
-
-def test_cutoff_international_23h59_reject():
-    now = datetime(2026, 8, 27, 10, 0, tzinfo=IST)
-    scheduled = now + timedelta(hours=23, minutes=59)
-    result = evaluate_booking_cutoff(
-        scheduled_dt=scheduled,
-        now_utc=now.astimezone(timezone.utc),
-        airport_tz_name="Asia/Kolkata",
-        flight_type="INTERNATIONAL",
-    )
-    assert result.allowed is False
-    assert "24 hours" in result.customer_message
     assert "international" in result.customer_message
 
 
@@ -312,7 +312,7 @@ def test_cutoff_blocks_payment_link(mock_text, mock_link):
 
     mock_text.return_value = {"success": True}
     mock_link.return_value = {"success": True, "short_url": "https://rzp.io/x", "payment_link_id": "plink_x"}
-    soon = (datetime.now(timezone.utc) + timedelta(hours=9)).isoformat()
+    soon = (datetime.now(timezone.utc) + timedelta(hours=4)).isoformat()
     db = SessionLocal()
     try:
         phone = f"91{uuid.uuid4().int % 10**10:010d}"
@@ -340,7 +340,7 @@ def test_cutoff_blocks_payment_link(mock_text, mock_link):
         assert conv.booking_ref is None
         mock_link.assert_not_called()
         sent = " ".join(str(c) for c in mock_text.call_args_list)
-        assert "12 hours" in sent
+        assert "6 hours" in sent
     finally:
         db.close()
 
@@ -438,10 +438,10 @@ def test_invoice_arrival_uses_arrival_date():
 
 
 if __name__ == "__main__":
-    test_cutoff_domestic_exact_12h_allow()
-    test_cutoff_domestic_11h59_reject()
-    test_cutoff_international_exact_24h_allow()
-    test_cutoff_international_23h59_reject()
+    test_cutoff_domestic_exact_6h_allow()
+    test_cutoff_domestic_5h59_reject()
+    test_cutoff_international_exact_12h_allow()
+    test_cutoff_international_11h59_reject()
     test_cutoff_uses_arrival_vs_departure_leg()
     test_cutoff_timezone_naive_treated_as_airport_local()
     test_cutoff_blocks_payment_link()

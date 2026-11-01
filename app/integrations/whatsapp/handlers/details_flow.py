@@ -187,6 +187,7 @@ class DetailsFlowMixin(BaseFlowMixin):
         arr_raw = metadata.get("arrival_scheduled")
 
         from app.services.booking_cutoff import (
+            INTERNATIONAL_MIN_HOURS,
             airport_min_notice_hours,
             parse_scheduled_datetime,
             EXECUTIVE_PHONE,
@@ -195,7 +196,7 @@ class DetailsFlowMixin(BaseFlowMixin):
         required = airport_min_notice_hours(
             metadata.get("travel_type") or metadata.get("flight_type") or metadata.get("transit_type")
         )
-        kind = "international" if required >= 24 else "domestic"
+        kind = "international" if required >= INTERNATIONAL_MIN_HOURS else "domestic"
 
         scheduled_dt = None
         if service_time_str:
