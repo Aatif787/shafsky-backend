@@ -778,8 +778,12 @@ class WhatsAppDepartmentService(WhatsAppDepartmentExtMixin):
         service_label: str,
     ) -> str:
         """
-        Formats a clean, professional, and readable WhatsApp operations alert
-        with structured sections and line breaks.
+        Formats a clean, professional, and readable WhatsApp markdown message
+        tailored to operations staff.
+        - For service enquiries (quote requests, transport/ticketing enquiries with reference rates):
+          Maintains the bulleted enquiry structure expected by operations and verification tests.
+        - For standard bookings / operations alerts:
+          Renders the structured multi-line operational card layout.
         """
         booking_ref = str(context.get("booking_ref") or context.get("bookingRef") or "N/A").strip()
         customer_name = str(context.get("passenger_name") or context.get("passengerName") or "N/A").strip()
@@ -852,7 +856,7 @@ class WhatsAppDepartmentService(WhatsAppDepartmentExtMixin):
         route_str = f"{origin} → {dest}" if origin and dest and origin != dest else (origin or dest or airport)
         has_flight = flight_num and flight_num.upper() != "N/A"
 
-        # Vehicle details if available
+        # Vehicle and Provider details if available
         vehicle_name = (
             details.get("vehicle_preference")
             or details.get("vehicle_name")
@@ -861,7 +865,102 @@ class WhatsAppDepartmentService(WhatsAppDepartmentExtMixin):
         )
         vehicle_id = details.get("vehicle_id") or details.get("vehicleId") or options.get("vehicle_id")
         vehicle_category = details.get("vehicle_category") or details.get("vehicleCategory") or options.get("vehicle_category")
+        provider = details.get("provider") or options.get("provider")
+        ref_price = details.get("reference_price") or options.get("reference_price")
 
+        # Round Trip specific fields
+        outbound_date = details.get("outbound_date")
+        return_date = details.get("return_date")
+        outbound_flight = details.get("outbound_flight")
+        return_flight = details.get("return_flight")
+
+        # Check if this dispatch is an enquiry flow
+        is_service_enquiry = bool(
+            context.get("is_enquiry")
+            or context.get("journey_type") == "ENQUIRY"
+            or ref_price is not None
+            or provider is not None
+            or any(k in service_type.lower() for k in ("round trip", "roundtrip"))
+        )
+
+        if is_service_enquiry:
+            # Department and service-specific enquiry headers
+            if service_label == "Transport" or any(k in service_type.lower() for k in ("transport", "sedan", "suv", "van")):
+                if any(k in service_type.lower() for k in ("round trip", "roundtrip")):
+                    header = "✈️ *NEW ROUND TRIP ENQUIRY — Ticketing / Transport / Hotels*"
+                else:
+                    header = "🚗 *NEW TRANSPORT ENQUIRY — Ticketing / Transport / Hotels*"
+            elif service_label == "Ticketing":
+                header = "🎫 *NEW TICKETING ENQUIRY — Ticketing / Transport / Hotels*"
+            elif service_label == "Lounge":
+                header = "🛋️ *NEW LOUNGE ENQUIRY RECEIVED — Meet & Greet / Lounge*"
+            elif department == Department.DEPARTMENT_1:
+                header = "✈️ *NEW BOOKING / ENQUIRY — Meet & Greet / Lounge*"
+            elif department == Department.DEPARTMENT_2:
+                header = "🚗 *NEW BOOKING / ENQUIRY — Ticketing / Transport / Hotels*"
+            else:
+                header = "🛩️ *NEW SERVICE ENQUIRY — Air Charter / Cargo / Special Services*"
+
+            enquiry_amount_str = amount_str if raw_amount is not None and float(raw_amount or 0) > 0 else "Quotation Required (₹0 Enquiry)"
+            contact_str = f"{customer_phone or 'N/A'} | {customer_email or 'N/A'}"
+
+            lines = [
+                header,
+                "",
+                f"• *Reference*: `{booking_ref}`",
+                f"• *Service*: {service_label} — {service_type}",
+                f"• *Customer*: {customer_name}",
+                f"• *Contact*: {contact_str}",
+                f"• *Guests / Pax / Passengers*: {final_pax}",
+            ]
+
+            if vehicle_name:
+                lines.append(f"• *Vehicle*: {vehicle_name}")
+            if vehicle_id:
+                lines.append(f"• *Vehicle ID*: {vehicle_id}")
+            if vehicle_category:
+                lines.append(f"• *Category*: {vehicle_category}")
+            if provider:
+                lines.append(f"• *Provider*: {provider}")
+
+            if dest and dest != airport:
+                lines.append(f"• *Route*: {airport} ➔ {dest}")
+            else:
+                lines.append(f"• *Airport / Location*: {airport}")
+
+            if has_flight:
+                terminal_info = f" (Terminal {terminal})" if terminal else ""
+                lines.append(f"• *Flight*: {flight_num}{terminal_info}")
+
+            if outbound_flight or return_flight:
+                f_parts = [f for f in (outbound_flight, return_flight) if f]
+                lines.append(f"• *Round Trip Flights*: {' / '.join(f_parts)}")
+
+            lines.append(f"• *Date / Time*: {date_time}")
+
+            if outbound_date or return_date:
+                d_parts = [d for d in (outbound_date, return_date) if d]
+                lines.append(f"• *Round Trip Dates*: {' ➔ '.join(d_parts)}")
+
+            lines.append(f"• *Booking Value*: {enquiry_amount_str}")
+
+            if ref_price is not None and str(ref_price).strip() and str(ref_price) != "0":
+                try:
+                    num_ref = float(ref_price)
+                    ref_str = f"₹{num_ref:,.2f}" if num_ref > 0 else str(ref_price)
+                except (ValueError, TypeError):
+                    ref_str = str(ref_price)
+                lines.append(f"• *Reference Rate*: {ref_str} (REFERENCE PRICING — NOT FINAL QUOTE)")
+
+            lines.append(f"• *Status*: {status}")
+
+            if notes and str(notes).strip():
+                clean_notes = str(notes).strip().replace("\n", " ")
+                lines.append(f"• *Notes*: {clean_notes}")
+
+            return "\n".join(lines)
+
+        # Standard structured operations alert layout
         lines = [
             "🚨 SHAFSKY AVIATION",
             "NEW BOOKING / ENQUIRY",
@@ -914,11 +1013,8 @@ class WhatsAppDepartmentService(WhatsAppDepartmentExtMixin):
         lines.append(str(final_pax))
 
         if notes and str(notes).strip():
-            clean_notes = str(notes).strip()
-            if len(clean_notes) > 300:
-                clean_notes = clean_notes[:297].rstrip() + "..."
             lines.append("NOTES")
-            lines.append(clean_notes)
+            lines.append(str(notes).strip())
 
         lines.append("BOOKING VALUE")
         lines.append(amount_str)

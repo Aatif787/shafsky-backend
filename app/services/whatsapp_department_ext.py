@@ -509,7 +509,7 @@ class WhatsAppDepartmentExtMixin:
             for phone in recipients:
                 masked = cls._mask_phone(phone)
                 try:
-                    res = cls._send_to_recipient(phone, message_body, template_name, template_lang, context=context)
+                    res = cls._send_to_recipient(phone, message_body, template_name, template_lang, context=charter_dict)
                 except Exception as item_err:
                     logger.error(
                         "[WhatsApp Notify] Exception during charter send for %s to %s: %s",
