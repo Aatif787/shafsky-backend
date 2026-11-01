@@ -947,12 +947,7 @@ class WhatsAppDepartmentService(WhatsAppDepartmentExtMixin):
             except ValueError:
                 return text[:40]
         if len(text) == 10 and text[4] == "-" and text[7] == "-":
-            try:
-                from datetime import datetime
-
-                return datetime.strptime(text, "%Y-%m-%d").strftime("%d %b %Y")
-            except ValueError:
-                return text
+            return text
         return text[:40]
 
     @classmethod

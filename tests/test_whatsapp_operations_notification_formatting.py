@@ -167,3 +167,4 @@ def test_build_template_components_single_variable_fallback():
     # Crucial: no newlines allowed in Meta parameter
     assert "\n" not in params[0]["text"]
     assert "SHF-123" in params[0]["text"]
+
