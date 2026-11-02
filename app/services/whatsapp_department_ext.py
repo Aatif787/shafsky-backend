@@ -86,13 +86,28 @@ class WhatsAppDepartmentExtMixin:
             return whatsapp_client.send_text_message(phone, message_body)
 
         from app.core.runtime import in_automated_test_runtime
-        if not in_automated_test_runtime() and template_name in ("shafsky_ops_alert", "shafsky_ops_booking"):
-            # Single-variable templates on Meta ('shafsky_ops_alert') flatten newlines into a congested run-on line.
-            # In live runtime, attempt direct text message first so operations staff receive the exact multi-line,
+        if not in_automated_test_runtime():
+            # Tier 1: Attempt direct text message first so operations staff receive the exact multi-line,
             # bulleted layout. If the 24h customer service window is closed (131047), fall back to template dispatch below.
-            direct_res = whatsapp_client.send_text_message(phone, message_body)
-            if direct_res.get("success"):
-                return direct_res
+            try:
+                direct_res = whatsapp_client.send_text_message(phone, message_body)
+                if direct_res.get("success"):
+                    logger.info("[WhatsApp Notify] Clean direct text delivered to %s.", cls._mask_phone(phone))
+                    return direct_res
+                logger.info(
+                    "[WhatsApp Notify] Direct text to %s did not succeed (code=%s). Falling back to template '%s'.",
+                    cls._mask_phone(phone),
+                    direct_res.get("error_code"),
+                    template_name,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[WhatsApp Notify] Direct text attempt to %s raised %s: %s. Falling back to template '%s'.",
+                    cls._mask_phone(phone),
+                    type(exc).__name__,
+                    exc,
+                    template_name,
+                )
 
         components = cls.build_template_components(
             template_text or message_body,
