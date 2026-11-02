@@ -49,6 +49,7 @@ import app.models.charter_models
 import app.models.lounge_models
 import app.models.ticketing
 import app.models.system_events
+import app.models.admin_notification
 
 target_metadata = Base.metadata
 

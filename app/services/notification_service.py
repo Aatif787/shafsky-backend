@@ -937,6 +937,24 @@ class NotificationService(NotificationServiceExtMixin):
             )
             summary["admin"].append({"channel": "WHATSAPP", "status": "FAILED"})
 
+        # Dispatch in-app Admin Real-Time Notification
+        try:
+            from app.services.admin_notification_service import AdminNotificationService
+            admin_notif = AdminNotificationService.handle_booking_created_event(db, context)
+            if admin_notif:
+                summary["admin"].append({
+                    "channel": "IN_APP",
+                    "status": "DISPATCHED",
+                    "notification_id": str(admin_notif.id),
+                })
+        except Exception as notif_err:
+            logger.warning(
+                "Admin real-time notification failed for %s: %s",
+                booking_ref,
+                notif_err,
+            )
+            summary["admin"].append({"channel": "IN_APP", "status": "FAILED"})
+
         logger.info(
             "Booking created with pending payment. Customer email suppressed until payment confirmation.",
             extra={"booking_ref": booking_ref},
