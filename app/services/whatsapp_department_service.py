@@ -573,19 +573,25 @@ class WhatsAppDepartmentService(WhatsAppDepartmentExtMixin):
     ) -> List[Dict[str, Any]]:
         """
         Builds Meta-compliant template components.
+        - For the 11-variable clean operations template ('shafsky_clean_booking_alert'):
+          Extracts and formats the 11 discrete parameters matching the clean operations card.
         - For the 9-variable structured operations template ('shafsky_operations_alert'):
           Extracts and formats the 9 discrete parameters (Reference, Service, Customer,
           Contact, Flight/Route, Date & Time, Passengers, Booking Value, Status).
-        - For single-variable operations templates ('shafsky_ops_alert'):
-          Extracts a clean single-line summary without newlines to prevent Meta 132018 errors.
+        - For single-variable operations templates ('shafsky_ops_alert', 'shafsky_ops_booking'):
+          Extracts a clean, concise single-line summary without newlines to prevent Meta 132018 errors
+          and eliminate wall-of-text congestion.
         Ensures all parameters stay under Meta's 1024-character maximum and contain
         no new-line/tab characters or runs of more than four spaces.
         """
         t_name = (template_name or "").strip()
+        if t_name == "shafsky_clean_booking_alert" and context:
+            return cls._build_shafsky_clean_booking_alert_components(context)
         if t_name == "shafsky_operations_alert" and context:
             return cls._build_shafsky_operations_alert_components(context)
 
         param_text = cls.to_template_parameter(message_body)
+
         return [
             {
                 "type": "body",
@@ -594,6 +600,175 @@ class WhatsAppDepartmentService(WhatsAppDepartmentExtMixin):
                 ],
             }
         ]
+
+    @classmethod
+    def _build_shafsky_clean_booking_alert_components(
+        cls, context: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        booking_ref = str(context.get("booking_ref") or context.get("bookingRef") or "N/A").strip()
+        customer_name = str(context.get("passenger_name") or context.get("passengerName") or "N/A").strip()
+        customer_phone = str(context.get("passenger_phone") or context.get("passengerPhone") or "").strip()
+        customer_email = str(context.get("passenger_email") or context.get("passengerEmail") or "").strip()
+
+        details = context.get("details") if isinstance(context.get("details"), dict) else {}
+        final_pax = (
+            details.get("passenger_count")
+            or details.get("passengers")
+            or context.get("passenger_count")
+            or context.get("passengerCount")
+            or 1
+        )
+
+        category = context.get("service_category") or context.get("serviceCategory")
+        service_type_raw = context.get("service_type") or context.get("serviceType")
+        department, service_label = cls.resolve_department(category, service_type_raw, context)
+
+        service_type = str(
+            context.get("service_name")
+            or service_type_raw
+            or context.get("package")
+            or service_label
+        ).strip()
+
+        if service_label and service_type and service_label.lower() not in service_type.lower():
+            service_text = f"{service_label} — {service_type}"
+        else:
+            service_text = service_type or service_label
+
+        if department == Department.DEPARTMENT_1:
+            dept_title = "Meet & Greet / Lounge"
+        elif department == Department.DEPARTMENT_2:
+            dept_title = "Ticketing / Transport / Hotels"
+        else:
+            dept_title = "Air Charter / Cargo / Special Services"
+
+        raw_origin = str(context.get("origin_code") or context.get("origin") or context.get("airport_code") or "").strip()
+        raw_dest = str(context.get("dest_code") or context.get("destination") or "").strip()
+        origin = raw_origin.upper() if len(raw_origin) == 3 else raw_origin
+        dest = raw_dest.upper() if len(raw_dest) == 3 else raw_dest
+        airport = origin
+        flight_num = str(context.get("flight_num") or context.get("flightNum") or "").strip()
+        terminal = str(context.get("terminal") or "").strip()
+
+        date_time = cls._display_when(
+            context.get("departure_time")
+            or context.get("service_date")
+            or context.get("serviceDate")
+        ) or "Not specified"
+
+        raw_amount = context.get("total_amount") if context.get("total_amount") is not None else context.get("totalAmount")
+        currency = str(context.get("currency") or "INR").upper()
+        status = str(context.get("status") or "PENDING").upper()
+
+        if raw_amount is not None:
+            try:
+                amt_val = float(raw_amount)
+                if amt_val > 0:
+                    symbol = "₹" if currency == "INR" else f"{currency} "
+                    amount_str = f"{symbol}{amt_val:,.2f}"
+                else:
+                    amount_str = "Quotation Required"
+            except (ValueError, TypeError):
+                amount_str = "Quotation Required"
+        else:
+            amount_str = "Quotation Required"
+
+        contact_parts = []
+        if customer_phone and customer_phone.upper() != "N/A":
+            contact_parts.append(customer_phone)
+        if customer_email and customer_email.upper() != "N/A":
+            contact_parts.append(customer_email)
+        contact_str = " | ".join(contact_parts) if contact_parts else "Not provided"
+
+        route_str = f"{origin} → {dest}" if origin and dest and origin != dest else (origin or dest or airport or "Not specified")
+        flight_parts = []
+        if flight_num and flight_num.upper() != "N/A":
+            flight_parts.append(flight_num)
+        if terminal:
+            term_str = terminal if terminal.lower().startswith("terminal") else f"Terminal {terminal}"
+            flight_parts.append(term_str)
+        flight_text = " ".join(flight_parts) if flight_parts else "Not specified"
+
+        raw_params = [
+            dept_title,
+            booking_ref,
+            service_text,
+            customer_name,
+            contact_str,
+            str(final_pax),
+            route_str,
+            flight_text,
+            date_time,
+            amount_str,
+            status,
+        ]
+
+        parameters = [
+            {"type": "text", "text": cls.to_template_parameter(p)}
+            for p in raw_params
+        ]
+
+        return [{"type": "body", "parameters": parameters}]
+
+    @classmethod
+    def _build_single_variable_summary(cls, context: Dict[str, Any]) -> str:
+        booking_ref = str(context.get("booking_ref") or context.get("bookingRef") or "N/A").strip()
+        customer_name = str(context.get("passenger_name") or context.get("passengerName") or "N/A").strip()
+        customer_phone = str(context.get("passenger_phone") or context.get("passengerPhone") or "").strip()
+
+        category = context.get("service_category") or context.get("serviceCategory")
+        service_type_raw = context.get("service_type") or context.get("serviceType")
+        _, service_label = cls.resolve_department(category, service_type_raw, context)
+
+        service_type = str(
+            context.get("service_name")
+            or service_type_raw
+            or context.get("package")
+            or service_label
+        ).strip()
+
+        if service_label and service_type and service_label.lower() not in service_type.lower():
+            service_text = f"{service_label} — {service_type}"
+        else:
+            service_text = service_type or service_label
+
+        raw_origin = str(context.get("origin_code") or context.get("origin") or context.get("airport_code") or "").strip()
+        raw_dest = str(context.get("dest_code") or context.get("destination") or "").strip()
+        origin = raw_origin.upper() if len(raw_origin) == 3 else raw_origin
+        dest = raw_dest.upper() if len(raw_dest) == 3 else raw_dest
+        flight_num = str(context.get("flight_num") or context.get("flightNum") or "").strip()
+
+        loc_parts = []
+        if origin and dest and origin != dest:
+            loc_parts.append(f"{origin}→{dest}")
+        elif origin:
+            loc_parts.append(origin)
+        if flight_num and flight_num.upper() != "N/A":
+            loc_parts.append(flight_num)
+        loc_str = f" ({', '.join(loc_parts)})" if loc_parts else ""
+
+        date_time = cls._display_when(
+            context.get("departure_time")
+            or context.get("service_date")
+            or context.get("serviceDate")
+        ) or "Date: N/A"
+
+        raw_amount = context.get("total_amount") if context.get("total_amount") is not None else context.get("totalAmount")
+        currency = str(context.get("currency") or "INR").upper()
+        status = str(context.get("status") or "PENDING").upper()
+
+        if raw_amount is not None:
+            try:
+                amt_val = float(raw_amount)
+                amount_str = f"₹{amt_val:,.2f}" if (amt_val > 0 and currency == "INR") else (f"{currency} {amt_val:,.2f}" if amt_val > 0 else "Quote Req")
+            except (ValueError, TypeError):
+                amount_str = "Quote Req"
+        else:
+            amount_str = "Quote Req"
+
+        phone_str = f" ({customer_phone})" if customer_phone and customer_phone != "N/A" else ""
+        summary = f"{service_text} | Ref: {booking_ref} | Guest: {customer_name}{phone_str}{loc_str} | {date_time} | {amount_str} | {status}"
+        return cls.to_template_parameter(summary)
 
     @classmethod
     def _build_shafsky_operations_alert_components(
@@ -874,156 +1049,90 @@ class WhatsAppDepartmentService(WhatsAppDepartmentExtMixin):
         outbound_flight = details.get("outbound_flight")
         return_flight = details.get("return_flight")
 
-        # Check if this dispatch is an enquiry flow
-        is_service_enquiry = bool(
-            context.get("is_enquiry")
-            or context.get("journey_type") == "ENQUIRY"
-            or ref_price is not None
-            or provider is not None
-            or any(k in service_type.lower() for k in ("round trip", "roundtrip"))
-        )
-
-        if is_service_enquiry:
-            # Department and service-specific enquiry headers
-            if service_label == "Transport" or any(k in service_type.lower() for k in ("transport", "sedan", "suv", "van")):
-                if any(k in service_type.lower() for k in ("round trip", "roundtrip")):
-                    header = "✈️ *NEW ROUND TRIP ENQUIRY — Ticketing / Transport / Hotels*"
-                else:
-                    header = "🚗 *NEW TRANSPORT ENQUIRY — Ticketing / Transport / Hotels*"
-            elif service_label == "Ticketing":
-                header = "🎫 *NEW TICKETING ENQUIRY — Ticketing / Transport / Hotels*"
-            elif service_label == "Lounge":
-                header = "🛋️ *NEW LOUNGE ENQUIRY RECEIVED — Meet & Greet / Lounge*"
-            elif department == Department.DEPARTMENT_1:
-                header = "✈️ *NEW BOOKING / ENQUIRY — Meet & Greet / Lounge*"
-            elif department == Department.DEPARTMENT_2:
-                header = "🚗 *NEW BOOKING / ENQUIRY — Ticketing / Transport / Hotels*"
+        # Determine department and service-specific header
+        if service_label == "Transport" or any(k in service_type.lower() for k in ("transport", "sedan", "suv", "van")):
+            if any(k in service_type.lower() for k in ("round trip", "roundtrip")):
+                header = "✈️ *NEW ROUND TRIP ENQUIRY — Ticketing / Transport / Hotels*"
             else:
-                header = "🛩️ *NEW SERVICE ENQUIRY — Air Charter / Cargo / Special Services*"
-
-            enquiry_amount_str = amount_str if raw_amount is not None and float(raw_amount or 0) > 0 else "Quotation Required (₹0 Enquiry)"
-            contact_str = f"{customer_phone or 'N/A'} | {customer_email or 'N/A'}"
-
-            lines = [
-                header,
-                "",
-                f"• *Reference*: `{booking_ref}`",
-                f"• *Service*: {service_label} — {service_type}",
-                f"• *Customer*: {customer_name}",
-                f"• *Contact*: {contact_str}",
-                f"• *Guests / Pax / Passengers*: {final_pax}",
-            ]
-
-            if vehicle_name:
-                lines.append(f"• *Vehicle*: {vehicle_name}")
-            if vehicle_id:
-                lines.append(f"• *Vehicle ID*: {vehicle_id}")
-            if vehicle_category:
-                lines.append(f"• *Category*: {vehicle_category}")
-            if provider:
-                lines.append(f"• *Provider*: {provider}")
-
-            if dest and dest != airport:
-                lines.append(f"• *Route*: {airport} ➔ {dest}")
-            else:
-                lines.append(f"• *Airport / Location*: {airport}")
-
-            if has_flight:
-                terminal_info = f" (Terminal {terminal})" if terminal else ""
-                lines.append(f"• *Flight*: {flight_num}{terminal_info}")
-
-            if outbound_flight or return_flight:
-                f_parts = [f for f in (outbound_flight, return_flight) if f]
-                lines.append(f"• *Round Trip Flights*: {' / '.join(f_parts)}")
-
-            lines.append(f"• *Date / Time*: {date_time}")
-
-            if outbound_date or return_date:
-                d_parts = [d for d in (outbound_date, return_date) if d]
-                lines.append(f"• *Round Trip Dates*: {' ➔ '.join(d_parts)}")
-
-            lines.append(f"• *Booking Value*: {enquiry_amount_str}")
-
-            if ref_price is not None and str(ref_price).strip() and str(ref_price) != "0":
-                try:
-                    num_ref = float(ref_price)
-                    ref_str = f"₹{num_ref:,.2f}" if num_ref > 0 else str(ref_price)
-                except (ValueError, TypeError):
-                    ref_str = str(ref_price)
-                lines.append(f"• *Reference Rate*: {ref_str} (REFERENCE PRICING — NOT FINAL QUOTE)")
-
-            lines.append(f"• *Status*: {status}")
-
-            if notes and str(notes).strip():
-                clean_notes = str(notes).strip().replace("\n", " ")
-                lines.append(f"• *Notes*: {clean_notes}")
-
-            return "\n".join(lines)
-
-        # Standard structured operations alert layout
-        lines = [
-            "🚨 SHAFSKY AVIATION",
-            "NEW BOOKING / ENQUIRY",
-            "━━━━━━━━━━━━━━━━━━",
-            "REFERENCE",
-            booking_ref,
-            "SERVICE",
-            service_text,
-            "CUSTOMER",
-            customer_name,
-            "CONTACT",
-        ]
+                header = "🚗 *NEW TRANSPORT ENQUIRY — Ticketing / Transport / Hotels*"
+        elif service_label == "Ticketing":
+            header = "🎫 *NEW TICKETING ENQUIRY — Ticketing / Transport / Hotels*"
+        elif service_label == "Lounge":
+            header = "🛋️ *NEW LOUNGE ENQUIRY RECEIVED — Meet & Greet / Lounge*"
+        elif department == Department.DEPARTMENT_1:
+            header = "✈️ *NEW BOOKING / ENQUIRY — Meet & Greet / Lounge*"
+        elif department == Department.DEPARTMENT_2:
+            header = "🚗 *NEW BOOKING / ENQUIRY — Ticketing / Transport / Hotels*"
+        else:
+            header = "🛩️ *NEW SERVICE ENQUIRY — Air Charter / Cargo / Special Services*"
 
         contact_parts = []
         if customer_phone and customer_phone.upper() != "N/A":
             contact_parts.append(customer_phone)
         if customer_email and customer_email.upper() != "N/A":
             contact_parts.append(customer_email)
-        if contact_parts:
-            lines.extend(contact_parts)
-        else:
-            lines.append("Not provided")
+        contact_str = " | ".join(contact_parts) if contact_parts else "Not provided"
 
-        if has_flight:
-            lines.append("FLIGHT")
-            if route_str:
-                lines.append(f"{flight_num} | {route_str}")
-            else:
-                lines.append(flight_num)
-            if terminal:
-                term_str = terminal if terminal.lower().startswith("terminal") else f"Terminal {terminal}"
-                lines.append(term_str)
-        elif route_str:
-            lines.append("ROUTE")
-            lines.append(route_str)
+        lines = [
+            header,
+            "",
+            f"• *Reference*: `{booking_ref}`",
+            f"• *Service*: {service_text}",
+            f"• *Customer*: {customer_name}",
+            f"• *Contact*: {contact_str}",
+            f"• *Guests / Pax / Passengers*: {final_pax}",
+        ]
 
         if vehicle_name:
-            lines.append("VEHICLE")
             v_str = f"{vehicle_name} (ID: {vehicle_id})" if vehicle_id else str(vehicle_name)
-            lines.append(v_str)
-
+            lines.append(f"• *Vehicle*: {v_str}")
         if vehicle_category:
-            lines.append("CATEGORY")
-            lines.append(str(vehicle_category))
+            lines.append(f"• *Category*: {vehicle_category}")
+        if provider:
+            lines.append(f"• *Provider*: {provider}")
 
-        lines.append("DATE & TIME")
-        lines.append(date_time)
+        # For Airport Stationed Services (Meet & Greet / Lounge):
+        # Always output "• *Airport / Location*: {loc}"
+        if department == Department.DEPARTMENT_1 or service_label in ("Meet & Greet", "Lounge"):
+            loc = airport or origin
+            if loc:
+                lines.append(f"• *Airport / Location*: {loc}")
+        # For Travel / Route-based services (Ticketing, Round Trip, Charter, Transport):
+        # Output "• *Route*: {origin} → {dest}" when destination is present
+        elif dest and dest != origin and dest != airport:
+            lines.append(f"• *Route*: {origin} → {dest}")
+        elif airport or origin:
+            lines.append(f"• *Airport / Location*: {airport or origin}")
 
-        lines.append("PASSENGERS")
-        lines.append(str(final_pax))
+        if has_flight:
+            terminal_info = f" (Terminal {terminal})" if terminal else ""
+            lines.append(f"• *Flight*: {flight_num}{terminal_info}")
+
+        if outbound_flight or return_flight:
+            f_parts = [f for f in (outbound_flight, return_flight) if f]
+            lines.append(f"• *Round Trip Flights*: {' / '.join(f_parts)}")
+
+        lines.append(f"• *Date / Time*: {date_time}")
+
+        if outbound_date or return_date:
+            d_parts = [d for d in (outbound_date, return_date) if d]
+            lines.append(f"• *Round Trip Dates*: {' → '.join(d_parts)}")
+
+        lines.append(f"• *Booking Value*: {amount_str}")
+
+        if ref_price is not None and str(ref_price).strip() and str(ref_price) != "0":
+            try:
+                num_ref = float(ref_price)
+                ref_str = f"₹{num_ref:,.2f}" if num_ref > 0 else str(ref_price)
+            except (ValueError, TypeError):
+                ref_str = str(ref_price)
+            lines.append(f"• *Reference Rate*: {ref_str} (REFERENCE PRICING — NOT FINAL QUOTE)")
+
+        lines.append(f"• *Status*: {status}")
 
         if notes and str(notes).strip():
-            lines.append("NOTES")
-            lines.append(str(notes).strip())
-
-        lines.append("BOOKING VALUE")
-        lines.append(amount_str)
-
-        lines.append("STATUS")
-        lines.append(status)
-
-        lines.append("━━━━━━━━━━━━━━━━━━")
-        lines.append("Please action this booking from the operations dashboard.")
+            clean_notes = str(notes).strip().replace("\n", " ")
+            lines.append(f"• *Notes*: {clean_notes}")
 
         return "\n".join(lines)
     @staticmethod

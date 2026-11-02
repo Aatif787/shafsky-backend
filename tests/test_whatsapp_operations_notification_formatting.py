@@ -2,11 +2,11 @@
 Unit tests for Shafsky Operations WhatsApp Booking Notification Formatting.
 
 Verifies:
-1. Multi-line structured operations message formatting matching exact required sections.
+1. Multi-line clean bulleted operations message formatting matching exact required sections (Image 2 layout).
 2. Dynamic field population from real booking contexts without hardcoding.
 3. Proper handling of missing optional values (no flight, no email, ₹0 enquiries, vehicles).
-4. Meta template components building for 'shafsky_operations_alert' (9 parameters) and
-   single-variable fallback ('shafsky_ops_alert').
+4. Meta template components building for 'shafsky_clean_booking_alert' (11 parameters),
+   'shafsky_operations_alert' (9 parameters), and single-variable clean summary ('shafsky_ops_alert').
 5. Meta parameter constraints (no newlines/tabs, <= 1024 characters).
 """
 
@@ -35,7 +35,7 @@ def sample_meet_and_greet_context():
 
 
 def test_format_booking_notification_exact_layout(sample_meet_and_greet_context):
-    """Verifies that format_booking_notification produces the exact multi-line structured layout."""
+    """Verifies that format_booking_notification produces the clean bulleted layout matching Image 2."""
     output = WhatsAppDepartmentService.format_booking_notification(
         sample_meet_and_greet_context,
         Department.DEPARTMENT_1,
@@ -43,38 +43,24 @@ def test_format_booking_notification_exact_layout(sample_meet_and_greet_context)
     )
 
     expected = (
-        "🚨 SHAFSKY AVIATION\n"
-        "NEW BOOKING / ENQUIRY\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        "REFERENCE\n"
-        "SHF-20261101-BE8FC46A\n"
-        "SERVICE\n"
-        "Meet & Greet — Multi Service\n"
-        "CUSTOMER\n"
-        "Aariz Farooqui\n"
-        "CONTACT\n"
-        "+91 0846931247\n"
-        "aariz.farooqui@gmail.com\n"
-        "FLIGHT\n"
-        "AI2424 | DEL → BOM\n"
-        "Terminal 1 & 2\n"
-        "DATE & TIME\n"
-        "02 Nov 2026 | 04:30\n"
-        "PASSENGERS\n"
-        "1\n"
-        "BOOKING VALUE\n"
-        "₹3,000.00\n"
-        "STATUS\n"
-        "PENDING\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        "Please action this booking from the operations dashboard."
+        "✈️ *NEW BOOKING / ENQUIRY — Meet & Greet / Lounge*\n\n"
+        "• *Reference*: `SHF-20261101-BE8FC46A`\n"
+        "• *Service*: Meet & Greet — Multi Service\n"
+        "• *Customer*: Aariz Farooqui\n"
+        "• *Contact*: +91 0846931247 | aariz.farooqui@gmail.com\n"
+        "• *Guests / Pax / Passengers*: 1\n"
+        "• *Airport / Location*: DEL\n"
+        "• *Flight*: AI2424 (Terminal 1 & 2)\n"
+        "• *Date / Time*: 02 Nov 2026 | 04:30\n"
+        "• *Booking Value*: ₹3,000.00\n"
+        "• *Status*: PENDING"
     )
 
     assert output == expected
 
 
 def test_format_booking_notification_ground_transport():
-    """Verifies layout for Ground Transport with vehicle, category, route, and notes."""
+    """Verifies clean bulleted layout for Ground Transport with vehicle, category, route, and notes."""
     context = {
         "booking_ref": "SHF-20261031-342205",
         "service_category": "transport",
@@ -90,7 +76,7 @@ def test_format_booking_notification_ground_transport():
             "vehicle_name": "Mercedes-Benz E-Class",
             "vehicle_id": "merc-e-class",
             "vehicle_category": "Luxury Vehicles",
-            "notes": "TEST - department delivery verification, please ignore. Please action this booking from the operations dashboard.",
+            "notes": "TEST - department delivery verification, please ignore.",
         },
         "total_amount": 0.0,
         "status": "PENDING",
@@ -102,19 +88,50 @@ def test_format_booking_notification_ground_transport():
         "Ground Transport",
     )
 
-    assert "🚨 SHAFSKY AVIATION" in output
-    assert "REFERENCE\nSHF-20261031-342205" in output
-    assert "SERVICE\nGround Transport" in output
-    assert "CUSTOMER\nTest Customer" in output
-    assert "CONTACT\n+91 77058 81139\ntest@gmail.com" in output
-    assert "ROUTE\nVillage East Mehram Nagar Road → Lucknow BKT" in output
-    assert "VEHICLE\nMercedes-Benz E-Class (ID: merc-e-class)" in output
-    assert "CATEGORY\nLuxury Vehicles" in output
-    assert "DATE & TIME\n01 Oct 2026 | 10:01" in output
-    assert "PASSENGERS\n2" in output
-    assert "BOOKING VALUE\nQuotation Required" in output
-    assert "STATUS\nPENDING" in output
-    assert "NOTES\nTEST - department delivery verification" in output
+    assert "🚗 *NEW TRANSPORT ENQUIRY" in output
+    assert "• *Reference*: `SHF-20261031-342205`" in output
+    assert "• *Service*: Ground Transport" in output
+    assert "• *Customer*: Test Customer" in output
+    assert "• *Contact*: +91 77058 81139 | test@gmail.com" in output
+    assert "• *Route*: Village East Mehram Nagar Road → Lucknow BKT" in output
+    assert "• *Vehicle*: Mercedes-Benz E-Class (ID: merc-e-class)" in output
+    assert "• *Category*: Luxury Vehicles" in output
+    assert "• *Date / Time*: 01 Oct 2026 | 10:01" in output
+    assert "• *Guests / Pax / Passengers*: 2" in output
+    assert "• *Booking Value*: Quotation Required" in output
+    assert "• *Status*: PENDING" in output
+    assert "• *Notes*: TEST - department delivery verification, please ignore." in output
+
+
+def test_build_template_components_shafsky_clean_booking_alert(sample_meet_and_greet_context):
+    """Verifies 11 discrete template parameters for shafsky_clean_booking_alert."""
+    components = WhatsAppDepartmentService.build_template_components(
+        "fallback body text",
+        template_name="shafsky_clean_booking_alert",
+        context=sample_meet_and_greet_context,
+    )
+
+    assert len(components) == 1
+    body_comp = components[0]
+    assert body_comp["type"] == "body"
+    params = body_comp["parameters"]
+    assert len(params) == 11
+
+    assert params[0]["text"] == "Meet & Greet / Lounge"
+    assert params[1]["text"] == "SHF-20261101-BE8FC46A"
+    assert params[2]["text"] == "Meet & Greet — Multi Service"
+    assert params[3]["text"] == "Aariz Farooqui"
+    assert params[4]["text"] == "+91 0846931247 | aariz.farooqui@gmail.com"
+    assert params[5]["text"] == "1"
+    assert params[6]["text"] == "DEL → BOM"
+    assert "AI2424" in params[7]["text"]
+    assert "02 Nov 2026 | 04:30" in params[8]["text"]
+    assert params[9]["text"] == "₹3,000.00"
+    assert params[10]["text"] == "PENDING"
+
+    for p in params:
+        assert "\n" not in p["text"]
+        assert "\t" not in p["text"]
 
 
 def test_build_template_components_shafsky_operations_alert(sample_meet_and_greet_context):
@@ -141,30 +158,31 @@ def test_build_template_components_shafsky_operations_alert(sample_meet_and_gree
     assert params[7]["text"] == "₹3,000.00"
     assert params[8]["text"] == "PENDING"
 
-    # None of the parameters may contain newlines or tabs
     for p in params:
         assert "\n" not in p["text"]
         assert "\t" not in p["text"]
 
 
-def test_build_template_components_single_variable_fallback():
-    """Verifies single-variable template (shafsky_ops_alert) generates 1 safe parameter."""
-    raw_msg = (
-        "🚨 SHAFSKY AVIATION\n"
-        "NEW BOOKING / ENQUIRY\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        "REFERENCE\nSHF-123\n"
+def test_build_template_components_single_variable_clean_summary(sample_meet_and_greet_context):
+    """Verifies single-variable template (shafsky_ops_alert) generates a clean parameter without newlines."""
+    formatted = WhatsAppDepartmentService.format_booking_notification(
+        sample_meet_and_greet_context,
+        Department.DEPARTMENT_1,
+        "Meet & Greet",
     )
-
     components = WhatsAppDepartmentService.build_template_components(
-        raw_msg,
+        formatted,
         template_name="shafsky_ops_alert",
+        context=sample_meet_and_greet_context,
     )
 
     assert len(components) == 1
     params = components[0]["parameters"]
     assert len(params) == 1
-    # Crucial: no newlines allowed in Meta parameter
-    assert "\n" not in params[0]["text"]
-    assert "SHF-123" in params[0]["text"]
-
+    summary = params[0]["text"]
+    assert "\n" not in summary
+    assert "\t" not in summary
+    assert "SHF-20261101-BE8FC46A" in summary
+    assert "Aariz Farooqui" in summary
+    assert "₹3,000.00" in summary
+    assert "PENDING" in summary
