@@ -106,6 +106,13 @@ class CharterService:
         except Exception as wa_err:
             logger.warning("Charter WhatsApp department notification failed: %s", wa_err)
 
+        # Dispatch in-app Admin Real-Time Notification
+        try:
+            from app.services.admin_notification_service import AdminNotificationService
+            AdminNotificationService.handle_charter_created_event(db, request_record)
+        except Exception as notif_err:
+            logger.warning("Charter Admin real-time notification failed: %s", notif_err)
+
         # A charter request is an enquiry until the desk issues a quote.
         try:
             from app.services.notification_service import NotificationService
