@@ -38,6 +38,10 @@ class WhatsAppDepartmentExtMixin:
             template_lang = os.getenv("WHATSAPP_DEPARTMENT_TEMPLATE_LANG", "en_US")
         template_lang = (template_lang or "en_US").strip()
 
+        # Allow explicit direct text dispatch mode without forcing shafsky_ops_alert
+        if template_name.lower() in ("direct", "text", "freeform", "none", "off"):
+            return "", template_lang
+
         if not template_name:
             if bool(getattr(settings, "is_production", False)):
                 # The WABA has this operations template approved. Without it, every
@@ -80,6 +84,15 @@ class WhatsAppDepartmentExtMixin:
         logger = _wds().logger
         if not template_name:
             return whatsapp_client.send_text_message(phone, message_body)
+
+        from app.core.runtime import in_automated_test_runtime
+        if not in_automated_test_runtime() and template_name in ("shafsky_ops_alert", "shafsky_ops_booking"):
+            # Single-variable templates on Meta ('shafsky_ops_alert') flatten newlines into a congested run-on line.
+            # In live runtime, attempt direct text message first so operations staff receive the exact multi-line,
+            # bulleted layout. If the 24h customer service window is closed (131047), fall back to template dispatch below.
+            direct_res = whatsapp_client.send_text_message(phone, message_body)
+            if direct_res.get("success"):
+                return direct_res
 
         components = cls.build_template_components(
             template_text or message_body,

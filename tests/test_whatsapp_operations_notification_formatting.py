@@ -49,7 +49,7 @@ def test_format_booking_notification_exact_layout(sample_meet_and_greet_context)
         "• *Customer*: Aariz Farooqui\n"
         "• *Contact*: +91 0846931247 | aariz.farooqui@gmail.com\n"
         "• *Guests / Pax / Passengers*: 1\n"
-        "• *Route*: DEL → BOM\n"
+        "• *Airport / Location*: DEL\n"
         "• *Flight*: AI2424 (Terminal 1 & 2)\n"
         "• *Date / Time*: 02 Nov 2026 | 04:30\n"
         "• *Booking Value*: ₹3,000.00\n"

@@ -1091,7 +1091,15 @@ class WhatsAppDepartmentService(WhatsAppDepartmentExtMixin):
         if provider:
             lines.append(f"• *Provider*: {provider}")
 
-        if dest and dest != airport and dest != origin:
+        # For Airport Services (Meet & Greet / Lounge / bookings with an airport):
+        # Always output "• *Airport / Location*: {airport or origin}"
+        # For non-airport Route-based services (Ground Transport / generic transfers):
+        # Output "• *Route*: {origin} → {dest}"
+        if department == Department.DEPARTMENT_1 or (airport and not vehicle_name):
+            loc = airport or origin
+            if loc:
+                lines.append(f"• *Airport / Location*: {loc}")
+        elif dest and dest != airport and dest != origin:
             lines.append(f"• *Route*: {airport or origin} → {dest}")
         elif airport or origin:
             lines.append(f"• *Airport / Location*: {airport or origin}")
