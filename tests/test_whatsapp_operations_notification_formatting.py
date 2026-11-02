@@ -164,9 +164,14 @@ def test_build_template_components_shafsky_operations_alert(sample_meet_and_gree
 
 
 def test_build_template_components_single_variable_clean_summary(sample_meet_and_greet_context):
-    """Verifies single-variable template (shafsky_ops_alert) generates a clean 1-line summary."""
+    """Verifies single-variable template (shafsky_ops_alert) generates a clean parameter without newlines."""
+    formatted = WhatsAppDepartmentService.format_booking_notification(
+        sample_meet_and_greet_context,
+        Department.DEPARTMENT_1,
+        "Meet & Greet",
+    )
     components = WhatsAppDepartmentService.build_template_components(
-        "fallback text",
+        formatted,
         template_name="shafsky_ops_alert",
         context=sample_meet_and_greet_context,
     )

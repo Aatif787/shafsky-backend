@@ -75,30 +75,12 @@ class WhatsAppDepartmentExtMixin:
         template_text: Optional[str] = None,
         context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Sends one operations notification using freeform direct dispatch first, falling back to templates."""
+        """Sends one operations notification using the template path when configured."""
         whatsapp_client = _wds().whatsapp_client
         logger = _wds().logger
         if not template_name:
             return whatsapp_client.send_text_message(phone, message_body)
 
-        # 1. Attempt pristine freeform markdown send first.
-        # If the recipient phone has an open 24-hour service window with the WhatsApp Business Account,
-        # Meta accepts freeform text and delivers the exact multi-line, bulleted, spaced layout with emojis intact.
-        try:
-            direct_res = whatsapp_client.send_text_message(phone, message_body)
-            if direct_res.get("success") and direct_res.get("message_id"):
-                return direct_res
-            err_code = direct_res.get("error_code")
-            if err_code and err_code != 131047:
-                logger.debug(
-                    "[WhatsApp Notify] Direct text send returned %s for recipient %s; attempting template fallback",
-                    err_code,
-                    cls._mask_phone(phone),
-                )
-        except Exception as direct_err:
-            logger.debug("[WhatsApp Notify] Direct text send exception: %s; falling back to template", direct_err)
-
-        # 2. Template delivery path (required when outside 24-hour service window)
         components = cls.build_template_components(
             template_text or message_body,
             template_name=template_name,

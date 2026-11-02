@@ -590,10 +590,7 @@ class WhatsAppDepartmentService(WhatsAppDepartmentExtMixin):
         if t_name == "shafsky_operations_alert" and context:
             return cls._build_shafsky_operations_alert_components(context)
 
-        if context:
-            param_text = cls._build_single_variable_summary(context)
-        else:
-            param_text = cls.to_template_parameter(message_body)
+        param_text = cls.to_template_parameter(message_body)
 
         return [
             {
