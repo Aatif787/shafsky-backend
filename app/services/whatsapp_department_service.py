@@ -650,11 +650,15 @@ class WhatsAppDepartmentService(WhatsAppDepartmentExtMixin):
         flight_num = str(context.get("flight_num") or context.get("flightNum") or "").strip()
         terminal = str(context.get("terminal") or "").strip()
 
-        date_time = cls._display_when(
-            context.get("departure_time")
+        journey_type_val = str(context.get("journey_type") or "").strip().upper()
+        raw_service_clock = (
+            (context.get("arrival_time") if journey_type_val == "ARRIVAL" else None)
+            or context.get("departure_time")
+            or context.get("arrival_time")
             or context.get("service_date")
             or context.get("serviceDate")
-        ) or "Not specified"
+        )
+        date_time = cls._display_when(raw_service_clock, airport_code=airport or origin or dest) or "Not specified"
 
         raw_amount = context.get("total_amount") if context.get("total_amount") is not None else context.get("totalAmount")
         currency = str(context.get("currency") or "INR").upper()
@@ -747,11 +751,15 @@ class WhatsAppDepartmentService(WhatsAppDepartmentExtMixin):
             loc_parts.append(flight_num)
         loc_str = f" ({', '.join(loc_parts)})" if loc_parts else ""
 
-        date_time = cls._display_when(
-            context.get("departure_time")
+        journey_type_val = str(context.get("journey_type") or "").strip().upper()
+        raw_service_clock = (
+            (context.get("arrival_time") if journey_type_val == "ARRIVAL" else None)
+            or context.get("departure_time")
+            or context.get("arrival_time")
             or context.get("service_date")
             or context.get("serviceDate")
-        ) or "Date: N/A"
+        )
+        date_time = cls._display_when(raw_service_clock, airport_code=origin or dest) or "Date: N/A"
 
         raw_amount = context.get("total_amount") if context.get("total_amount") is not None else context.get("totalAmount")
         currency = str(context.get("currency") or "INR").upper()
@@ -814,11 +822,15 @@ class WhatsAppDepartmentService(WhatsAppDepartmentExtMixin):
         flight_num = str(context.get("flight_num") or context.get("flightNum") or "").strip()
         terminal = str(context.get("terminal") or "").strip()
 
-        date_time = cls._display_when(
-            context.get("departure_time")
+        journey_type_val = str(context.get("journey_type") or "").strip().upper()
+        raw_service_clock = (
+            (context.get("arrival_time") if journey_type_val == "ARRIVAL" else None)
+            or context.get("departure_time")
+            or context.get("arrival_time")
             or context.get("service_date")
             or context.get("serviceDate")
-        ) or "Not specified"
+        )
+        date_time = cls._display_when(raw_service_clock, airport_code=airport or origin or dest) or "Not specified"
 
         raw_amount = context.get("total_amount") if context.get("total_amount") is not None else context.get("totalAmount")
         currency = str(context.get("currency") or "INR").upper()
@@ -996,11 +1008,15 @@ class WhatsAppDepartmentService(WhatsAppDepartmentExtMixin):
         flight_num = str(context.get("flight_num") or context.get("flightNum") or "").strip()
         terminal = str(context.get("terminal") or "").strip()
 
-        date_time = cls._display_when(
-            context.get("departure_time")
+        journey_type_val = str(context.get("journey_type") or "").strip().upper()
+        raw_service_clock = (
+            (context.get("arrival_time") if journey_type_val == "ARRIVAL" else None)
+            or context.get("departure_time")
+            or context.get("arrival_time")
             or context.get("service_date")
             or context.get("serviceDate")
-        ) or "Not specified"
+        )
+        date_time = cls._display_when(raw_service_clock, airport_code=airport or origin or dest) or "Not specified"
 
         # Amount & Status
         raw_amount = context.get("total_amount") if context.get("total_amount") is not None else context.get("totalAmount")
@@ -1136,24 +1152,40 @@ class WhatsAppDepartmentService(WhatsAppDepartmentExtMixin):
 
         return "\n".join(lines)
     @staticmethod
-    def _display_when(value: Any) -> str:
-        """Renders a stored date/time as a clean value for staff messages."""
+    def _display_when(value: Any, airport_code: Optional[str] = None) -> str:
+        """Renders a stored date/time as a clean, local value for staff messages."""
         if value is None:
             return ""
-        text = str(value).strip()
-        if not text:
-            return ""
-        if len(text) > 10 and ("T" in text or " " in text):
+        from datetime import datetime
+        if isinstance(value, datetime):
+            dt = value
+        else:
+            text = str(value).strip()
+            if not text:
+                return ""
+            if len(text) == 10 and text[4] == "-" and text[7] == "-":
+                try:
+                    parsed_d = datetime.strptime(text, "%Y-%m-%d")
+                    return parsed_d.strftime("%d %b %Y")
+                except ValueError:
+                    return text
             try:
-                from datetime import datetime
-
-                parsed = datetime.fromisoformat(text.replace("Z", "+00:00").replace(" ", "T"))
-                return parsed.strftime("%d %b %Y | %H:%M")
-            except ValueError:
+                dt = datetime.fromisoformat(text.replace("Z", "+00:00").replace(" ", "T"))
+            except (ValueError, TypeError):
                 return text[:40]
-        if len(text) == 10 and text[4] == "-" and text[7] == "-":
-            return text
-        return text[:40]
+
+        try:
+            from zoneinfo import ZoneInfo
+            from app.services.booking_cutoff import lookup_airport_timezone
+
+            tz_name = lookup_airport_timezone(None, airport_code) if airport_code else "Asia/Kolkata"
+            target_tz = ZoneInfo(tz_name)
+            if dt.tzinfo is not None:
+                dt = dt.astimezone(target_tz)
+        except Exception:
+            pass
+
+        return dt.strftime("%d %b %Y | %H:%M")
 
     @classmethod
     def format_booking_notification_summary(
@@ -1186,11 +1218,15 @@ class WhatsAppDepartmentService(WhatsAppDepartmentExtMixin):
         origin = str(context.get("origin_code") or context.get("origin") or airport).strip()
         dest = str(context.get("dest_code") or context.get("destination") or "").strip()
         flight_num = str(context.get("flight_num") or context.get("flightNum") or "").strip()
-        date_time = cls._display_when(
-            context.get("departure_time")
+        journey_type_val = str(context.get("journey_type") or "").strip().upper()
+        raw_service_clock = (
+            (context.get("arrival_time") if journey_type_val == "ARRIVAL" else None)
+            or context.get("departure_time")
+            or context.get("arrival_time")
             or context.get("service_date")
             or context.get("serviceDate")
         )
+        date_time = cls._display_when(raw_service_clock, airport_code=airport or origin or dest)
         pax = context.get("passenger_count") or context.get("passengerCount") or 1
         status = str(context.get("status") or "PENDING").upper()
 

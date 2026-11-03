@@ -798,6 +798,7 @@ class BookingService(BookingServiceExtMixin):
                         "service_type": new_booking.service_type,
                         "service_name": meta.get("package") or new_booking.service_type,
                         "departure_time": new_booking.departure_time.isoformat() if new_booking.departure_time else None,
+                        "arrival_time": new_booking.arrival_time.isoformat() if new_booking.arrival_time else None,
                         "terminal": meta.get("terminal"),
                         "total_amount": new_booking.total_amount if new_booking.total_amount is not None else 0.0,
                         "currency": new_booking.currency,
