@@ -40,15 +40,18 @@ class WhatsAppDepartmentExtMixin:
 
         from app.core.runtime import in_automated_test_runtime
         if not template_name or template_name.lower() in ("none", "off", "unset"):
-            if in_automated_test_runtime():
+            live_production = bool(getattr(settings, "is_production", False))
+            # Pytest stays template-less unless a test explicitly marks production,
+            # so suites can still assert freeform / missing-config behaviour.
+            if in_automated_test_runtime() and not live_production:
                 return "", template_lang
-            # In live runtime, always use the approved Meta template so alerts are
-            # never blocked by the 24-hour customer service window (Meta error 131047).
-            template_name = "shafsky_ops_alert"
+            # Live (and production-flagged tests) always use the approved Meta
+            # template so alerts are never blocked by the 24-hour window (131047).
+            template_name = "shafsky_operations_alert"
             if not template_lang:
                 template_lang = "en_US"
-            logger.info(
-                "[WhatsApp Notify] Using approved Meta template '%s' (%s) for 100%% guaranteed delivery.",
+            logger.warning(
+                "[WhatsApp Notify] using the approved default template '%s' (%s) for guaranteed delivery.",
                 template_name,
                 template_lang,
             )

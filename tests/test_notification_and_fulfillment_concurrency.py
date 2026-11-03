@@ -239,6 +239,7 @@ def test_3_two_concurrent_booking_confirmation_claims(db_session):
     }
 
     with patch("app.integrations.whatsapp.client.whatsapp_client.send_text_message", side_effect=mock_send), \
+         patch("app.integrations.whatsapp.client.whatsapp_client.send_message", side_effect=mock_send), \
          patch("app.services.notification_service.NotificationService.send_email_resend_sync", return_value={"status": "DELIVERED", "message_id": "resend_1"}):
 
         res1 = NotificationService.notify_booking_confirmed(db_session, ctx)

@@ -195,6 +195,11 @@ def test_customer_confirmation_template_param_is_meta_legal(monkeypatch):
 
 def test_customer_confirmation_uses_freeform_text_on_fallback(monkeypatch):
     captured = _capture_send(monkeypatch, template="")
+    monkeypatch.setattr(
+        NotificationService,
+        "_customer_service_window_open",
+        classmethod(lambda cls, db, phone: True),
+    )
 
     result = NotificationService.send_customer_whatsapp_confirmation(
         MagicMock(), _offline_confirmation_context()
