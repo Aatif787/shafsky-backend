@@ -687,16 +687,62 @@ class BookingService(BookingServiceExtMixin):
         taxes = 0.0
 
         from app.services.express_fee import calculate_express_fee
-        express_fee = calculate_express_fee(
-            airport_code=target_airport,
-            service_fee=subtotal,
-            booking_created_at=now,
-            journey_type=journey_type,
-            flight_type=flight_type,
-            departure_time=dep_time,
-            arrival_time=arr_time,
-            skip_effective_date_check=True,
-        )
+        if is_multi_service:
+            multi_express_fee = 0.0
+            for item in available_service_charges:
+                item_jt = item.get("service_type") or "DEPARTURE"
+                item_apt = item.get("airport_code") or target_airport
+                item_ft = item.get("flight_type") or flight_type or "DOMESTIC"
+                item_price = float(item.get("total_price") or 0.0)
+
+                # Use leg-specific scheduled times if provided, otherwise fall back to payload dep/arr
+                svc_dep = None
+                svc_arr = None
+                for raw_t, setter in [
+                    (item.get("departure_time"), "dep"),
+                    (item.get("arrival_time"), "arr"),
+                ]:
+                    if raw_t:
+                        try:
+                            from dateutil.parser import isoparse
+                            dt_val = isoparse(str(raw_t)) if not isinstance(raw_t, datetime) else raw_t
+                            if dt_val.tzinfo is None:
+                                dt_val = dt_val.replace(tzinfo=timezone.utc)
+                            if setter == "dep":
+                                svc_dep = dt_val
+                            else:
+                                svc_arr = dt_val
+                        except Exception:
+                            pass
+
+                item_dep = svc_dep or dep_time or arr_time
+                item_arr = svc_arr or arr_time or dep_time
+
+                fee_for_item = calculate_express_fee(
+                    airport_code=item_apt,
+                    service_fee=item_price,
+                    booking_created_at=now,
+                    journey_type=item_jt,
+                    flight_type=item_ft,
+                    departure_time=item_dep,
+                    arrival_time=item_arr,
+                    skip_effective_date_check=True,
+                )
+                item["express_fee"] = fee_for_item
+                multi_express_fee += fee_for_item
+
+            express_fee = round(multi_express_fee, 2)
+        else:
+            express_fee = calculate_express_fee(
+                airport_code=target_airport,
+                service_fee=subtotal,
+                booking_created_at=now,
+                journey_type=journey_type,
+                flight_type=flight_type,
+                departure_time=dep_time,
+                arrival_time=arr_time,
+                skip_effective_date_check=True,
+            )
 
         charge_amount = round(subtotal + express_fee, 2)
         metadata_json = dict(metadata_json or {})
@@ -723,6 +769,7 @@ class BookingService(BookingServiceExtMixin):
             selected_services = dict(selected_services or {})
             selected_services["multi_service"] = True
             selected_services["services"] = available_service_charges + unavailable_service_items
+            selected_services["express_fee"] = express_fee
 
         if getattr(payload, "flight_num_2", None) and journey_type == "TRANSIT":
             metadata_json["flight_number_2"] = payload.flight_num_2
