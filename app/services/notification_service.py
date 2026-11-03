@@ -937,6 +937,20 @@ class NotificationService(NotificationServiceExtMixin):
             )
             summary["admin"].append({"channel": "WHATSAPP", "status": "FAILED"})
 
+        # Dispatch Customer WhatsApp Booking Acknowledgement
+        try:
+            cust_phone = context.get("passenger_phone") or context.get("passengerPhone")
+            if cust_phone and db is not None:
+                cust_res = cls.send_customer_whatsapp_enquiry_acknowledgement(db, context)
+                summary["customer_whatsapp"] = cust_res
+        except Exception as cust_err:
+            logger.warning(
+                "Customer WhatsApp acknowledgement failed for %s: %s",
+                booking_ref,
+                type(cust_err).__name__,
+            )
+            summary["customer_whatsapp"] = {"status": "FAILED", "error": str(cust_err)}
+
         # Dispatch in-app Admin Real-Time Notification
         try:
             from app.services.admin_notification_service import AdminNotificationService

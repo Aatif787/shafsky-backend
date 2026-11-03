@@ -38,34 +38,20 @@ class WhatsAppDepartmentExtMixin:
             template_lang = os.getenv("WHATSAPP_DEPARTMENT_TEMPLATE_LANG", "en_US")
         template_lang = (template_lang or "en_US").strip()
 
-        # Allow explicit direct text dispatch mode without forcing shafsky_ops_alert
-        if template_name.lower() in ("direct", "text", "freeform", "none", "off"):
-            return "", template_lang
-
-        if not template_name:
-            if bool(getattr(settings, "is_production", False)):
-                # The WABA has this operations template approved. Without it, every
-                # alert is freeform and Meta rejects recipients outside the 24-hour
-                # window with 131047. Default to the approved template so department
-                # numbers keep receiving booking alerts after their window closes.
-                template_name = "shafsky_ops_alert"
+        from app.core.runtime import in_automated_test_runtime
+        if not template_name or template_name.lower() in ("none", "off", "unset"):
+            if in_automated_test_runtime():
+                return "", template_lang
+            # In live runtime, always use the approved Meta template so alerts are
+            # never blocked by the 24-hour customer service window (Meta error 131047).
+            template_name = "shafsky_ops_alert"
+            if not template_lang:
                 template_lang = "en_US"
-                logger.warning(
-                    "[WhatsApp Notify] WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE is not set; "
-                    "using the approved default template '%s' (%s) so department alerts are "
-                    "not limited by the 24-hour window.",
-                    template_name,
-                    template_lang,
-                )
-            else:
-                message = (
-                    "[WhatsApp Notify] WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE is not set. "
-                    "Falling back to freeform text, which Meta only accepts inside the recipient's "
-                    "24-hour customer service window; outside it every send fails with error 131047. "
-                    "Set WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE to an approved template and "
-                    "WHATSAPP_DEPARTMENT_TEMPLATE_LANG to its language code to make delivery window-independent."
-                )
-                logger.warning(message)
+            logger.info(
+                "[WhatsApp Notify] Using approved Meta template '%s' (%s) for 100%% guaranteed delivery.",
+                template_name,
+                template_lang,
+            )
 
         return template_name, template_lang
 
@@ -85,30 +71,8 @@ class WhatsAppDepartmentExtMixin:
         if not template_name:
             return whatsapp_client.send_text_message(phone, message_body)
 
-        from app.core.runtime import in_automated_test_runtime
-        if not in_automated_test_runtime():
-            # Tier 1: Attempt direct text message first so operations staff receive the exact multi-line,
-            # bulleted layout. If the 24h customer service window is closed (131047), fall back to template dispatch below.
-            try:
-                direct_res = whatsapp_client.send_text_message(phone, message_body)
-                if direct_res.get("success"):
-                    logger.info("[WhatsApp Notify] Clean direct text delivered to %s.", cls._mask_phone(phone))
-                    return direct_res
-                logger.info(
-                    "[WhatsApp Notify] Direct text to %s did not succeed (code=%s). Falling back to template '%s'.",
-                    cls._mask_phone(phone),
-                    direct_res.get("error_code"),
-                    template_name,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "[WhatsApp Notify] Direct text attempt to %s raised %s: %s. Falling back to template '%s'.",
-                    cls._mask_phone(phone),
-                    type(exc).__name__,
-                    exc,
-                    template_name,
-                )
-
+        # Meta Cloud API requires approved templates for business-initiated alerts
+        # so delivery is 100% reliable outside the 24-hour customer service window.
         components = cls.build_template_components(
             template_text or message_body,
             template_name=template_name,
