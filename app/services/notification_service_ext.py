@@ -41,23 +41,41 @@ def build_template_parameter(value: Any, max_chars: int = TEMPLATE_PARAM_MAX_CHA
     return text
 
 
-def _format_datetime(value: Any) -> Optional[str]:
-    """Renders a booking date as a clean, human-readable value."""
+def _format_datetime(value: Any, airport_code: Optional[str] = None) -> Optional[str]:
+    """Renders a booking date as a clean, human-readable local value."""
     if value is None:
         return None
+    from datetime import datetime
     if isinstance(value, datetime):
-        return value.strftime("%d %b %Y, %H:%M")
-    text = str(value).strip()
-    if not text:
-        return None
+        dt = value
+    else:
+        text = str(value).strip()
+        if not text:
+            return None
+        if len(text) == 10 and text[4] == "-" and text[7] == "-":
+            try:
+                parsed_d = datetime.strptime(text, "%Y-%m-%d")
+                return parsed_d.strftime("%d %b %Y")
+            except ValueError:
+                return text
+        try:
+            normalized = text.replace("Z", "+00:00").replace(" ", "T")
+            dt = datetime.fromisoformat(normalized)
+        except (ValueError, TypeError):
+            return text[:40]
+
     try:
-        normalized = text.replace("Z", "+00:00").replace(" ", "T")
-        parsed = datetime.fromisoformat(normalized)
-        if len(text) == 10:
-            return parsed.strftime("%d %b %Y")
-        return parsed.strftime("%d %b %Y, %H:%M")
-    except ValueError:
-        return text[:40]
+        from zoneinfo import ZoneInfo
+        from app.services.booking_cutoff import lookup_airport_timezone
+
+        tz_name = lookup_airport_timezone(None, airport_code) if airport_code else "Asia/Kolkata"
+        target_tz = ZoneInfo(tz_name)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(target_tz)
+    except Exception:
+        pass
+
+    return dt.strftime("%d %b %Y, %H:%M")
 
 
 
@@ -777,15 +795,18 @@ class NotificationServiceExtMixin:
         )
         flight_num = str(flight_raw).strip() if flight_raw and str(flight_raw).strip() not in ("Flight", "N/A", "None", "") else None
 
+        journey_type_val = str(context.get("journey_type") or (booking.journey_type if booking and hasattr(booking, "journey_type") else "")).strip().upper()
         date_time_raw = (
-            context.get("departure_time")
+            (context.get("arrival_time") or (booking.arrival_time if booking else None) if journey_type_val == "ARRIVAL" else None)
+            or context.get("departure_time")
             or context.get("departureTime")
+            or context.get("arrival_time")
             or context.get("service_date")
             or context.get("serviceDate")
             or (booking.departure_time if booking else None)
             or (booking.arrival_time if booking else None)
         )
-        date_time_str = _format_datetime(date_time_raw)
+        date_time_str = _format_datetime(date_time_raw, airport_code=airport_name)
 
         support_phone = getattr(settings, "SUPPORT_PHONE", None) or os.getenv("SUPPORT_PHONE") or "+91 9599087959"
 
