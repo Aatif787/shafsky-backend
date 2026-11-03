@@ -658,7 +658,8 @@ class WhatsAppDepartmentService(WhatsAppDepartmentExtMixin):
             or context.get("service_date")
             or context.get("serviceDate")
         )
-        date_time = cls._display_when(raw_service_clock, airport_code=airport or origin or dest) or "Not specified"
+        service_airport = (dest if journey_type_val == "ARRIVAL" else origin) or airport or origin or dest
+        date_time = cls._display_when(raw_service_clock, airport_code=service_airport) or "Not specified"
 
         raw_amount = context.get("total_amount") if context.get("total_amount") is not None else context.get("totalAmount")
         currency = str(context.get("currency") or "INR").upper()
