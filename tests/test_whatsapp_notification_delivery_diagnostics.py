@@ -82,8 +82,15 @@ def _accept_all(monkeypatch):
     def _send_text(self, phone, message):
         return {"success": True, "message_id": f"wamid.{phone}"}
 
+    def _send_template(self, **kwargs):
+        phone = kwargs.get("to_phone") or ""
+        return {"success": True, "message_id": f"wamid.{phone}", "status_code": 200}
+
     monkeypatch.setattr(
         "app.integrations.whatsapp.client.WhatsAppClient.send_text_message", _send_text
+    )
+    monkeypatch.setattr(
+        "app.integrations.whatsapp.client.WhatsAppClient.send_message", _send_template
     )
 
 

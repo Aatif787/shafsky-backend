@@ -585,7 +585,7 @@ class WhatsAppDepartmentService(WhatsAppDepartmentExtMixin):
         no new-line/tab characters or runs of more than four spaces.
         """
         t_name = (template_name or "").strip()
-        if t_name == "shafsky_clean_booking_alert" and context:
+        if t_name in ("shafsky_clean_booking_alert", "shafsky_ops_booking_clean") and context:
             return cls._build_shafsky_clean_booking_alert_components(context)
         if t_name == "shafsky_operations_alert" and context:
             return cls._build_shafsky_operations_alert_components(context)

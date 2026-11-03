@@ -28,6 +28,19 @@ from app.services.whatsapp_department_service import WhatsAppDepartmentService
 from app.integrations.whatsapp.client import whatsapp_client
 
 
+def _force_customer_freeform_window(monkeypatch):
+    """Customer confirmation uses freeform text only inside Meta's 24-hour window.
+
+    These tests mock send_text_message; without an open window the live path
+    sends the approved template via send_message instead.
+    """
+    monkeypatch.setattr(
+        NotificationService,
+        "_customer_service_window_open",
+        classmethod(lambda cls, db, phone: True),
+    )
+
+
 def _purge_customer_notifications():
     """Purge customer WhatsApp notification records between test runs."""
     try:
@@ -60,6 +73,7 @@ def test_customer_phone_retrieval_and_normalization(monkeypatch):
     monkeypatch.setattr(whatsapp_client, "is_configured", lambda: True)
     monkeypatch.setattr(whatsapp_client, "send_text_message", mock_send)
     monkeypatch.setattr("app.services.notification_service.settings.WHATSAPP_CUSTOMER_CONFIRMATION_TEMPLATE", "")
+    _force_customer_freeform_window(monkeypatch)
 
     with SessionLocal() as db:
         context = {
@@ -90,6 +104,7 @@ def test_customer_phone_supports_alternate_keys(monkeypatch):
     monkeypatch.setattr(whatsapp_client, "is_configured", lambda: True)
     monkeypatch.setattr(whatsapp_client, "send_text_message", mock_send)
     monkeypatch.setattr("app.services.notification_service.settings.WHATSAPP_CUSTOMER_CONFIRMATION_TEMPLATE", "")
+    _force_customer_freeform_window(monkeypatch)
 
     with SessionLocal() as db:
         context = {
@@ -127,6 +142,7 @@ def test_customer_notification_does_not_send_to_department_phones(monkeypatch):
     monkeypatch.setattr(whatsapp_client, "is_configured", lambda: True)
     monkeypatch.setattr(whatsapp_client, "send_text_message", mock_send_text)
     monkeypatch.setattr("app.services.notification_service.settings.WHATSAPP_CUSTOMER_CONFIRMATION_TEMPLATE", "")
+    _force_customer_freeform_window(monkeypatch)
 
     customer_phone = "9876543210"  # normalizes to 919876543210
     with SessionLocal() as db:
@@ -210,6 +226,7 @@ def test_db_booking_status_validation(monkeypatch):
     monkeypatch.setattr(whatsapp_client, "is_configured", lambda: True)
     monkeypatch.setattr(whatsapp_client, "send_text_message", mock_send)
     monkeypatch.setattr("app.services.notification_service.settings.WHATSAPP_CUSTOMER_CONFIRMATION_TEMPLATE", "")
+    _force_customer_freeform_window(monkeypatch)
 
     booking_ref = f"SHF-DB-PEND-{uuid.uuid4().hex[:6].upper()}"
 
@@ -259,6 +276,7 @@ def test_duplicate_customer_notification_suppression(monkeypatch):
     monkeypatch.setattr(whatsapp_client, "is_configured", lambda: True)
     monkeypatch.setattr(whatsapp_client, "send_text_message", mock_send)
     monkeypatch.setattr("app.services.notification_service.settings.WHATSAPP_CUSTOMER_CONFIRMATION_TEMPLATE", "")
+    _force_customer_freeform_window(monkeypatch)
 
     ref = f"SHF-DUP-{uuid.uuid4().hex[:6].upper()}"
     context = {
@@ -299,6 +317,7 @@ def test_message_content_includes_all_fields_when_present(monkeypatch):
     monkeypatch.setattr(whatsapp_client, "is_configured", lambda: True)
     monkeypatch.setattr(whatsapp_client, "send_text_message", mock_send)
     monkeypatch.setattr("app.services.notification_service.settings.WHATSAPP_CUSTOMER_CONFIRMATION_TEMPLATE", "")
+    _force_customer_freeform_window(monkeypatch)
 
     with SessionLocal() as db:
         context = {
@@ -338,6 +357,7 @@ def test_message_content_omits_missing_flight_and_date_without_placeholders(monk
     monkeypatch.setattr(whatsapp_client, "is_configured", lambda: True)
     monkeypatch.setattr(whatsapp_client, "send_text_message", mock_send)
     monkeypatch.setattr("app.services.notification_service.settings.WHATSAPP_CUSTOMER_CONFIRMATION_TEMPLATE", "")
+    _force_customer_freeform_window(monkeypatch)
 
     with SessionLocal() as db:
         context = {
@@ -428,6 +448,7 @@ def test_meta_api_failure_does_not_raise(monkeypatch):
     monkeypatch.setattr(whatsapp_client, "is_configured", lambda: True)
     monkeypatch.setattr(whatsapp_client, "send_text_message", mock_send)
     monkeypatch.setattr("app.services.notification_service.settings.WHATSAPP_CUSTOMER_CONFIRMATION_TEMPLATE", "")
+    _force_customer_freeform_window(monkeypatch)
 
     ref = f"SHF-ERR-{uuid.uuid4().hex[:6].upper()}"
     with SessionLocal() as db:
@@ -465,6 +486,7 @@ def test_meta_api_timeout_recorded_as_unknown(monkeypatch):
     monkeypatch.setattr(whatsapp_client, "is_configured", lambda: True)
     monkeypatch.setattr(whatsapp_client, "send_text_message", mock_send)
     monkeypatch.setattr("app.services.notification_service.settings.WHATSAPP_CUSTOMER_CONFIRMATION_TEMPLATE", "")
+    _force_customer_freeform_window(monkeypatch)
 
     with SessionLocal() as db:
         context = {
