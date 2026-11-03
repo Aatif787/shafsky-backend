@@ -1423,13 +1423,23 @@ class NotificationServiceExtMixin:
         ]
         route = " → ".join(bit for bit in route_bits if bit)
 
+        journey_type_val = str(context.get("journey_type") or (booking.journey_type if booking and hasattr(booking, "journey_type") else "")).strip().upper()
         date_raw = (
-            context.get("departure_time")
+            (context.get("arrival_time") or (booking.arrival_time if booking else None) if journey_type_val == "ARRIVAL" else None)
+            or context.get("departure_time")
+            or context.get("arrival_time")
             or context.get("service_date")
             or meta_details.get("service_date")
             or booking_details.get("service_date")
+            or (booking.departure_time if booking else None)
+            or (booking.arrival_time if booking else None)
         )
-        date_time_str = _format_datetime(date_raw)
+        airport_hint = (
+            (context.get("dest_code") or context.get("destination") or (getattr(booking, "dest_code", None) if booking else None))
+            if journey_type_val == "ARRIVAL"
+            else (context.get("origin_code") or context.get("origin") or context.get("airport_code") or (getattr(booking, "origin_code", None) if booking else None))
+        )
+        date_time_str = _format_datetime(date_raw, airport_code=airport_hint)
 
         support_phone = getattr(settings, "SUPPORT_PHONE", None) or os.getenv("SUPPORT_PHONE") or "+91 9599087959"
 

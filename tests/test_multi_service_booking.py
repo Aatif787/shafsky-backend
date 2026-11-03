@@ -928,3 +928,167 @@ def test_mumbai_departure_jammu_arrival_partial_availability(db: Session):
     assert len(booking.metadata_json.get("unavailable_services", [])) == 1
     assert booking.metadata_json["unavailable_services"][0]["airport_code"] == "IXJ"
     assert booking.metadata_json.get("service_query_ref") is not None
+
+
+# ─── 6. Multi-Service Express Fee Tests (Mumbai 50% Surcharge Rule) ───
+
+def test_multi_service_express_fee_bom_departure_del_arrival(db: Session):
+    """
+    Multi-service booking: BOM Departure (2500.00) + DEL Arrival (2500.00).
+    Scheduled flight is in 10 hours (< 24h).
+    BOM Departure qualifies for 50% express fee (1250.00).
+    DEL Arrival is at DEL, so express fee is 0.
+    Total amount must be 2500 + 2500 + 1250 = 6250.00.
+    """
+    short_notice_dep = datetime.now(timezone.utc) + timedelta(hours=10)
+    base_subtotal = 2500.00 + 2500.00
+    expected_express_fee = 1250.00
+    expected_total = base_subtotal + expected_express_fee
+
+    payload = BookingCreate(
+        passenger_name="Arjun Kapoor",
+        passenger_email="arjun.kapoor@shafsky.in",
+        passenger_phone="+919876543210",
+        flight_num="AI808",
+        service_category="Airport Assistance",
+        service_type="multi_service",
+        origin_code="BOM",
+        dest_code="DEL",
+        departure_time=short_notice_dep,
+        arrival_time=short_notice_dep + timedelta(hours=2),
+        total_amount=expected_total,
+        selected_services={
+            "multi_service": True,
+            "services": [
+                {"service_type": "DEPARTURE", "airport_code": "BOM", "package": "silver"},
+                {"service_type": "ARRIVAL", "airport_code": "DEL", "package": "silver"},
+            ]
+        },
+        metadata_json={
+            "multi_service": True,
+            "services": [
+                {"service_type": "DEPARTURE", "airport_code": "BOM", "package": "silver"},
+                {"service_type": "ARRIVAL", "airport_code": "DEL", "package": "silver"},
+            ]
+        }
+    )
+
+    booking = BookingService.create_booking(db, payload)
+    assert booking is not None
+    assert booking.status == BookingStatus.PENDING
+    assert float(booking.total_amount) == expected_total
+    assert booking.metadata_json.get("express_fee") == expected_express_fee
+    assert booking.metadata_json.get("subtotal") == base_subtotal
+
+    # Verify per-service itemized express fee breakdown
+    services = booking.metadata_json.get("available_services", [])
+    assert len(services) == 2
+    bom_svc = next(s for s in services if s["airport_code"] == "BOM")
+    del_svc = next(s for s in services if s["airport_code"] == "DEL")
+    assert bom_svc["express_fee"] == 1250.00
+    assert del_svc["express_fee"] == 0.0
+
+
+def test_multi_service_express_fee_del_departure_bom_arrival(db: Session):
+    """
+    Multi-service booking: DEL Departure (2500.00) + BOM Arrival (2500.00).
+    Flight departs DEL in 8 hours and arrives BOM in 10 hours (< 24h).
+    DEL Departure fee = 0.
+    BOM Arrival fee = 50% of 2500 = 1250.00.
+    Total amount must be 2500 + 2500 + 1250 = 6250.00.
+    """
+    short_notice_dep = datetime.now(timezone.utc) + timedelta(hours=8)
+    short_notice_arr = short_notice_dep + timedelta(hours=2)
+    base_subtotal = 2500.00 + 2500.00
+    expected_express_fee = 1250.00
+    expected_total = base_subtotal + expected_express_fee
+
+    payload = BookingCreate(
+        passenger_name="Meera Nair",
+        passenger_email="meera.nair@shafsky.in",
+        passenger_phone="+919876543211",
+        flight_num="6E202",
+        service_category="Airport Assistance",
+        service_type="multi_service",
+        origin_code="DEL",
+        dest_code="BOM",
+        departure_time=short_notice_dep,
+        arrival_time=short_notice_arr,
+        total_amount=expected_total,
+        selected_services={
+            "multi_service": True,
+            "services": [
+                {"service_type": "DEPARTURE", "airport_code": "DEL", "package": "silver"},
+                {"service_type": "ARRIVAL", "airport_code": "BOM", "package": "silver"},
+            ]
+        },
+        metadata_json={
+            "multi_service": True,
+            "services": [
+                {"service_type": "DEPARTURE", "airport_code": "DEL", "package": "silver"},
+                {"service_type": "ARRIVAL", "airport_code": "BOM", "package": "silver"},
+            ]
+        }
+    )
+
+    booking = BookingService.create_booking(db, payload)
+    assert booking is not None
+    assert float(booking.total_amount) == expected_total
+    assert booking.metadata_json.get("express_fee") == expected_express_fee
+
+    services = booking.metadata_json.get("available_services", [])
+    del_svc = next(s for s in services if s["airport_code"] == "DEL")
+    bom_svc = next(s for s in services if s["airport_code"] == "BOM")
+    assert del_svc["express_fee"] == 0.0
+    assert bom_svc["express_fee"] == 1250.00
+
+
+def test_multi_service_express_fee_both_bom_services(db: Session):
+    """
+    Multi-service booking where both services are at BOM under 24 hours:
+    BOM Departure (2500.00) + BOM Arrival (2500.00).
+    Both services independently trigger the 50% express fee.
+    Express fee = 1250 + 1250 = 2500.00.
+    Total = 5000 + 2500 = 7500.00.
+    """
+    short_notice_dep = datetime.now(timezone.utc) + timedelta(hours=10)
+    base_subtotal = 5000.00
+    expected_express_fee = 2500.00
+    expected_total = base_subtotal + expected_express_fee
+
+    payload = BookingCreate(
+        passenger_name="Rohan Varma",
+        passenger_email="rohan.varma@shafsky.in",
+        passenger_phone="+919876543212",
+        flight_num="AI999",
+        service_category="Airport Assistance",
+        service_type="multi_service",
+        origin_code="DEL",
+        dest_code="BLR",
+        departure_time=short_notice_dep,
+        arrival_time=short_notice_dep + timedelta(hours=4),
+        total_amount=expected_total,
+        selected_services={
+            "multi_service": True,
+            "services": [
+                {"service_type": "DEPARTURE", "airport_code": "BOM", "package": "silver"},
+                {"service_type": "ARRIVAL", "airport_code": "BOM", "package": "silver"},
+            ]
+        },
+        metadata_json={
+            "multi_service": True,
+            "services": [
+                {"service_type": "DEPARTURE", "airport_code": "BOM", "package": "silver"},
+                {"service_type": "ARRIVAL", "airport_code": "BOM", "package": "silver"},
+            ]
+        }
+    )
+
+    booking = BookingService.create_booking(db, payload)
+    assert booking is not None
+    assert float(booking.total_amount) == expected_total
+    assert booking.metadata_json.get("express_fee") == expected_express_fee
+
+    services = booking.metadata_json.get("available_services", [])
+    for svc in services:
+        assert svc["express_fee"] == 1250.00
