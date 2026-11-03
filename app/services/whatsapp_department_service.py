@@ -1164,11 +1164,7 @@ class WhatsAppDepartmentService(WhatsAppDepartmentExtMixin):
             if not text:
                 return ""
             if len(text) == 10 and text[4] == "-" and text[7] == "-":
-                try:
-                    parsed_d = datetime.strptime(text, "%Y-%m-%d")
-                    return parsed_d.strftime("%d %b %Y")
-                except ValueError:
-                    return text
+                return text
             try:
                 dt = datetime.fromisoformat(text.replace("Z", "+00:00").replace(" ", "T"))
             except (ValueError, TypeError):
