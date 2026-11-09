@@ -34,9 +34,53 @@ class NotificationCustomerConfirmationMixin:
         only after a payment is verified as successful.
         Protected by _already_notified idempotency check.
         """
+        from app.services.pdf_service import (
+            is_placeholder_email,
+            resolve_customer_email,
+            resolve_customer_name,
+            resolve_customer_phone,
+        )
+
         logger = _ns().logger
         booking_ref = str(context.get("booking_ref") or context.get("bookingRef") or "")
-        customer_email = str(context.get("passenger_email") or context.get("passengerEmail") or "").strip()
+        customer_email = str(
+            context.get("passenger_email")
+            or context.get("passengerEmail")
+            or context.get("customer_email")
+            or context.get("contact_email")
+            or context.get("email")
+            or ""
+        ).strip()
+        if is_placeholder_email(customer_email):
+            customer_email = ""
+            if booking_ref and db is not None:
+                try:
+                    from sqlalchemy.orm import Session as _OrmSession
+                    if isinstance(db, _OrmSession):
+                        from app.models.airport import AirportBooking
+                        from app.models.payment import Invoice, PaymentTransaction
+                        from app.models.schema import Booking
+
+                        db_booking = db.scalar(select(Booking).where(Booking.booking_ref == booking_ref))
+                        if not db_booking:
+                            db_booking = db.scalar(
+                                select(AirportBooking).where(AirportBooking.booking_reference == booking_ref)
+                            )
+                        db_tx = db.scalar(
+                            select(PaymentTransaction).where(PaymentTransaction.entity_id == booking_ref)
+                        )
+                        db_inv = (
+                            db.scalar(select(Invoice).where(Invoice.transaction_id == db_tx.id))
+                            if db_tx is not None
+                            else None
+                        )
+                        customer_email = resolve_customer_email(
+                            booking=db_booking,
+                            invoice=db_inv,
+                            transaction=db_tx,
+                        )
+                except Exception:
+                    customer_email = ""
         payload = {
             "booking_ref": booking_ref,
             "bookingRef": booking_ref,
@@ -143,13 +187,27 @@ class NotificationCustomerConfirmationMixin:
         if not booking_ref:
             return None
 
+        from app.models.airport import AirportBooking
         from app.models.schema import Booking, BookingStatus
-        booking = db.scalar(select(Booking).where(Booking.booking_ref == booking_ref))
-        if booking is None or booking.status != BookingStatus.CONFIRMED:
-            return None
+        from app.services.pdf_service import (
+            resolve_customer_email,
+            resolve_customer_name,
+            resolve_customer_phone,
+        )
 
-        meta = booking.metadata_json if isinstance(booking.metadata_json, dict) else {}
-        paid = str(meta.get("payment_status") or "").upper() == "PAID"
+        booking: Any = db.scalar(select(Booking).where(Booking.booking_ref == booking_ref))
+        if booking is not None:
+            if booking.status != BookingStatus.CONFIRMED:
+                return None
+            meta = booking.metadata_json if isinstance(booking.metadata_json, dict) else {}
+            paid = str(meta.get("payment_status") or "").upper() == "PAID"
+        else:
+            booking = db.scalar(select(AirportBooking).where(AirportBooking.booking_reference == booking_ref))
+            if booking is None or str(getattr(booking, "status", "") or "").upper() != "CONFIRMED":
+                return None
+            meta = {}
+            paid = False
+
         if not paid:
             from app.models.payment import PaymentStatus, PaymentTransaction
             paid = db.scalar(
@@ -163,21 +221,29 @@ class NotificationCustomerConfirmationMixin:
 
         from app.services.whatsapp_department_service import WhatsAppDepartmentService
 
+        raw_total = getattr(booking, "total_amount", None)
+        if raw_total is None:
+            raw_total = getattr(booking, "total_price", None)
         ops_context = dict(context)
         ops_context.update({
-            "booking_ref": booking.booking_ref,
-            "passenger_name": context.get("passenger_name") or booking.passenger_name,
-            "passenger_email": context.get("passenger_email") or booking.passenger_email,
-            "passenger_phone": context.get("passenger_phone") or booking.passenger_phone,
-            "service_category": context.get("service_category") or getattr(booking, "service_category", None),
-            "service_type": context.get("service_type") or booking.service_type,
-            "total_amount": float(booking.total_amount) if booking.total_amount is not None else 0.0,
-            "currency": booking.currency or "INR",
+            "booking_ref": getattr(booking, "booking_ref", None) or getattr(booking, "booking_reference", None) or booking_ref,
+            "passenger_name": context.get("passenger_name") or resolve_customer_name(booking=booking, default="Valued Guest"),
+            "passenger_email": context.get("passenger_email") or resolve_customer_email(booking=booking),
+            "passenger_phone": context.get("passenger_phone") or resolve_customer_phone(booking=booking),
+            "service_category": context.get("service_category") or getattr(booking, "service_category", None) or "Airport Assistance",
+            "service_type": context.get("service_type") or getattr(booking, "service_type", None) or getattr(booking, "service_package", None),
+            "total_amount": float(raw_total) if raw_total is not None else 0.0,
+            "currency": getattr(booking, "currency", None) or "INR",
             "status": "CONFIRMED",
             "notification_stage": "PAYMENT_CONFIRMED",
         })
         if not ops_context.get("passenger_count"):
-            ops_context["passenger_count"] = meta.get("passenger_count") or meta.get("guest_count") or 1
+            ops_context["passenger_count"] = (
+                meta.get("passenger_count")
+                or meta.get("guest_count")
+                or getattr(booking, "total_passengers", None)
+                or 1
+            )
         return WhatsAppDepartmentService.dispatch_booking_or_enquiry_notification(ops_context)
 
     @classmethod
@@ -281,11 +347,14 @@ class NotificationCustomerConfirmationMixin:
             return {"status": "SKIPPED", "reason": "missing_booking_ref"}
 
         # 1. Booking Lookup & Validation
-        booking = None
+        booking: Any = None
         if db is not None and not isinstance(db, MagicMock):
             try:
+                from app.models.airport import AirportBooking
                 from app.models.schema import Booking
                 booking = db.scalar(select(Booking).where(Booking.booking_ref == booking_ref))
+                if not booking:
+                    booking = db.scalar(select(AirportBooking).where(AirportBooking.booking_reference == booking_ref))
             except Exception as db_err:
                 logger.debug("[Customer WhatsApp] DB lookup for booking %s: %s", booking_ref, db_err)
 
@@ -317,6 +386,20 @@ class NotificationCustomerConfirmationMixin:
                         "reason": "booking_not_confirmed",
                         "booking_ref": booking_ref,
                     }
+            elif hasattr(booking, "status") and isinstance(booking.status, str):
+                b_stat_up = booking.status.strip().upper()
+                if b_stat_up in ("CANCELLED", "REJECTED"):
+                    return {
+                        "status": "SKIPPED",
+                        "reason": "booking_not_confirmed",
+                        "booking_ref": booking_ref,
+                    }
+                if b_stat_up != "CONFIRMED" and not is_explicitly_confirmed:
+                    return {
+                        "status": "SKIPPED",
+                        "reason": "booking_not_confirmed",
+                        "booking_ref": booking_ref,
+                    }
         elif context.get("status"):
             if not is_explicitly_confirmed:
                 ctx_status = str(context.get("status")).strip().upper()
@@ -342,6 +425,8 @@ class NotificationCustomerConfirmationMixin:
             }
 
         # 3. Customer Phone Retrieval & Normalization
+        from app.services.pdf_service import resolve_customer_phone
+
         raw_phone = (
             context.get("passenger_phone")
             or context.get("passengerPhone")
@@ -349,7 +434,7 @@ class NotificationCustomerConfirmationMixin:
             or context.get("contact_phone")
         )
         if not raw_phone and booking:
-            raw_phone = getattr(booking, "passenger_phone", None)
+            raw_phone = resolve_customer_phone(booking=booking)
 
         if not raw_phone or not str(raw_phone).strip():
             logger.warning(

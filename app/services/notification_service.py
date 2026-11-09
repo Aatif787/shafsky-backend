@@ -214,7 +214,7 @@ class NotificationService(NotificationServiceExtMixin):
 
             resp_text = resp.text or ""
             is_unverified = (
-                resp.status_code in (400, 403)
+                resp.status_code in (400, 403, 422)
                 and any(phrase in resp_text.lower() for phrase in ("domain is not verified", "not verified", "validation_error"))
             )
             # Automatic fallback to onboarding@resend.dev when custom domain is not yet verified
@@ -557,6 +557,10 @@ class NotificationService(NotificationServiceExtMixin):
                 db.execute(text("SELECT pg_advisory_xact_lock(:id)"), {"id": lock_id})
             except Exception as e:
                 logger.warning("[NotificationService] Advisory lock error: %s", e)
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
 
         # Query existing records for this template_type
         records = list(
@@ -589,6 +593,8 @@ class NotificationService(NotificationServiceExtMixin):
         for r in matching_records:
             if r.status == NotificationStatus.SENDING:
                 last_update = r.updated_at or r.created_at
+                if last_update and last_update.tzinfo is None:
+                    last_update = last_update.replace(tzinfo=timezone.utc)
                 if last_update and (now - last_update).total_seconds() < lease_seconds:
                     return None, "IN_PROGRESS"
                 # Stale lease recovery (worker crashed or timed out)

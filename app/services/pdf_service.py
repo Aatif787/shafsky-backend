@@ -63,6 +63,274 @@ def _safe_text(value: Any, default: str = "") -> str:
     return text or default
 
 
+_PLACEHOLDER_EMAILS = frozenset({
+    "guest@shafsky.com",
+    "guest@shafsky.in",
+    "noreply@shafsky.com",
+    "no-reply@shafsky.com",
+    "system@shafsky.com",
+    "unknown@shafsky.com",
+    "na@shafsky.com",
+    "n/a",
+    "none",
+    "null",
+})
+
+
+def is_placeholder_email(value: Any) -> bool:
+    raw = _safe_text(value).lower()
+    if not raw or "@" not in raw:
+        return True
+    if raw in _PLACEHOLDER_EMAILS:
+        return True
+    if raw.endswith("@shafsky.guest") or raw.endswith("@example.com") or raw.endswith("@placeholder.local"):
+        return True
+    return False
+
+
+def _extract_airport_primary_passenger(booking: Any) -> Any:
+    if booking is None:
+        return None
+    passengers = getattr(booking, "passengers", None)
+    if not passengers:
+        return None
+    try:
+        pax_list = list(passengers)
+    except Exception:
+        return None
+    if not pax_list:
+        return None
+    for p in pax_list:
+        if getattr(p, "is_primary", False) or getattr(p, "is_primary_contact", False):
+            return p
+    return pax_list[0]
+
+
+def _extract_airport_first_flight(booking: Any) -> Any:
+    if booking is None:
+        return None
+    flights = getattr(booking, "flight_details", None)
+    if not flights:
+        return None
+    try:
+        fl_list = list(flights)
+    except Exception:
+        return None
+    return fl_list[0] if fl_list else None
+
+
+def resolve_customer_email(
+    booking: Any = None,
+    invoice: Any = None,
+    transaction: Any = None,
+    raw_payload: Any = None,
+) -> str:
+    """Resolve the customer's real submitted email across Booking, AirportBooking, Invoice, and PaymentTransaction."""
+    candidates: list[Any] = []
+
+    if booking is not None:
+        candidates.append(getattr(booking, "passenger_email", None))
+        candidates.append(getattr(booking, "contact_email", None))
+        candidates.append(getattr(booking, "customer_email", None))
+        meta = getattr(booking, "metadata_json", None)
+        if isinstance(meta, dict):
+            candidates.extend([
+                meta.get("passenger_email"),
+                meta.get("passengerEmail"),
+                meta.get("contact_email"),
+                meta.get("contactEmail"),
+                meta.get("customer_email"),
+                meta.get("customerEmail"),
+                meta.get("email"),
+            ])
+            pax = meta.get("passengers")
+            if isinstance(pax, list):
+                for p in pax:
+                    if isinstance(p, dict):
+                        candidates.extend([
+                            p.get("email"),
+                            p.get("contact_email"),
+                            p.get("contactEmail"),
+                            p.get("passenger_email"),
+                        ])
+        primary_pax = _extract_airport_primary_passenger(booking)
+        if primary_pax is not None:
+            candidates.extend([
+                getattr(primary_pax, "contact_email", None),
+                getattr(primary_pax, "email", None),
+            ])
+        user_obj = getattr(booking, "user", None)
+        if user_obj is not None:
+            candidates.append(getattr(user_obj, "email", None))
+
+    if invoice is not None:
+        candidates.append(getattr(invoice, "customer_email", None))
+
+    for payload_source in (
+        raw_payload if isinstance(raw_payload, dict) else None,
+        getattr(transaction, "gateway_response", None) if transaction is not None else None,
+    ):
+        if isinstance(payload_source, dict):
+            candidates.extend([
+                payload_source.get("customer_email"),
+                payload_source.get("passenger_email"),
+                payload_source.get("email"),
+            ])
+            notes = payload_source.get("notes")
+            if isinstance(notes, dict):
+                candidates.extend([
+                    notes.get("customer_email"),
+                    notes.get("passenger_email"),
+                    notes.get("email"),
+                ])
+            pl = payload_source.get("payload")
+            if isinstance(pl, dict):
+                pay_ent = (pl.get("payment") or {}).get("entity") if isinstance(pl.get("payment"), dict) else {}
+                if isinstance(pay_ent, dict):
+                    p_notes = pay_ent.get("notes") if isinstance(pay_ent.get("notes"), dict) else {}
+                    candidates.extend([
+                        p_notes.get("customer_email"),
+                        p_notes.get("passenger_email"),
+                        p_notes.get("email"),
+                        pay_ent.get("email"),
+                    ])
+
+    for candidate in candidates:
+        cleaned = _safe_text(candidate)
+        if cleaned and not is_placeholder_email(cleaned):
+            return cleaned
+    return ""
+
+
+def resolve_customer_name(
+    booking: Any = None,
+    invoice: Any = None,
+    transaction: Any = None,
+    default: str = "Valued Guest",
+) -> str:
+    """Resolve the customer's submitted name across Booking, AirportBooking, Invoice, and PaymentTransaction."""
+    candidates: list[Any] = []
+    if booking is not None:
+        candidates.append(getattr(booking, "passenger_name", None))
+        candidates.append(getattr(booking, "customer_name", None))
+        meta = getattr(booking, "metadata_json", None)
+        if isinstance(meta, dict):
+            candidates.extend([
+                meta.get("passenger_name"),
+                meta.get("passengerName"),
+                meta.get("customer_name"),
+                meta.get("customerName"),
+                meta.get("full_name"),
+                meta.get("name"),
+            ])
+            pax = meta.get("passengers")
+            if isinstance(pax, list):
+                for p in pax:
+                    if isinstance(p, dict):
+                        candidates.extend([
+                            p.get("full_name"),
+                            p.get("fullName"),
+                            p.get("name"),
+                            p.get("passenger_name"),
+                        ])
+        primary_pax = _extract_airport_primary_passenger(booking)
+        if primary_pax is not None:
+            candidates.extend([
+                getattr(primary_pax, "full_name", None),
+                getattr(primary_pax, "name", None),
+            ])
+        user_obj = getattr(booking, "user", None)
+        if user_obj is not None:
+            candidates.append(getattr(user_obj, "full_name", None))
+    if invoice is not None:
+        candidates.append(getattr(invoice, "customer_name", None))
+    if transaction is not None and isinstance(getattr(transaction, "gateway_response", None), dict):
+        resp = transaction.gateway_response
+        notes = resp.get("notes") if isinstance(resp.get("notes"), dict) else {}
+        candidates.extend([
+            notes.get("customer_name"),
+            notes.get("passenger_name"),
+            resp.get("customer_name"),
+        ])
+
+    for candidate in candidates:
+        cleaned = _safe_text(candidate)
+        if cleaned and cleaned.lower() not in ("guest", "valued guest", "none", "null", "n/a"):
+            return cleaned
+    for candidate in candidates:
+        cleaned = _safe_text(candidate)
+        if cleaned and cleaned.lower() not in ("none", "null", "n/a"):
+            return cleaned
+    return default
+
+
+def resolve_customer_phone(booking: Any = None, transaction: Any = None) -> str:
+    """Resolve the customer's submitted phone number across Booking, AirportBooking, and PaymentTransaction."""
+    candidates: list[Any] = []
+    if booking is not None:
+        candidates.append(getattr(booking, "passenger_phone", None))
+        candidates.append(getattr(booking, "contact_phone", None))
+        candidates.append(getattr(booking, "phone", None))
+        meta = getattr(booking, "metadata_json", None)
+        if isinstance(meta, dict):
+            candidates.extend([
+                meta.get("passenger_phone"),
+                meta.get("passengerPhone"),
+                meta.get("contact_phone"),
+                meta.get("contactPhone"),
+                meta.get("customer_phone"),
+                meta.get("customerPhone"),
+                meta.get("phone"),
+            ])
+            pax = meta.get("passengers")
+            if isinstance(pax, list):
+                for p in pax:
+                    if isinstance(p, dict):
+                        candidates.extend([
+                            p.get("phone"),
+                            p.get("contact_phone"),
+                            p.get("contactPhone"),
+                            p.get("passenger_phone"),
+                        ])
+        primary_pax = _extract_airport_primary_passenger(booking)
+        if primary_pax is not None:
+            candidates.extend([
+                getattr(primary_pax, "contact_phone", None),
+                getattr(primary_pax, "phone", None),
+            ])
+        user_obj = getattr(booking, "user", None)
+        if user_obj is not None:
+            candidates.append(getattr(user_obj, "phone", None))
+
+    if transaction is not None and isinstance(getattr(transaction, "gateway_response", None), dict):
+        resp = transaction.gateway_response
+        notes = resp.get("notes") if isinstance(resp.get("notes"), dict) else {}
+        candidates.extend([
+            notes.get("customer_phone"),
+            notes.get("passenger_phone"),
+            notes.get("phone"),
+            resp.get("customer_phone"),
+            resp.get("contact"),
+        ])
+        pl = resp.get("payload")
+        if isinstance(pl, dict):
+            pay_ent = (pl.get("payment") or {}).get("entity") if isinstance(pl.get("payment"), dict) else {}
+            if isinstance(pay_ent, dict):
+                p_notes = pay_ent.get("notes") if isinstance(pay_ent.get("notes"), dict) else {}
+                candidates.extend([
+                    p_notes.get("customer_phone"),
+                    p_notes.get("passenger_phone"),
+                    p_notes.get("phone"),
+                    pay_ent.get("contact"),
+                ])
+
+    for candidate in candidates:
+        cleaned = _safe_text(candidate)
+        if cleaned and cleaned.lower() not in ("none", "null", "n/a"):
+            return cleaned
+    return ""
+
+
 def _money(amount: Any, currency: str = "INR") -> str:
     try:
         return f"{currency} {float(amount):,.2f}"
@@ -169,32 +437,71 @@ def _booking_meta(booking) -> Dict[str, str]:
     meta = getattr(booking, "metadata_json", None) or {}
     if not isinstance(meta, dict):
         meta = {}
+    first_flight = _extract_airport_first_flight(booking)
     airport = _safe_text(
         meta.get("service_airport")
+        or getattr(booking, "airport_code", None)
         or getattr(booking, "origin_code", None)
         or getattr(booking, "dest_code", None)
+        or (getattr(first_flight, "departure_airport", None) if first_flight else None)
+        or (getattr(first_flight, "arrival_airport", None) if first_flight else None)
     )
-    journey = _safe_text(meta.get("journey_type") or meta.get("direction") or getattr(booking, "service_type", None))
-    flight_type = _safe_text(meta.get("flight_type") or meta.get("travel_type"))
-    service_name = _safe_text(meta.get("package") or getattr(booking, "service_type", None))
-    origin = _safe_text(meta.get("origin_iata") or getattr(booking, "origin_code", None))
-    dest = _safe_text(meta.get("destination_iata") or getattr(booking, "dest_code", None))
+    journey = _safe_text(
+        meta.get("journey_type")
+        or meta.get("direction")
+        or getattr(booking, "service_type", None)
+        or (getattr(first_flight, "flight_type", None) if first_flight else None)
+        or getattr(booking, "service_package", None)
+    )
+    flight_type = _safe_text(
+        meta.get("flight_type")
+        or meta.get("travel_type")
+        or (getattr(first_flight, "flight_type", None) if first_flight else None)
+    )
+    service_name = _safe_text(
+        meta.get("package")
+        or getattr(booking, "service_type", None)
+        or getattr(booking, "service_package", None)
+    )
+    origin = _safe_text(
+        meta.get("origin_iata")
+        or getattr(booking, "origin_code", None)
+        or getattr(booking, "airport_code", None)
+        or (getattr(first_flight, "departure_airport", None) if first_flight else None)
+    )
+    dest = _safe_text(
+        meta.get("destination_iata")
+        or getattr(booking, "dest_code", None)
+        or (getattr(first_flight, "arrival_airport", None) if first_flight else None)
+    )
     tz = airport_tzinfo(meta.get("airport_timezone") or "Asia/Kolkata")
     jt = normalize_journey_type(meta.get("journey_type") or meta.get("direction") or journey)
     scheduled = service_leg_scheduled_datetime(
         jt,
-        getattr(booking, "departure_time", None) or meta.get("departure_scheduled"),
+        getattr(booking, "departure_time", None)
+        or getattr(booking, "flight_date", None)
+        or (getattr(first_flight, "scheduled_time", None) if first_flight else None)
+        or meta.get("departure_scheduled"),
         getattr(booking, "arrival_time", None) or meta.get("arrival_scheduled"),
         tz,
     )
-    adults = int(meta.get("pax_adults") or meta.get("billable_pax") or 1)
-    children = int(meta.get("pax_children") or 0)
-    infants = int(meta.get("pax_infants") or 0)
-    total_g = int(meta.get("guest_count") or (adults + children + infants))
+    pax_rel = getattr(booking, "passengers", None)
+    pax_rel_count = len(list(pax_rel)) if pax_rel and not isinstance(pax_rel, (str, bytes)) else 0
+    adults = int(meta.get("pax_adults") or getattr(booking, "adults", None) or meta.get("billable_pax") or pax_rel_count or 1)
+    children = int(meta.get("pax_children") or getattr(booking, "children", None) or 0)
+    infants = int(meta.get("pax_infants") or getattr(booking, "infants", None) or 0)
+    total_g = int(meta.get("guest_count") or getattr(booking, "total_passengers", None) or (adults + children + infants))
     if children or infants:
         pax_display = f"{total_g} Pax ({adults}A, {children}C, {infants}I)"
     else:
         pax_display = f"{total_g} Pax"
+
+    travel_date = format_date_local(scheduled, tz) if scheduled else ""
+    scheduled_time = (
+        format_time_local(scheduled, tz)
+        if scheduled
+        else _safe_text(getattr(booking, "arrival_departure_time", None))
+    )
 
     return {
         "airport": airport,
@@ -203,10 +510,14 @@ def _booking_meta(booking) -> Dict[str, str]:
         "service_name": service_name,
         "origin": origin,
         "destination": dest,
-        "travel_date": format_date_local(scheduled, tz) if scheduled else "",
-        "scheduled_time": format_time_local(scheduled, tz) if scheduled else "",
+        "travel_date": travel_date,
+        "scheduled_time": scheduled_time,
         "pax": pax_display,
-        "terminal": _safe_text(meta.get("terminal")),
+        "terminal": _safe_text(
+            meta.get("terminal")
+            or getattr(booking, "terminal", None)
+            or (getattr(first_flight, "terminal", None) if first_flight else None)
+        ),
     }
 
 
@@ -515,19 +826,24 @@ def invoice_pdf_data_from_records(invoice, booking, transaction) -> Dict[str, An
     payment_id, order_id = _razorpay_ids(transaction) if transaction else ("", "")
     issued = getattr(invoice, "issued_at", None) or getattr(invoice, "paid_at", None) or datetime.now(timezone.utc)
     paid_at = getattr(invoice, "paid_at", None) or getattr(transaction, "updated_at", None) or issued
+    booking_ref = _safe_text(
+        (getattr(booking, "booking_ref", None) or getattr(booking, "booking_reference", None))
+        if booking
+        else getattr(transaction, "entity_id", None)
+    )
     return {
         "invoice_number": _safe_text(getattr(invoice, "invoice_number", None)),
         "invoice_date": _fmt_dt(issued),
-        "booking_ref": _safe_text(getattr(booking, "booking_ref", None) if booking else getattr(transaction, "entity_id", None)),
-        "customer_name": _safe_text(getattr(invoice, "customer_name", None) or (getattr(booking, "passenger_name", None) if booking else None), "Valued Guest"),
-        "customer_email": _safe_text(getattr(invoice, "customer_email", None) or (getattr(booking, "passenger_email", None) if booking else None)),
-        "customer_phone": _safe_text(getattr(booking, "passenger_phone", None) if booking else None),
-        "origin": meta.get("origin") or _safe_text(getattr(booking, "origin_code", None) if booking else None),
+        "booking_ref": booking_ref,
+        "customer_name": resolve_customer_name(booking=booking, invoice=invoice, transaction=transaction, default="Valued Guest"),
+        "customer_email": resolve_customer_email(booking=booking, invoice=invoice, transaction=transaction),
+        "customer_phone": resolve_customer_phone(booking=booking, transaction=transaction),
+        "origin": meta.get("origin") or _safe_text(getattr(booking, "origin_code", None) or getattr(booking, "airport_code", None) if booking else None),
         "destination": meta.get("destination") or _safe_text(getattr(booking, "dest_code", None) if booking else None),
         "airport": meta["airport"],
         "journey_type": meta["journey"],
         "flight_type": meta["flight_type"],
-        "flight_num": _safe_text(getattr(booking, "flight_num", None) if booking else None),
+        "flight_num": _safe_text((getattr(booking, "flight_num", None) or getattr(booking, "flight_number", None)) if booking else None),
         "travel_date": meta["travel_date"],
         "scheduled_time": meta.get("scheduled_time") or "",
         "pax": meta["pax"],
@@ -549,10 +865,15 @@ def invoice_pdf_data_from_records(invoice, booking, transaction) -> Dict[str, An
 
 def resolve_whatsapp_invoice_recipient(db: Session, booking, transaction) -> Optional[str]:
     """
-    Return the WhatsApp Automation session phone if this booking originated there.
-    Never infers origin from passenger phone alone.
+    Return the customer's WhatsApp recipient phone for paid invoice PDF delivery.
+    Prefers an active WhatsAppConversation session phone when present, and falls back
+    to the customer's submitted booking phone number for both WhatsApp and website bookings.
     """
-    booking_ref = _safe_text(getattr(booking, "booking_ref", None) if booking else None)
+    booking_ref = _safe_text(
+        (getattr(booking, "booking_ref", None) or getattr(booking, "booking_reference", None))
+        if booking
+        else getattr(transaction, "entity_id", None)
+    )
     booking_id = str(getattr(booking, "id", "") or "") if booking else ""
 
     try:
@@ -568,28 +889,27 @@ def resolve_whatsapp_invoice_recipient(db: Session, booking, transaction) -> Opt
             except Exception:
                 conv = None
         if conv:
-            return _safe_text(conv.customer_phone or conv.phone_number) or None
+            conv_phone = _safe_text(conv.customer_phone or conv.phone_number)
+            if conv_phone:
+                return conv_phone
     except Exception:
-        logger.warning("[InvoicePDF] WhatsApp origin lookup failed")
+        logger.warning("[InvoicePDF] WhatsApp conversation lookup failed")
 
-    meta = getattr(booking, "metadata_json", None) if booking else None
-    if isinstance(meta, dict):
-        channel = str(meta.get("channel") or meta.get("source") or meta.get("origin_channel") or "").strip().lower()
-        if channel in ("whatsapp", "whatsapp_automation"):
-            return _safe_text(getattr(booking, "passenger_phone", None) if booking else None) or None
-
-    notes_channel = ""
-    resp = getattr(transaction, "gateway_response", None) if transaction else None
-    if isinstance(resp, dict):
-        payload = resp.get("payload") if isinstance(resp.get("payload"), dict) else {}
-        pay_ent = (payload.get("payment") or {}).get("entity") if isinstance(payload.get("payment"), dict) else {}
-        if isinstance(pay_ent, dict):
-            notes = pay_ent.get("notes") if isinstance(pay_ent.get("notes"), dict) else {}
-            notes_channel = str(notes.get("channel") or "").strip().lower()
-        if not notes_channel:
-            notes_channel = str((resp.get("notes") or {}).get("channel") if isinstance(resp.get("notes"), dict) else "").strip().lower()
-    if notes_channel in ("whatsapp", "whatsapp_automation"):
-        return _safe_text(getattr(booking, "passenger_phone", None) if booking else None) or None
+    raw_phone = resolve_customer_phone(booking=booking, transaction=transaction)
+    if not raw_phone:
+        return None
+    try:
+        from app.services.whatsapp_department_service import WhatsAppDepartmentService
+        normalized = WhatsAppDepartmentService.normalize_phone_number(raw_phone)
+        if normalized and len(normalized) >= 10:
+            return normalized
+    except Exception:
+        pass
+    digits = re.sub(r"\D", "", raw_phone)
+    if len(digits) == 10:
+        return f"91{digits}"
+    if len(digits) >= 10:
+        return raw_phone
     return None
 
 
@@ -597,24 +917,58 @@ def generate_invoice_pdf_bytes(invoice, booking, transaction) -> bytes:
     return generate_tax_invoice_pdf(invoice_pdf_data_from_records(invoice, booking, transaction))
 
 
-def _notification_context(booking, invoice, signed_url: Optional[str], attached: bool) -> Dict[str, Any]:
+def _notification_context(
+    booking,
+    invoice,
+    signed_url: Optional[str],
+    attached: bool,
+    transaction: Any = None,
+) -> Dict[str, Any]:
     meta = _booking_meta(booking) if booking else {}
+    first_flight = _extract_airport_first_flight(booking)
+    booking_ref = (
+        (getattr(booking, "booking_ref", None) or getattr(booking, "booking_reference", None))
+        if booking
+        else getattr(transaction, "entity_id", None)
+    )
+    dep_dt = (
+        getattr(booking, "departure_time", None)
+        or getattr(booking, "flight_date", None)
+        or (getattr(first_flight, "scheduled_time", None) if first_flight else None)
+    ) if booking else None
+    dep_iso = dep_dt.isoformat() if dep_dt and hasattr(dep_dt, "isoformat") else (_safe_text(dep_dt) or None)
+    raw_total = (
+        getattr(booking, "total_amount", None)
+        if booking and getattr(booking, "total_amount", None) is not None
+        else (getattr(booking, "total_price", None) if booking else None)
+    )
     ctx: Dict[str, Any] = {
-        "booking_ref": getattr(booking, "booking_ref", None) if booking else None,
-        "passenger_name": getattr(booking, "passenger_name", None) if booking else getattr(invoice, "customer_name", None),
-        "passenger_email": getattr(booking, "passenger_email", None) if booking else getattr(invoice, "customer_email", None),
-        "passenger_phone": getattr(booking, "passenger_phone", None) if booking else None,
-        "flight_num": getattr(booking, "flight_num", None) if booking else None,
-        "origin_code": getattr(booking, "origin_code", None) if booking else None,
-        "dest_code": getattr(booking, "dest_code", None) if booking else None,
-        "airport_code": meta.get("airport"),
-        "journey_type": meta.get("journey") or (getattr(booking, "service_type", None) if booking else None),
-        "service_type": getattr(booking, "service_type", None) if booking else None,
-        "service_name": meta.get("service_name") or (getattr(booking, "service_type", None) if booking else None),
-        "departure_time": booking.departure_time.isoformat() if booking and booking.departure_time else None,
-        "terminal": meta.get("terminal"),
-        "total_amount": float(booking.total_amount) if booking and booking.total_amount is not None else float(getattr(invoice, "total_amount", 0) or 0),
-        "currency": (booking.currency if booking else None) or getattr(invoice, "currency", None) or "INR",
+        "booking_ref": booking_ref,
+        "passenger_name": resolve_customer_name(booking=booking, invoice=invoice, transaction=transaction, default="Valued Guest"),
+        "passenger_email": resolve_customer_email(booking=booking, invoice=invoice, transaction=transaction),
+        "passenger_phone": resolve_customer_phone(booking=booking, transaction=transaction),
+        "flight_num": (
+            getattr(booking, "flight_num", None)
+            or getattr(booking, "flight_number", None)
+            or (getattr(first_flight, "flight_number", None) if first_flight else None)
+        ) if booking else None,
+        "origin_code": (
+            getattr(booking, "origin_code", None)
+            or getattr(booking, "airport_code", None)
+            or (getattr(first_flight, "departure_airport", None) if first_flight else None)
+        ) if booking else None,
+        "dest_code": (
+            getattr(booking, "dest_code", None)
+            or (getattr(first_flight, "arrival_airport", None) if first_flight else None)
+        ) if booking else None,
+        "airport_code": meta.get("airport") or (getattr(booking, "airport_code", None) if booking else None),
+        "journey_type": meta.get("journey") or (getattr(booking, "service_type", None) or getattr(booking, "service_package", None) if booking else None),
+        "service_type": (getattr(booking, "service_type", None) or getattr(booking, "service_package", None)) if booking else None,
+        "service_name": meta.get("service_name") or (getattr(booking, "service_type", None) or getattr(booking, "service_package", None) if booking else None),
+        "departure_time": dep_iso,
+        "terminal": meta.get("terminal") or (getattr(booking, "terminal", None) if booking else None),
+        "total_amount": float(raw_total) if raw_total is not None else float(getattr(invoice, "total_amount", 0) or 0),
+        "currency": (getattr(booking, "currency", None) if booking else None) or getattr(invoice, "currency", None) or "INR",
         "invoice_number": getattr(invoice, "invoice_number", None),
         "invoice_url": signed_url or "",
         "invoice_attached": attached,
@@ -655,6 +1009,7 @@ def _fulfill_paid_invoice_inner(
     *,
     send_notifications: bool = True,
 ) -> Dict[str, Any]:
+    from app.models.airport import AirportBooking
     from app.models.payment import Invoice
     from app.models.schema import Booking
     from app.services.notification_service import NotificationService
@@ -679,6 +1034,10 @@ def _fulfill_paid_invoice_inner(
             have_lock = True
         except Exception as lock_err:
             logger.warning("[InvoicePDF] Advisory lock check error: %s", lock_err)
+            try:
+                db.rollback()
+            except Exception:
+                pass
 
     try:
         invoice = db.scalar(select(Invoice).where(Invoice.id == inv_uuid))
@@ -698,7 +1057,7 @@ def _fulfill_paid_invoice_inner(
                 )
                 return {"success": False, "error": "payment_not_successful", "status": str(transaction.status)}
 
-        booking = None
+        booking: Any = None
         entity_id = getattr(transaction, "entity_id", None) if transaction else None
         if entity_id:
             booking = db.scalar(select(Booking).where(Booking.booking_ref == str(entity_id)))
@@ -707,6 +1066,23 @@ def _fulfill_paid_invoice_inner(
                     booking = db.scalar(select(Booking).where(Booking.id == uuid.UUID(str(entity_id))))
                 except Exception:
                     booking = None
+            if not booking:
+                booking = db.scalar(
+                    select(AirportBooking).where(AirportBooking.booking_reference == str(entity_id))
+                )
+            if not booking:
+                try:
+                    booking = db.scalar(
+                        select(AirportBooking).where(AirportBooking.id == uuid.UUID(str(entity_id)))
+                    )
+                except Exception:
+                    booking = None
+
+        resolved_booking_ref = (
+            (getattr(booking, "booking_ref", None) or getattr(booking, "booking_reference", None))
+            if booking
+            else None
+        ) or str(entity_id or "unknown")
 
         pdf_bytes: Optional[bytes] = None
         attached = False
@@ -727,8 +1103,7 @@ def _fulfill_paid_invoice_inner(
                 pdf_bytes = None
 
             if pdf_bytes:
-                booking_ref = getattr(booking, "booking_ref", None) or entity_id or "unknown"
-                storage_path = build_invoice_storage_path(str(booking_ref), invoice.invoice_number)
+                storage_path = build_invoice_storage_path(str(resolved_booking_ref), invoice.invoice_number)
                 uploaded = upload_invoice_pdf(storage_path, pdf_bytes)
                 if uploaded:
                     invoice.pdf_url = storage_path
@@ -744,7 +1119,7 @@ def _fulfill_paid_invoice_inner(
 
         if send_notifications:
             try:
-                ctx = _notification_context(booking, invoice, signed_url, attached)
+                ctx = _notification_context(booking, invoice, signed_url, attached, transaction=transaction)
                 NotificationService.notify_booking_confirmed(
                     db,
                     ctx,
@@ -758,7 +1133,7 @@ def _fulfill_paid_invoice_inner(
                 try:
                     NotificationService.send_whatsapp_invoice_document(
                         db,
-                        booking_ref=getattr(booking, "booking_ref", None) or "",
+                        booking_ref=resolved_booking_ref if resolved_booking_ref != "unknown" else "",
                         recipient_phone=wa_phone,
                         invoice_number=invoice.invoice_number,
                         pdf_bytes=pdf_bytes,
@@ -768,7 +1143,7 @@ def _fulfill_paid_invoice_inner(
                     logger.exception("[InvoicePDF] WhatsApp invoice document failed for %s", invoice.invoice_number)
             elif not wa_phone:
                 logger.info(
-                    "[InvoicePDF] Skipping WhatsApp invoice PDF (not a WhatsApp-originated booking)",
+                    "[InvoicePDF] Skipping WhatsApp invoice PDF (no recipient phone available)",
                     extra={"invoice_number": invoice.invoice_number},
                 )
 
@@ -801,13 +1176,13 @@ def _run_fulfillment(invoice_id: str) -> None:
 
 
 def schedule_invoice_fulfillment(invoice_id: str) -> None:
-    """Do not block the webhook: run PDF/storage/email after payment is committed."""
+    """Run PDF/storage/email/WhatsApp invoice fulfillment after payment is committed."""
     if not invoice_id:
         return
     inv_key = invoice_id.strip()
     with _ACTIVE_FULFILLMENT_LOCK:
         if inv_key in _ACTIVE_FULFILLMENT_INVOICES:
-            logger.info("[InvoicePDF] Fulfillment thread already active for invoice %s; skipping duplicate thread start", inv_key)
+            logger.info("[InvoicePDF] Fulfillment already active for invoice %s; skipping duplicate start", inv_key)
             return
         _ACTIVE_FULFILLMENT_INVOICES.add(inv_key)
 
@@ -818,8 +1193,8 @@ def schedule_invoice_fulfillment(invoice_id: str) -> None:
             with _ACTIVE_FULFILLMENT_LOCK:
                 _ACTIVE_FULFILLMENT_INVOICES.discard(i_id)
 
-    if os.getenv("PYTEST_CURRENT_TEST"):
-        _cleanup_and_run(inv_key)
+    if os.getenv("INVOICE_ASYNC_FULFILLMENT") == "1" and not os.getenv("PYTEST_CURRENT_TEST"):
+        thread = threading.Thread(target=_cleanup_and_run, args=(inv_key,), daemon=True, name=f"invoice-pdf-{inv_key[:8]}")
+        thread.start()
         return
-    thread = threading.Thread(target=_cleanup_and_run, args=(inv_key,), daemon=True, name=f"invoice-pdf-{inv_key[:8]}")
-    thread.start()
+    _cleanup_and_run(inv_key)

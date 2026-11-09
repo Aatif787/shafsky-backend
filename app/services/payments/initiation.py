@@ -218,11 +218,34 @@ def resolve_booking_amount(db: Session, payload: PaymentInitiateRequest):
             )
         )
     except ValueError:
+        entity_uuid = None
         booking = db.scalar(select(Booking).where(Booking.booking_ref == payload.entity_id))
 
-    if not booking or booking.total_amount is None:
-        raise ValueError("Booking not found or has no authoritative amount.")
-    return booking, float(booking.total_amount), booking.booking_ref
+    if booking and booking.total_amount is not None:
+        return booking, float(booking.total_amount), booking.booking_ref
+
+    try:
+        from app.models.airport import AirportBooking
+        if entity_uuid is not None:
+            airport_booking = db.scalar(
+                select(AirportBooking).where(
+                    or_(AirportBooking.id == entity_uuid, AirportBooking.booking_reference == payload.entity_id)
+                )
+            )
+        else:
+            airport_booking = db.scalar(
+                select(AirportBooking).where(AirportBooking.booking_reference == payload.entity_id)
+            )
+        if airport_booking:
+            ab_amt = getattr(airport_booking, "total_amount", None)
+            if ab_amt is None:
+                ab_amt = getattr(airport_booking, "total_price", None)
+            if ab_amt is not None:
+                return airport_booking, float(ab_amt), airport_booking.booking_reference
+    except Exception:
+        pass
+
+    raise ValueError("Booking not found or has no authoritative amount.")
 
 
 def initiate_razorpay_payment(
