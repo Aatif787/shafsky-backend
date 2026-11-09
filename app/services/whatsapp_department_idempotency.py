@@ -6,9 +6,10 @@ import hashlib
 import logging
 import threading
 import time
-import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+
+from sqlalchemy import select
 
 from app.database import SessionLocal
 from app.models.schema import NotificationRecord, NotificationStatus
@@ -74,63 +75,73 @@ class WhatsAppDepartmentIdempotencyMixin:
             return "ACQUIRED"
 
         clean_key = idempotency_key.strip()
-        now = time.time()
 
-        with cls._lock:
-            cached = cls._dispatched_events.get(clean_key)
-            if cached:
-                expires_at = cached.get("expires", 0)
-                state = cached.get("state")
-                if now < expires_at:
-                    if state == "dispatched":
-                        logger.info(
-                            "[WhatsApp Idempotency] Suppressing duplicate notification for %s (in-memory dispatched).",
-                            clean_key,
+        # 1. Check PostgreSQL NotificationRecord persistence for durable completed record.
+        try:
+            completed_since = datetime.now(timezone.utc) - timedelta(
+                seconds=cls.IDEMPOTENCY_DISPATCHED_TTL_SECONDS
+            )
+            with SessionLocal() as db:
+                candidates = db.scalars(
+                    select(NotificationRecord)
+                    .where(NotificationRecord.template_type == "WHATSAPP_OPS_NOTIFICATION")
+                    .where(
+                        NotificationRecord.status.in_(
+                            [NotificationStatus.COMPLETED, NotificationStatus.DELIVERED]
                         )
-                        return "DUPLICATE"
-                    if state == "in_progress":
-                        logger.warning(
-                            "[WhatsApp Idempotency] Concurrent dispatch active for %s. Rejecting redundant attempt.",
-                            clean_key,
-                        )
-                        return "IN_PROGRESS"
-                    if state == "unknown_timeout":
-                        logger.warning(
-                            "[WhatsApp Idempotency] Event %s recently timed out; holding retry to prevent duplicate.",
-                            clean_key,
-                        )
-                        return "UNKNOWN_TIMEOUT"
-                else:
-                    cls._dispatched_events.pop(clean_key, None)
-
-            # Check database for durable persistence across process restarts
-            try:
-                with SessionLocal() as db:
-                    existing = (
-                        db.query(NotificationRecord)
-                        .filter(
-                            NotificationRecord.template_type == "INTERNAL_OPERATIONS_WHATSAPP",
-                            NotificationRecord.channel == "whatsapp",
-                            NotificationRecord.recipient_phone == clean_key,
-                            NotificationRecord.status.in_([
-                                NotificationStatus.DELIVERED,
-                                NotificationStatus.COMPLETED,
-                            ]),
-                        )
-                        .first()
                     )
-                    if existing:
-                        logger.info(
-                            "[WhatsApp Idempotency] Suppressing duplicate notification for %s (DB record exists).",
-                            clean_key,
-                        )
-                        cls._dispatched_events[clean_key] = {
-                            "state": "dispatched",
-                            "expires": now + cls.IDEMPOTENCY_DISPATCHED_TTL_SECONDS,
-                        }
+                    .where(NotificationRecord.created_at >= completed_since)
+                    .order_by(NotificationRecord.created_at.desc())
+                    .limit(1000)
+                ).all()
+                for record in candidates:
+                    payload = record.payload if isinstance(record.payload, dict) else {}
+                    if payload.get("idempotency_key") == clean_key:
                         return "DUPLICATE"
-            except Exception as db_err:
-                logger.debug("[WhatsApp Idempotency] DB persistence check skipped: %s", db_err)
+        except Exception as db_err:
+            logger.warning("[WhatsApp Idempotency] Durable duplicate check unavailable: %s", db_err)
+
+        # 2. Check Redis if available
+        try:
+            from app.core.redis import get_redis_client
+            redis_client = get_redis_client()
+            if redis_client is not None:
+                redis_key = f"lock:{clean_key}"
+                val = redis_client.get(redis_key)
+                if val:
+                    val_str = val.decode("utf-8") if isinstance(val, bytes) else val
+                    if val_str == "dispatched":
+                        return "DUPLICATE"
+                    if val_str == "in_progress":
+                        return "IN_PROGRESS"
+                    if val_str == "unknown_timeout":
+                        return "UNKNOWN_TIMEOUT"
+
+                # Acquire atomic in-progress lock
+                acquired = redis_client.set(redis_key, "in_progress", ex=cls.IDEMPOTENCY_LOCK_TTL_SECONDS, nx=True)
+                if not acquired:
+                    return "IN_PROGRESS"
+                return "ACQUIRED"
+        except Exception as redis_err:
+            logger.debug("[WhatsApp Idempotency] Redis check skipped: %s", redis_err)
+
+        # 3. Thread-safe in-memory fallback
+        now = time.time()
+        with cls._lock:
+            # Purge expired
+            expired = [k for k, item in cls._dispatched_events.items() if now > item.get("expires", 0)]
+            for k in expired:
+                del cls._dispatched_events[k]
+
+            entry = cls._dispatched_events.get(clean_key)
+            if entry:
+                state = entry.get("state")
+                if state == "dispatched":
+                    return "DUPLICATE"
+                if state == "in_progress":
+                    return "IN_PROGRESS"
+                if state == "unknown_timeout":
+                    return "UNKNOWN_TIMEOUT"
 
             cls._dispatched_events[clean_key] = {
                 "state": "in_progress",
@@ -160,6 +171,23 @@ class WhatsAppDepartmentIdempotencyMixin:
         is_unknown = outcome == "UNKNOWN"
 
         now = time.time()
+
+        # Update Redis
+        try:
+            from app.core.redis import get_redis_client
+            redis_client = get_redis_client()
+            if redis_client is not None:
+                redis_key = f"lock:{clean_key}"
+                if is_successful:
+                    redis_client.set(redis_key, "dispatched", ex=cls.IDEMPOTENCY_DISPATCHED_TTL_SECONDS)
+                elif is_unknown:
+                    redis_client.set(redis_key, "unknown_timeout", ex=cls.IDEMPOTENCY_TIMEOUT_HOLD_SECONDS)
+                else:
+                    redis_client.delete(redis_key)
+        except Exception as redis_err:
+            logger.debug("[WhatsApp Idempotency] Redis finalize skipped: %s", redis_err)
+
+        # Update in-memory fallback
         with cls._lock:
             if is_successful:
                 cls._dispatched_events[clean_key] = {
@@ -174,34 +202,51 @@ class WhatsAppDepartmentIdempotencyMixin:
             else:
                 cls._dispatched_events.pop(clean_key, None)
 
+        # Durable PostgreSQL DB persistence on success or recorded failure
         try:
             with SessionLocal() as db:
-                accepted_ids = [
-                    res.get("message_id")
-                    for res in recipient_results
-                    if res.get("status") in ("ACCEPTED", "DELIVERED") and res.get("message_id")
-                ]
-                msg_ids_str = ",".join(accepted_ids) if accepted_ids else None
-                booking_identifier = (context or {}).get("booking_ref") or (context or {}).get("bookingRef") or clean_key
+                accepted_ids = [r.get("message_id") for r in recipient_results if r.get("message_id")]
+                msg_ids_str = ",".join(str(i) for i in accepted_ids) if accepted_ids else None
+                rec_status = NotificationStatus.COMPLETED if is_successful else (
+                    NotificationStatus.PENDING if is_unknown else NotificationStatus.FAILED
+                )
+                status_counts: Dict[str, int] = {}
+                for entry in recipient_results:
+                    key = str(entry.get("status") or "FAILED")
+                    status_counts[key] = status_counts.get(key, 0) + 1
 
-                db_status = NotificationStatus.DELIVERED if is_successful else NotificationStatus.FAILED
+                messages = [
+                    {
+                        "index": position,
+                        "phone": entry.get("masked_phone") or entry.get("phone"),
+                        "message_id": entry.get("message_id"),
+                        "status": "accepted" if entry.get("status") == "ACCEPTED" else str(entry.get("status") or "FAILED").lower(),
+                    }
+                    for position, entry in enumerate(recipient_results, 1)
+                    if entry.get("message_id")
+                ]
 
                 note = NotificationRecord(
-                    id=uuid.uuid4(),
-                    template_type="INTERNAL_OPERATIONS_WHATSAPP",
-                    recipient_phone=clean_key,
-                    channel="whatsapp",
-                    status=db_status,
-                    message_id=msg_ids_str,
-                    delivered_at=datetime.now(timezone.utc) if is_successful else None,
+                    recipient_email=str((context or {}).get("passenger_email") or (context or {}).get("email") or "ops@shafsky.aero"),
+                    recipient_phone="ALL_5_RECIPIENTS",
+                    template_type="WHATSAPP_OPS_NOTIFICATION",
+                    channel="WHATSAPP_OPS",
                     payload={
                         "idempotency_key": clean_key,
-                        "booking_ref": booking_identifier,
+                        "outcome": outcome,
+                        "status_counts": status_counts,
+                        "messages": messages,
                         "recipient_results": recipient_results,
+                        "context_summary": {
+                            "booking_ref": (context or {}).get("booking_ref"),
+                            "service_category": (context or {}).get("service_category"),
+                        },
                     },
+                    status=rec_status,
+                    message_id=msg_ids_str,
+                    delivered_at=datetime.now(timezone.utc) if is_successful else None,
                 )
                 db.add(note)
                 db.commit()
         except Exception as db_err:
             logger.debug("[WhatsApp Idempotency] DB persistence save skipped: %s", db_err)
-
