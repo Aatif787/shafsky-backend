@@ -83,7 +83,7 @@ def is_placeholder_email(value: Any) -> bool:
         return True
     if raw in _PLACEHOLDER_EMAILS:
         return True
-    if raw.endswith("@shafsky.guest") or raw.endswith("@example.com") or raw.endswith("@placeholder.local"):
+    if raw.endswith("@shafsky.guest") or raw.endswith("@placeholder.local"):
         return True
     return False
 
