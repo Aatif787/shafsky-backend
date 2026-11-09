@@ -111,7 +111,74 @@ class NotificationCustomerConfirmationMixin:
                 )
         except Exception as exc:
             logger.exception("Booking confirmation notification failed for %s: %s", booking_ref, type(exc).__name__)
+
+        try:
+            ops_res = cls.notify_operations_payment_confirmed(db, context)
+            if ops_res is not None:
+                summary["admin"].append({"channel": "WHATSAPP", "status": ops_res.get("status"), "details": ops_res})
+        except Exception as ops_exc:
+            logger.warning(
+                "Operations WhatsApp payment confirmation failed for %s: %s",
+                booking_ref,
+                type(ops_exc).__name__,
+            )
         return summary
+
+    @classmethod
+    def notify_operations_payment_confirmed(cls, db: Session, context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Sends the operations WhatsApp alert with status CONFIRMED once payment is verified.
+
+        The creation-time alert (status PENDING) is sent exactly once per booking and its
+        booking-level idempotency key suppresses any later send, so without this step the
+        operations team never learns that the booking was paid. The status is read from the
+        persisted Booking / payment records, never from the caller's context. Returns None
+        when the booking is not verifiably confirmed and paid.
+        """
+        from sqlalchemy.orm import Session as _OrmSession
+
+        if not isinstance(db, _OrmSession):
+            return None
+        booking_ref = str(context.get("booking_ref") or context.get("bookingRef") or "").strip()
+        if not booking_ref:
+            return None
+
+        from app.models.schema import Booking, BookingStatus
+        booking = db.scalar(select(Booking).where(Booking.booking_ref == booking_ref))
+        if booking is None or booking.status != BookingStatus.CONFIRMED:
+            return None
+
+        meta = booking.metadata_json if isinstance(booking.metadata_json, dict) else {}
+        paid = str(meta.get("payment_status") or "").upper() == "PAID"
+        if not paid:
+            from app.models.payment import PaymentStatus, PaymentTransaction
+            paid = db.scalar(
+                select(PaymentTransaction.id).where(
+                    PaymentTransaction.entity_id == booking_ref,
+                    PaymentTransaction.status == PaymentStatus.SUCCESSFUL,
+                ).limit(1)
+            ) is not None
+        if not paid:
+            return None
+
+        from app.services.whatsapp_department_service import WhatsAppDepartmentService
+
+        ops_context = dict(context)
+        ops_context.update({
+            "booking_ref": booking.booking_ref,
+            "passenger_name": context.get("passenger_name") or booking.passenger_name,
+            "passenger_email": context.get("passenger_email") or booking.passenger_email,
+            "passenger_phone": context.get("passenger_phone") or booking.passenger_phone,
+            "service_category": context.get("service_category") or getattr(booking, "service_category", None),
+            "service_type": context.get("service_type") or booking.service_type,
+            "total_amount": float(booking.total_amount) if booking.total_amount is not None else 0.0,
+            "currency": booking.currency or "INR",
+            "status": "CONFIRMED",
+            "notification_stage": "PAYMENT_CONFIRMED",
+        })
+        if not ops_context.get("passenger_count"):
+            ops_context["passenger_count"] = meta.get("passenger_count") or meta.get("guest_count") or 1
+        return WhatsAppDepartmentService.dispatch_booking_or_enquiry_notification(ops_context)
 
     @classmethod
     def _resolve_customer_template_settings(cls) -> Tuple[str, str]:

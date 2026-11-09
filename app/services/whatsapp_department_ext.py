@@ -278,7 +278,10 @@ class WhatsAppDepartmentExtMixin:
         logger = w.logger
 
         booking_ref = str(context.get("booking_ref") or context.get("bookingRef") or "N/A").strip()
-        idempotency_key = cls.generate_idempotency_key("booking", booking_ref, context)
+        # The payment-confirmed alert is a distinct event from the creation-time (PENDING) alert,
+        # so it carries its own idempotency key and is still sent at most once.
+        key_prefix = "booking_confirmed" if context.get("notification_stage") == "PAYMENT_CONFIRMED" else "booking"
+        idempotency_key = cls.generate_idempotency_key(key_prefix, booking_ref, context)
 
         try:
             # 1. Two-Phase Idempotency Check: prevent duplicate notifications
