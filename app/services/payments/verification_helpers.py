@@ -142,6 +142,23 @@ def validate_amount_and_currency(
                     if not received_currency_raw:
                         received_currency_raw = ord_data.get("currency")
             if (
+                not gateway_order_confirmed
+                and payment_id
+                and not str(payment_id).startswith("pay_sim_")
+                and razorpay_provider.is_configured()
+                and hasattr(razorpay_provider, "fetch_payment")
+            ):
+                pay_res = razorpay_provider.fetch_payment(str(payment_id))
+                if pay_res.get("success") and isinstance(pay_res.get("payment"), dict):
+                    pay_data = pay_res["payment"]
+                    pay_ord = str(pay_data.get("order_id") or "")
+                    if not order_id or not pay_ord or pay_ord == str(order_id):
+                        gateway_order_confirmed = True
+                        if received_amount_raw is None:
+                            received_amount_raw = pay_data.get("amount")
+                        if not received_currency_raw:
+                            received_currency_raw = pay_data.get("currency")
+            if (
                 settings.is_production
                 and order_id
                 and razorpay_provider.is_configured()
@@ -273,6 +290,42 @@ def validate_amount_and_currency(
     return True, None, transaction
 
 
+def _build_booking_confirmation_fallback_context(booking, *, invoice_attached: bool = False) -> Dict[str, Any]:
+    from app.services.pdf_service import (
+        resolve_customer_email,
+        resolve_customer_name,
+        resolve_customer_phone,
+    )
+
+    meta = getattr(booking, "metadata_json", None) or {}
+    if not isinstance(meta, dict):
+        meta = {}
+    booking_ref = getattr(booking, "booking_ref", None) or getattr(booking, "booking_reference", None)
+    dep_dt = getattr(booking, "departure_time", None) or getattr(booking, "flight_date", None)
+    dep_iso = dep_dt.isoformat() if dep_dt and hasattr(dep_dt, "isoformat") else (str(dep_dt) if dep_dt else None)
+    raw_total = getattr(booking, "total_amount", None)
+    if raw_total is None:
+        raw_total = getattr(booking, "total_price", None)
+    return {
+        "booking_ref": booking_ref,
+        "passenger_name": resolve_customer_name(booking=booking, default="Valued Guest"),
+        "passenger_email": resolve_customer_email(booking=booking),
+        "passenger_phone": resolve_customer_phone(booking=booking),
+        "flight_num": getattr(booking, "flight_num", None) or getattr(booking, "flight_number", None),
+        "origin_code": getattr(booking, "origin_code", None) or getattr(booking, "airport_code", None),
+        "dest_code": getattr(booking, "dest_code", None),
+        "airport_code": meta.get("service_airport") or getattr(booking, "airport_code", None) or getattr(booking, "origin_code", None) or getattr(booking, "dest_code", None),
+        "journey_type": meta.get("journey_type") or getattr(booking, "service_type", None) or getattr(booking, "service_package", None),
+        "service_type": getattr(booking, "service_type", None) or getattr(booking, "service_package", None),
+        "service_name": meta.get("package") or getattr(booking, "service_type", None) or getattr(booking, "service_package", None),
+        "departure_time": dep_iso,
+        "terminal": meta.get("terminal") or getattr(booking, "terminal", None),
+        "total_amount": float(raw_total) if raw_total is not None else 0.0,
+        "currency": getattr(booking, "currency", None) or "INR",
+        "invoice_attached": invoice_attached,
+    }
+
+
 def dispatch_payment_fulfillment_side_effects(db: Session, booking, invoice_id_to_fulfill: Optional[str]) -> None:
     """Trigger PDF generation and notifications after commit. Never blocks webhook."""
     if invoice_id_to_fulfill:
@@ -282,47 +335,18 @@ def dispatch_payment_fulfillment_side_effects(db: Session, booking, invoice_id_t
             logger.error("[PaymentService] Invoice fulfillment scheduling failed: %s", type(pdf_err).__name__)
             if booking:
                 try:
-                    meta = booking.metadata_json or {}
-                    NotificationService.notify_booking_confirmed(db, {
-                        "booking_ref": booking.booking_ref,
-                        "passenger_name": booking.passenger_name,
-                        "passenger_email": booking.passenger_email,
-                        "passenger_phone": booking.passenger_phone,
-                        "flight_num": booking.flight_num,
-                        "origin_code": booking.origin_code,
-                        "dest_code": booking.dest_code,
-                        "airport_code": meta.get("service_airport") or booking.origin_code or booking.dest_code,
-                        "journey_type": meta.get("journey_type") or booking.service_type,
-                        "service_type": booking.service_type,
-                        "service_name": meta.get("package") or booking.service_type,
-                        "departure_time": booking.departure_time.isoformat() if booking.departure_time else None,
-                        "terminal": meta.get("terminal"),
-                        "total_amount": float(booking.total_amount) if booking.total_amount is not None else 0.0,
-                        "currency": booking.currency,
-                        "invoice_attached": False,
-                    })
+                    NotificationService.notify_booking_confirmed(
+                        db,
+                        _build_booking_confirmation_fallback_context(booking, invoice_attached=False),
+                    )
                 except Exception as notif_err:
                     logger.error(f"[PaymentService] Confirmation notification error: {notif_err}")
     elif booking:
         try:
-            meta = booking.metadata_json or {}
-            NotificationService.notify_booking_confirmed(db, {
-                "booking_ref": booking.booking_ref,
-                "passenger_name": booking.passenger_name,
-                "passenger_email": booking.passenger_email,
-                "passenger_phone": booking.passenger_phone,
-                "flight_num": booking.flight_num,
-                "origin_code": booking.origin_code,
-                "dest_code": booking.dest_code,
-                "airport_code": meta.get("service_airport") or booking.origin_code or booking.dest_code,
-                "journey_type": meta.get("journey_type") or booking.service_type,
-                "service_type": booking.service_type,
-                "service_name": meta.get("package") or booking.service_type,
-                "departure_time": booking.departure_time.isoformat() if booking.departure_time else None,
-                "terminal": meta.get("terminal"),
-                "total_amount": float(booking.total_amount) if booking.total_amount is not None else 0.0,
-                "currency": booking.currency,
-            })
+            NotificationService.notify_booking_confirmed(
+                db,
+                _build_booking_confirmation_fallback_context(booking, invoice_attached=False),
+            )
         except Exception as notif_err:
             logger.error(f"[PaymentService] Confirmation notification error: {notif_err}")
 
@@ -364,8 +388,17 @@ def handle_payment_authorized(
         transaction.status = PaymentStatus.PROCESSING
         if payment_id:
             transaction.gateway_payment_id = payment_id
-        if raw_payload:
-            transaction.gateway_response = raw_payload
+        if raw_payload or order_id or payment_id:
+            from app.services.payments.initiation import merge_gateway_response
+            transaction.gateway_response = merge_gateway_response(
+                transaction.gateway_response,
+                raw_payload=raw_payload,
+                extra={
+                    "order_id": order_id,
+                    "payment_id": payment_id,
+                    "booking_ref": resolved_booking_ref,
+                },
+            )
         transaction.updated_at = datetime.now(timezone.utc)
 
     if booking:

@@ -162,10 +162,68 @@ def confirmed_booking_payment_result(
     try:
         tx_for_invoice = existing_successful_tx or transaction
         if tx_for_invoice:
+            from app.services.pdf_service import (
+                resolve_customer_email,
+                resolve_customer_name,
+                resolve_whatsapp_invoice_recipient,
+                schedule_invoice_fulfillment,
+            )
+
             retry_inv = db.scalar(select(Invoice).where(Invoice.transaction_id == tx_for_invoice.id))
-            if retry_inv and not retry_inv.pdf_url:
-                from app.services.pdf_service import schedule_invoice_fulfillment
-                schedule_invoice_fulfillment(str(retry_inv.id))
+            if not retry_inv and booking is not None:
+                try:
+                    retry_inv = cls.generate_invoice(
+                        db,
+                        transaction=tx_for_invoice,
+                        customer_name=resolve_customer_name(booking=booking, transaction=tx_for_invoice, default="Guest"),
+                        customer_email=resolve_customer_email(booking=booking, transaction=tx_for_invoice, raw_payload=raw_payload),
+                    )
+                    db.commit()
+                    if retry_inv:
+                        db.refresh(retry_inv)
+                except Exception as gen_err:
+                    logger.warning("[PaymentService] Invoice generation on confirmed replay failed: %s", gen_err)
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
+
+            if retry_inv:
+                needs_fulfillment = not bool(retry_inv.pdf_url)
+                if not needs_fulfillment and resolved_booking_ref:
+                    from app.models.schema import NotificationRecord, NotificationStatus
+                    recs = list(
+                        db.scalars(
+                            select(NotificationRecord).where(
+                                NotificationRecord.template_type.in_(["BOOKING_CONFIRMATION", "WHATSAPP_INVOICE_PDF"])
+                            ).order_by(NotificationRecord.created_at.desc()).limit(50)
+                        ).all()
+                    )
+                    matching_recs = [
+                        r for r in recs
+                        if str((r.payload or {}).get("booking_ref") or (r.payload or {}).get("bookingRef") or "") == str(resolved_booking_ref)
+                    ]
+                    expected_email = resolve_customer_email(booking=booking, invoice=retry_inv, transaction=tx_for_invoice, raw_payload=raw_payload)
+                    if expected_email:
+                        has_email_ok = any(
+                            r.template_type == "BOOKING_CONFIRMATION"
+                            and r.status in (NotificationStatus.DELIVERED, NotificationStatus.BYPASSED, NotificationStatus.SENDING)
+                            for r in matching_recs
+                        )
+                        if not has_email_ok:
+                            needs_fulfillment = True
+                    expected_wa = resolve_whatsapp_invoice_recipient(db, booking, tx_for_invoice)
+                    if expected_wa and not needs_fulfillment:
+                        has_wa_ok = any(
+                            r.template_type == "WHATSAPP_INVOICE_PDF"
+                            and r.status in (NotificationStatus.DELIVERED, NotificationStatus.BYPASSED, NotificationStatus.SENDING)
+                            for r in matching_recs
+                        )
+                        if not has_wa_ok:
+                            needs_fulfillment = True
+
+                if needs_fulfillment:
+                    schedule_invoice_fulfillment(str(retry_inv.id))
     except Exception as pdf_retry_err:
         logger.error(
             "[PaymentService] Invoice PDF retry scheduling failed: %s",
@@ -213,8 +271,24 @@ def handle_verified_payment(
     if not channel:
         channel = extracted_ids.get("channel") or channel
 
+    # Pre-resolve booking_ref from PaymentTransaction when webhook notes omit booking_ref
+    # so VERIFY_ENDPOINT and webhook events acquire the exact same advisory lock.
+    pre_lock_ref = booking_ref
+    if not pre_lock_ref and (order_id or payment_id or payment_link_id):
+        gw_candidates = [v for v in (order_id, payment_id, payment_link_id) if v]
+        if gw_candidates:
+            try:
+                pre_lock_ref = db.scalar(
+                    select(PaymentTransaction.entity_id)
+                    .where(PaymentTransaction.gateway_payment_id.in_(gw_candidates))
+                    .order_by(PaymentTransaction.created_at.desc())
+                    .limit(1)
+                )
+            except Exception:
+                pre_lock_ref = None
+
     # Serialize distinct Razorpay events targeting the same booking
-    lock_key = booking_ref or order_id or payment_id or payment_link_id
+    lock_key = pre_lock_ref or order_id or payment_id or payment_link_id
     if lock_key and db.bind is not None and db.bind.dialect.name == "postgresql":
         db.execute(
             text("SELECT pg_advisory_xact_lock(hashtext(:payment_lock_key))"),
@@ -371,16 +445,35 @@ def handle_verified_payment(
             "reason": "Booking reference mismatch with order records."
         }
 
+    if (
+        resolved_booking_ref
+        and resolved_booking_ref != lock_key
+        and db.bind is not None
+        and db.bind.dialect.name == "postgresql"
+    ):
+        db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:payment_lock_key))"),
+            {"payment_lock_key": f"payment:{resolved_booking_ref}"},
+        )
+        if booking is not None:
+            db.refresh(booking)
+        if airport_booking is not None:
+            db.refresh(airport_booking)
+        if transaction is not None:
+            db.refresh(transaction)
+
     # 3. Handle Successful Payment Events
     if event_name in [
         "payment.captured", "order.paid", "payment_link.paid",
         "VERIFY_ENDPOINT", "PAYMENT_SUCCESS", "payment.succeeded",
         "ICICI_STATUS_SUC",
     ]:
-        if booking and booking.status == BookingStatus.CONFIRMED:
+        if (booking and booking.status == BookingStatus.CONFIRMED) or (
+            airport_booking and str(getattr(airport_booking, "status", "") or "").upper() == "CONFIRMED"
+        ):
             confirmed_result = cls._confirmed_booking_payment_result(
                 db,
-                booking=booking,
+                booking=booking or airport_booking,
                 transaction=transaction,
                 payment_id=payment_id,
                 order_id=order_id,
@@ -416,10 +509,12 @@ def handle_verified_payment(
                 return amt_err
 
         # Double Payment & Overpayment Protection Guard
-        if booking and booking.status == BookingStatus.CONFIRMED:
+        if (booking and booking.status == BookingStatus.CONFIRMED) or (
+            airport_booking and str(getattr(airport_booking, "status", "") or "").upper() == "CONFIRMED"
+        ):
             confirmed_result = cls._confirmed_booking_payment_result(
                 db,
-                booking=booking,
+                booking=booking or airport_booking,
                 transaction=transaction,
                 payment_id=payment_id,
                 order_id=order_id,
@@ -461,10 +556,30 @@ def handle_verified_payment(
             )
             transaction.updated_at = datetime.now(timezone.utc)
 
+        from app.services.pdf_service import (
+            is_placeholder_email,
+            resolve_customer_email,
+            resolve_customer_name,
+        )
+
+        target_booking = booking or airport_booking
+        resolved_customer_email = resolve_customer_email(
+            booking=target_booking,
+            transaction=transaction,
+            raw_payload=raw_payload,
+        )
+        resolved_customer_name = resolve_customer_name(
+            booking=target_booking,
+            transaction=transaction,
+            default="Guest",
+        )
+
         # Update Booking
         if booking:
             booking.status = BookingStatus.CONFIRMED
             booking.updated_at = datetime.now(timezone.utc)
+            if resolved_customer_email and is_placeholder_email(getattr(booking, "passenger_email", None)):
+                booking.passenger_email = resolved_customer_email
             b_meta = dict(booking.metadata_json or {})
             b_meta["payment_status"] = "PAID"
             b_meta["payment_gateway"] = gateway_provider
@@ -499,13 +614,13 @@ def handle_verified_payment(
 
         # Auto-generate Tax Invoice DB row
         invoice_id_to_fulfill: Optional[str] = None
-        if transaction and booking:
+        if transaction and target_booking:
             try:
                 inv = cls.generate_invoice(
                     db,
                     transaction=transaction,
-                    customer_name=booking.passenger_name or "Guest",
-                    customer_email=booking.passenger_email or "",
+                    customer_name=resolved_customer_name,
+                    customer_email=resolved_customer_email,
                 )
                 if inv and getattr(inv, "id", None):
                     invoice_id_to_fulfill = str(inv.id)
@@ -516,16 +631,16 @@ def handle_verified_payment(
         try:
             AdminService.log_audit_action(
                 db,
-                actor_email=booking.passenger_email if booking else "system@shafsky.com",
+                actor_email=resolved_customer_email or "system@shafsky.com",
                 action="PAYMENT_VERIFIED",
                 resource_type="PAYMENT",
-                resource_id=str(transaction.id) if transaction else (str(booking.id) if booking else ""),
+                resource_id=str(transaction.id) if transaction else (str(target_booking.id) if target_booking else ""),
                 details={
                     "order_id": order_id,
                     "payment_id": payment_id,
                     "booking_ref": resolved_booking_ref,
                     "event": event_name,
-                    "amount": float(booking.total_amount) if booking else (transaction.amount if transaction else 0.0)
+                    "amount": float(target_booking.total_amount) if target_booking and getattr(target_booking, "total_amount", None) is not None else (transaction.amount if transaction else 0.0)
                 }
             )
         except Exception as audit_err:
@@ -540,7 +655,7 @@ def handle_verified_payment(
                 event_type="PAYMENT_SUCCESSFUL",
                 title=f"Payment Successful ({resolved_booking_ref})",
                 details={
-                    "amount": float(booking.total_amount) if booking else (transaction.amount if transaction else 0.0),
+                    "amount": float(target_booking.total_amount) if target_booking and getattr(target_booking, "total_amount", None) is not None else (transaction.amount if transaction else 0.0),
                     "payment_id": payment_id,
                     "order_id": order_id,
                     "event": event_name
@@ -568,8 +683,10 @@ def handle_verified_payment(
             db.refresh(transaction)
         if booking:
             db.refresh(booking)
+        if airport_booking:
+            db.refresh(airport_booking)
 
-        dispatch_payment_fulfillment_side_effects(db, booking, invoice_id_to_fulfill)
+        dispatch_payment_fulfillment_side_effects(db, target_booking, invoice_id_to_fulfill)
         sync_whatsapp_conversation_on_payment(db, resolved_booking_ref, booking)
 
         return {

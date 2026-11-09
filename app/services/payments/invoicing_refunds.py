@@ -135,6 +135,9 @@ def generate_invoice(
                 db.flush()
             return invoice
         except IntegrityError:
+            concurrent_existing = db.scalar(select(Invoice).where(Invoice.transaction_id == transaction.id))
+            if concurrent_existing:
+                return concurrent_existing
             logger.warning("[PaymentService] Invoice number collision; retrying allocation")
             continue
 

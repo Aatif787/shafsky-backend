@@ -218,11 +218,34 @@ def resolve_booking_amount(db: Session, payload: PaymentInitiateRequest):
             )
         )
     except ValueError:
+        entity_uuid = None
         booking = db.scalar(select(Booking).where(Booking.booking_ref == payload.entity_id))
 
-    if not booking or booking.total_amount is None:
-        raise ValueError("Booking not found or has no authoritative amount.")
-    return booking, float(booking.total_amount), booking.booking_ref
+    if booking and booking.total_amount is not None:
+        return booking, float(booking.total_amount), booking.booking_ref
+
+    try:
+        from app.models.airport import AirportBooking
+        if entity_uuid is not None:
+            airport_booking = db.scalar(
+                select(AirportBooking).where(
+                    or_(AirportBooking.id == entity_uuid, AirportBooking.booking_reference == payload.entity_id)
+                )
+            )
+        else:
+            airport_booking = db.scalar(
+                select(AirportBooking).where(AirportBooking.booking_reference == payload.entity_id)
+            )
+        if airport_booking:
+            ab_amt = getattr(airport_booking, "total_amount", None)
+            if ab_amt is None:
+                ab_amt = getattr(airport_booking, "total_price", None)
+            if ab_amt is not None:
+                return airport_booking, float(ab_amt), airport_booking.booking_reference
+    except Exception:
+        pass
+
+    raise ValueError("Booking not found or has no authoritative amount.")
 
 
 def initiate_razorpay_payment(
@@ -231,20 +254,33 @@ def initiate_razorpay_payment(
     payload: PaymentInitiateRequest,
 ) -> PaymentTransaction:
     from app.providers.razorpay_provider import razorpay_provider
+    from app.services.pdf_service import resolve_customer_email, resolve_customer_name, resolve_customer_phone
 
     ref = f"PAY-{uuid.uuid4().hex[:8].upper()}"
     booking, authoritative_amount, booking_ref_for_order = cls._resolve_booking_amount(db, payload)
+    authoritative_currency = (getattr(booking, "currency", None) or payload.currency or "INR").upper()
+    cust_name = resolve_customer_name(booking=booking) if booking else ""
+    cust_email = resolve_customer_email(booking=booking) if booking else None
+    cust_phone = resolve_customer_phone(booking=booking) if booking else None
+
+    order_notes = {
+        "transaction_ref": ref,
+        "booking_ref": booking_ref_for_order or "",
+        "customer_id": payload.customer_id if payload.customer_id else "",
+        "channel": "web",
+    }
+    if cust_name:
+        order_notes["customer_name"] = cust_name[:120]
+    if cust_email:
+        order_notes["customer_email"] = cust_email[:120]
+    if cust_phone:
+        order_notes["customer_phone"] = cust_phone[:40]
 
     intent = razorpay_provider.create_order(
         amount=authoritative_amount,
-        currency=payload.currency,
+        currency=authoritative_currency,
         receipt=booking_ref_for_order or ref,
-        notes={
-            "transaction_ref": ref,
-            "booking_ref": booking_ref_for_order or "",
-            "customer_id": payload.customer_id if payload.customer_id else "",
-            "channel": "web"
-        }
+        notes=order_notes,
     )
     if not intent.get("success") or not intent.get("order_id"):
         raise ValueError(intent.get("error") or "Razorpay order could not be created.")
@@ -252,18 +288,28 @@ def initiate_razorpay_payment(
         raise ValueError("Payment gateway is not configured for live checkout.")
     order_id = intent.get("order_id")
 
+    gw_response = dict(intent) if isinstance(intent, dict) else {"order_id": order_id}
+    gw_response["booking_ref"] = booking_ref_for_order or payload.entity_id
+    gw_response["order_id"] = order_id
+    if cust_name:
+        gw_response["customer_name"] = cust_name
+    if cust_email:
+        gw_response["customer_email"] = cust_email
+    if cust_phone:
+        gw_response["customer_phone"] = cust_phone
+
     transaction = PaymentTransaction(
         transaction_ref=ref,
         entity_type=payload.entity_type.strip().upper(),
         entity_id=booking_ref_for_order or payload.entity_id,
         customer_id=payload.customer_id,
         amount=authoritative_amount,
-        currency=payload.currency,
+        currency=authoritative_currency,
         payment_method=payload.payment_method,
         status=PaymentStatus.PENDING,
         gateway_provider="RAZORPAY",
         gateway_payment_id=order_id,
-        gateway_response=intent
+        gateway_response=gw_response
     )
     db.add(transaction)
     db.flush()

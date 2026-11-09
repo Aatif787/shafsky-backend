@@ -214,7 +214,7 @@ class NotificationService(NotificationServiceExtMixin):
 
             resp_text = resp.text or ""
             is_unverified = (
-                resp.status_code in (400, 403)
+                resp.status_code in (400, 403, 422)
                 and any(phrase in resp_text.lower() for phrase in ("domain is not verified", "not verified", "validation_error"))
             )
             # Automatic fallback to onboarding@resend.dev when custom domain is not yet verified
@@ -243,6 +243,22 @@ class NotificationService(NotificationServiceExtMixin):
                         logger.error("Resend onboarding fallback rejected: %s", fb_resp.text[:300])
                 except Exception as fb_exc:
                     logger.error("Resend fallback request error: %s", type(fb_exc).__name__)
+
+            # If sending with PDF attachment was rejected by the provider, retry once without attachment
+            if body.get("attachments"):
+                no_att_body = {k: v for k, v in body.items() if k != "attachments"}
+                try:
+                    with httpx.Client(timeout=15.0) as client:
+                        retry_resp = client.post(url, json=no_att_body, headers=headers)
+                    if retry_resp.status_code in (200, 201):
+                        retry_id = ""
+                        try:
+                            retry_id = str((retry_resp.json() or {}).get("id") or "")
+                        except Exception:
+                            retry_id = ""
+                        return {"status": "DELIVERED", "message_id": retry_id or "RESEND-NO-ATT-OK"}
+                except Exception:
+                    pass
 
             logger.error(
                 "Resend rejected email",
@@ -557,6 +573,10 @@ class NotificationService(NotificationServiceExtMixin):
                 db.execute(text("SELECT pg_advisory_xact_lock(:id)"), {"id": lock_id})
             except Exception as e:
                 logger.warning("[NotificationService] Advisory lock error: %s", e)
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
 
         # Query existing records for this template_type
         records = list(
@@ -589,6 +609,8 @@ class NotificationService(NotificationServiceExtMixin):
         for r in matching_records:
             if r.status == NotificationStatus.SENDING:
                 last_update = r.updated_at or r.created_at
+                if last_update and last_update.tzinfo is None:
+                    last_update = last_update.replace(tzinfo=timezone.utc)
                 if last_update and (now - last_update).total_seconds() < lease_seconds:
                     return None, "IN_PROGRESS"
                 # Stale lease recovery (worker crashed or timed out)

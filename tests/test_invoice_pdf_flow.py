@@ -571,7 +571,36 @@ def test_whatsapp_origin_sends_invoice_pdf_document(monkeypatch):
     assert rec.status == NotificationStatus.DELIVERED
 
 
-def test_website_origin_does_not_send_whatsapp_invoice_pdf(monkeypatch):
+def test_website_origin_sends_whatsapp_invoice_pdf_to_submitted_phone(monkeypatch):
+    calls = []
+
+    def fake_send_doc(self, to_phone, *, filename, caption="", document_url=None, pdf_bytes=None):
+        calls.append({
+            "to": to_phone,
+            "filename": filename,
+            "caption": caption,
+            "has_bytes": bool(pdf_bytes),
+        })
+        return {"success": True, "message_id": "wamid.web_invoice_doc_1", "status": "sent"}
+
+    monkeypatch.setattr(
+        "app.integrations.whatsapp.client.WhatsAppClient.send_document_message",
+        fake_send_doc,
+    )
+    monkeypatch.setattr("app.services.pdf_service.upload_invoice_pdf", lambda *a, **k: True)
+    db = next(get_db())
+    booking, tx, order_id, payment_id = create_paid_ready_booking(db)
+    # Website booking with a submitted phone number must receive the WhatsApp invoice PDF document.
+    res = confirm_via_service(db, booking, tx, order_id, payment_id)
+    assert res["status"] == "CONFIRMED"
+    assert len(calls) == 1
+    assert calls[0]["to"] == "919876543210"
+    assert calls[0]["has_bytes"] is True
+    assert calls[0]["filename"].endswith(".pdf")
+    assert booking.booking_ref in calls[0]["caption"]
+
+
+def test_website_origin_without_phone_skips_whatsapp_invoice_pdf(monkeypatch):
     calls = []
 
     def fake_send_doc(self, *a, **k):
@@ -582,9 +611,11 @@ def test_website_origin_does_not_send_whatsapp_invoice_pdf(monkeypatch):
         "app.integrations.whatsapp.client.WhatsAppClient.send_document_message",
         fake_send_doc,
     )
+    monkeypatch.setattr("app.services.pdf_service.upload_invoice_pdf", lambda *a, **k: True)
     db = next(get_db())
     booking, tx, order_id, payment_id = create_paid_ready_booking(db)
-    # Website booking still has a phone number — that must not be treated as WhatsApp origin.
+    booking.passenger_phone = ""
+    db.commit()
     confirm_via_service(db, booking, tx, order_id, payment_id)
     assert calls == []
 
@@ -717,3 +748,401 @@ def test_partial_refund_marks_invoice_partially_paid():
     assert len(invoices) == 1
     assert invoices[0].status == InvoiceStatus.PARTIALLY_PAID
     assert booking.status == BookingStatus.CONFIRMED
+
+
+def test_website_paid_booking_resolves_email_from_metadata_when_placeholder_and_delivers_all(monkeypatch):
+    """
+    Website booking where passenger_email on Booking was a placeholder ('guest@shafsky.com')
+    while the customer's submitted email was stored in metadata_json.passengers[0].email:
+    - Generates invoice with customer's real email
+    - Sends BOOKING_CONFIRMATION email with PDF attachment to customer's real email
+    - Sends WHATSAPP_INVOICE_PDF document to customer's submitted phone number
+    """
+    email_calls = []
+    wa_doc_calls = []
+
+    def fake_send_email(cls, recipient_email, subject, html_content, attachments=None):
+        email_calls.append({
+            "to": recipient_email,
+            "subject": subject,
+            "html": html_content,
+            "attachments": attachments,
+        })
+        return {"status": "DELIVERED", "message_id": "re_web_paid_1"}
+
+    def fake_send_doc(self, to_phone, *, filename, caption="", document_url=None, pdf_bytes=None):
+        wa_doc_calls.append({
+            "to": to_phone,
+            "filename": filename,
+            "caption": caption,
+            "has_bytes": bool(pdf_bytes),
+        })
+        return {"success": True, "message_id": "wamid.web_paid_doc_1", "status": "sent"}
+
+    monkeypatch.setattr("app.services.pdf_service.upload_invoice_pdf", lambda *a, **k: True)
+    monkeypatch.setattr(
+        "app.services.notification_service.NotificationService.send_email_resend_sync",
+        classmethod(fake_send_email),
+    )
+    monkeypatch.setattr(
+        "app.integrations.whatsapp.client.WhatsAppClient.send_document_message",
+        fake_send_doc,
+    )
+
+    db = next(get_db())
+    booking, tx, order_id, payment_id = create_paid_ready_booking(db)
+    booking.passenger_email = "guest@shafsky.com"
+    booking.passenger_phone = "9876501234"
+    meta = dict(booking.metadata_json or {})
+    meta["channel"] = "web"
+    meta["passengers"] = [{"full_name": "Trillian Astra", "email": "trillian@heartofgold.org", "phone": "9876501234"}]
+    booking.metadata_json = meta
+    db.commit()
+
+    res = confirm_via_service(db, booking, tx, order_id, payment_id)
+    assert res["status"] == "CONFIRMED"
+
+    db.expire_all()
+    inv = db.scalar(select(Invoice).where(Invoice.transaction_id == tx.id))
+    assert inv is not None
+    assert inv.customer_email == "trillian@heartofgold.org"
+
+    customer_emails = [c for c in email_calls if c["to"] == "trillian@heartofgold.org"]
+    assert len(customer_emails) == 1
+    assert customer_emails[0]["attachments"]
+    assert customer_emails[0]["attachments"][0]["content"].startswith(b"%PDF")
+
+    assert len(wa_doc_calls) == 1
+    assert wa_doc_calls[0]["to"] == "919876501234"
+    assert wa_doc_calls[0]["has_bytes"] is True
+
+
+def test_website_airport_booking_model_paid_generates_invoice_and_sends_email_and_whatsapp(monkeypatch):
+    """
+    Website booking created via POST /api/airport/bookings (AirportBooking + AirportPassenger):
+    - Generates Invoice row on verified payment
+    - Sends BOOKING_CONFIRMATION email with PDF invoice attached to AirportPassenger.contact_email
+    - Sends WHATSAPP_INVOICE_PDF to AirportPassenger.contact_phone
+    """
+    from app.models.airport import AirportBooking, AirportFlightDetail, AirportPassenger
+
+    email_calls = []
+    wa_doc_calls = []
+
+    def fake_send_email(cls, recipient_email, subject, html_content, attachments=None):
+        email_calls.append({"to": recipient_email, "attachments": attachments})
+        return {"status": "DELIVERED", "message_id": "re_airport_model_1"}
+
+    def fake_send_doc(self, to_phone, *, filename, caption="", document_url=None, pdf_bytes=None):
+        wa_doc_calls.append({"to": to_phone, "filename": filename, "has_bytes": bool(pdf_bytes)})
+        return {"success": True, "message_id": "wamid.airport_model_doc_1", "status": "sent"}
+
+    monkeypatch.setattr("app.services.pdf_service.upload_invoice_pdf", lambda *a, **k: True)
+    monkeypatch.setattr(
+        "app.services.notification_service.NotificationService.send_email_resend_sync",
+        classmethod(fake_send_email),
+    )
+    monkeypatch.setattr(
+        "app.integrations.whatsapp.client.WhatsAppClient.send_document_message",
+        fake_send_doc,
+    )
+
+    db = next(get_db())
+    booking_ref = f"SHF-APT-{uuid.uuid4().hex[:6].upper()}"
+    order_id = f"order_{uuid.uuid4().hex[:10]}"
+    payment_id = f"pay_{uuid.uuid4().hex[:10]}"
+
+    ab = AirportBooking(
+        id=uuid.uuid4(),
+        booking_reference=booking_ref,
+        customer_id="cust-web-001",
+        service_package="STANDARD_MEET_GREET",
+        total_price=AMOUNT,
+        currency="INR",
+        status="PENDING",
+    )
+    db.add(ab)
+    db.flush()
+    pax = AirportPassenger(
+        id=uuid.uuid4(),
+        booking_id=ab.id,
+        full_name="Ford Prefect",
+        contact_email="ford@betelgeuse.org",
+        contact_phone="9811122233",
+        is_primary=True,
+    )
+    db.add(pax)
+    flight = AirportFlightDetail(
+        id=uuid.uuid4(),
+        booking_id=ab.id,
+        airline="Air India",
+        flight_number="AI202",
+        departure_airport="DEL",
+        arrival_airport="LHR",
+        terminal="T3",
+        scheduled_time=datetime(2026, 9, 10, 12, 0, tzinfo=timezone.utc),
+        flight_type="DEPARTURE",
+    )
+    db.add(flight)
+    tx = PaymentTransaction(
+        id=uuid.uuid4(),
+        transaction_ref=booking_ref,
+        entity_type="AIRPORT_BOOKING",
+        entity_id=booking_ref,
+        amount=AMOUNT,
+        currency="INR",
+        gateway_provider="RAZORPAY",
+        gateway_payment_id=order_id,
+        status=PaymentStatus.PENDING,
+    )
+    db.add(tx)
+    db.commit()
+
+    res = PaymentService.handle_verified_payment(
+        db,
+        event_name="VERIFY_ENDPOINT",
+        gateway_provider="RAZORPAY",
+        order_id=order_id,
+        payment_id=payment_id,
+        booking_ref=booking_ref,
+        amount=AMOUNT_PAISE,
+        currency="INR",
+        channel="Web Checkout",
+    )
+    assert res["status"] == "CONFIRMED"
+
+    db.expire_all()
+    inv = db.scalar(select(Invoice).where(Invoice.transaction_id == tx.id))
+    assert inv is not None
+    assert inv.customer_email == "ford@betelgeuse.org"
+    assert inv.customer_name == "Ford Prefect"
+
+    customer_emails = [c for c in email_calls if c["to"] == "ford@betelgeuse.org"]
+    assert len(customer_emails) == 1
+    assert customer_emails[0]["attachments"]
+    assert customer_emails[0]["attachments"][0]["content"].startswith(b"%PDF")
+
+    assert len(wa_doc_calls) == 1
+    assert wa_doc_calls[0]["to"] == "919811122233"
+    assert wa_doc_calls[0]["has_bytes"] is True
+
+
+def test_website_missing_email_does_not_crash_and_still_delivers_whatsapp_invoice(monkeypatch):
+    email_calls = []
+    wa_doc_calls = []
+
+    def fake_send_email(cls, recipient_email, subject, html_content, attachments=None):
+        email_calls.append(recipient_email)
+        return {"status": "DELIVERED", "message_id": "re_missing_email"}
+
+    def fake_send_doc(self, to_phone, *, filename, caption="", document_url=None, pdf_bytes=None):
+        wa_doc_calls.append(to_phone)
+        return {"success": True, "message_id": "wamid.missing_email_doc", "status": "sent"}
+
+    monkeypatch.setattr("app.services.pdf_service.upload_invoice_pdf", lambda *a, **k: True)
+    monkeypatch.setattr(
+        "app.services.notification_service.NotificationService.send_email_resend_sync",
+        classmethod(fake_send_email),
+    )
+    monkeypatch.setattr(
+        "app.integrations.whatsapp.client.WhatsAppClient.send_document_message",
+        fake_send_doc,
+    )
+
+    db = next(get_db())
+    booking, tx, order_id, payment_id = create_paid_ready_booking(db)
+    booking.passenger_email = "guest@shafsky.com"
+    db.commit()
+
+    res = confirm_via_service(db, booking, tx, order_id, payment_id)
+    assert res["status"] == "CONFIRMED"
+
+    db.expire_all()
+    inv = db.scalar(select(Invoice).where(Invoice.transaction_id == tx.id))
+    assert inv is not None
+    assert "guest@shafsky.com" not in email_calls
+    assert wa_doc_calls == ["919876543210"]
+
+
+def test_verify_endpoint_then_webhook_replay_sends_single_email_and_single_whatsapp_invoice(monkeypatch):
+    email_calls = []
+    wa_doc_calls = []
+
+    def fake_send_email(cls, recipient_email, subject, html_content, attachments=None):
+        email_calls.append(recipient_email)
+        return {"status": "DELIVERED", "message_id": f"re_dedup_{len(email_calls)}"}
+
+    def fake_send_doc(self, to_phone, *, filename, caption="", document_url=None, pdf_bytes=None):
+        wa_doc_calls.append(to_phone)
+        return {"success": True, "message_id": f"wamid.dedup_{len(wa_doc_calls)}", "status": "sent"}
+
+    monkeypatch.setattr("app.services.pdf_service.upload_invoice_pdf", lambda *a, **k: True)
+    monkeypatch.setattr(
+        "app.services.notification_service.NotificationService.send_email_resend_sync",
+        classmethod(fake_send_email),
+    )
+    monkeypatch.setattr(
+        "app.integrations.whatsapp.client.WhatsAppClient.send_document_message",
+        fake_send_doc,
+    )
+
+    db = next(get_db())
+    booking, tx, order_id, payment_id = create_paid_ready_booking(db)
+
+    # 1. Website frontend calls /verify (VERIFY_ENDPOINT)
+    res1 = PaymentService.handle_verified_payment(
+        db,
+        event_name="VERIFY_ENDPOINT",
+        gateway_provider="RAZORPAY",
+        order_id=order_id,
+        payment_id=payment_id,
+        booking_ref=booking.booking_ref,
+        amount=AMOUNT_PAISE,
+        currency="INR",
+        channel="Web Checkout",
+    )
+    assert res1["status"] == "CONFIRMED"
+
+    # 2. Razorpay webhook arrives afterwards (payment.captured)
+    res2, _ = post_payment_captured(booking.booking_ref, order_id, payment_id)
+    assert res2.status_code == 200
+
+    # 3. Duplicate webhook retry arrives
+    res3, _ = post_payment_captured(booking.booking_ref, order_id, payment_id)
+    assert res3.status_code == 200
+
+    db.expire_all()
+    invoices = list(db.scalars(select(Invoice).where(Invoice.transaction_id == tx.id)).all())
+    assert len(invoices) == 1
+    customer_emails = [e for e in email_calls if e == "arthur@galaxy.com"]
+    assert len(customer_emails) == 1
+    assert len(wa_doc_calls) == 1
+
+
+def test_website_webhook_without_notes_booking_ref_generates_invoice_and_delivers_all(monkeypatch):
+    """
+    When Razorpay fires payment.authorized followed by payment.captured for a website
+    checkout where payment.entity.notes is empty, the backend resolves booking_ref via
+    PaymentTransaction, generates the paid invoice, sends the customer email with PDF,
+    and sends the WhatsApp invoice PDF.
+    """
+    email_calls = []
+    wa_doc_calls = []
+
+    def fake_send_email(cls, recipient_email, subject, html_content, attachments=None):
+        email_calls.append({"to": recipient_email, "attachments": attachments})
+        return {"status": "DELIVERED", "message_id": f"re_nonotes_{len(email_calls)}"}
+
+    def fake_send_doc(self, to_phone, *, filename, caption="", document_url=None, pdf_bytes=None):
+        wa_doc_calls.append({"to": to_phone, "filename": filename, "has_bytes": bool(pdf_bytes)})
+        return {"success": True, "message_id": f"wamid.nonotes_{len(wa_doc_calls)}", "status": "sent"}
+
+    monkeypatch.setattr("app.services.pdf_service.upload_invoice_pdf", lambda *a, **k: True)
+    monkeypatch.setattr(
+        "app.services.notification_service.NotificationService.send_email_resend_sync",
+        classmethod(fake_send_email),
+    )
+    monkeypatch.setattr(
+        "app.integrations.whatsapp.client.WhatsAppClient.send_document_message",
+        fake_send_doc,
+    )
+
+    db = next(get_db())
+    booking, tx, order_id, payment_id = create_paid_ready_booking(db)
+
+    # 1. payment.authorized with empty notes
+    auth_payload = {
+        "event": "payment.authorized",
+        "payload": {
+            "payment": {
+                "entity": {
+                    "id": payment_id,
+                    "order_id": order_id,
+                    "amount": AMOUNT_PAISE,
+                    "currency": "INR",
+                    "status": "authorized",
+                    "notes": {},
+                }
+            }
+        },
+    }
+    b_auth = json.dumps(auth_payload).encode("utf-8")
+    r_auth = client.post(
+        "/api/payments/razorpay/webhook",
+        content=b_auth,
+        headers={"X-Razorpay-Signature": generate_webhook_signature(b_auth)},
+    )
+    assert r_auth.status_code == 200
+
+    # 2. payment.captured with empty notes
+    cap_payload = {
+        "event": "payment.captured",
+        "payload": {
+            "payment": {
+                "entity": {
+                    "id": payment_id,
+                    "order_id": order_id,
+                    "amount": AMOUNT_PAISE,
+                    "currency": "INR",
+                    "status": "captured",
+                    "notes": {},
+                }
+            }
+        },
+    }
+    b_cap = json.dumps(cap_payload).encode("utf-8")
+    r_cap = client.post(
+        "/api/payments/razorpay/webhook",
+        content=b_cap,
+        headers={"X-Razorpay-Signature": generate_webhook_signature(b_cap)},
+    )
+    assert r_cap.status_code == 200
+    assert r_cap.json()["data"]["status"] == "CONFIRMED"
+
+    db.expire_all()
+    inv = db.scalar(select(Invoice).where(Invoice.transaction_id == tx.id))
+    assert inv is not None
+    assert inv.status == InvoiceStatus.PAID
+    customer_emails = [c for c in email_calls if c["to"] == "arthur@galaxy.com"]
+    assert len(customer_emails) == 1
+    assert customer_emails[0]["attachments"]
+    assert len(wa_doc_calls) == 1
+    assert wa_doc_calls[0]["to"] == "919876543210"
+
+
+def test_public_invoice_pdf_download_endpoint(monkeypatch):
+    from app.security.payment_token import mint_payment_token
+    from app.services.pdf_service import mint_invoice_pdf_token
+
+    monkeypatch.setattr("app.services.pdf_service.upload_invoice_pdf", lambda *a, **k: True)
+    db = next(get_db())
+    booking, tx, order_id, payment_id = create_paid_ready_booking(db)
+    confirm_via_service(db, booking, tx, order_id, payment_id)
+
+    db.expire_all()
+    inv = db.scalar(select(Invoice).where(Invoice.transaction_id == tx.id))
+    assert inv is not None
+
+    # 1. Valid invoice HMAC token
+    inv_token = mint_invoice_pdf_token(booking.booking_ref, inv.invoice_number)
+    res_ok = client.get(
+        f"/api/payments/invoices/{booking.booking_ref}/pdf?invoice={inv.invoice_number}&token={inv_token}"
+    )
+    assert res_ok.status_code == 200
+    assert res_ok.headers["content-type"].startswith("application/pdf")
+    assert res_ok.content.startswith(b"%PDF")
+
+    # 2. Valid payment_token
+    pay_token = mint_payment_token(booking.booking_ref)
+    res_pt = client.get(
+        f"/api/payments/invoices/{booking.booking_ref}/pdf?payment_token={pay_token}"
+    )
+    assert res_pt.status_code == 200
+    assert res_pt.content.startswith(b"%PDF")
+
+    # 3. Invalid token -> 403
+    res_bad = client.get(
+        f"/api/payments/invoices/{booking.booking_ref}/pdf?token=invalid_token"
+    )
+    assert res_bad.status_code == 403
+
