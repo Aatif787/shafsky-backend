@@ -11,11 +11,14 @@ from app.database import Base
 
 
 def _default_workflow_event_sequence(context):
-    if context and hasattr(context, "connection") and context.connection.dialect.name == "sqlite":
+    if context and hasattr(context, "connection"):
         from sqlalchemy import text
-        res = context.connection.execute(text("SELECT COALESCE(MAX(sequence_number), 0) + 1 FROM workflow_event_records")).scalar()
-        return res or 1
-    return None
+        try:
+            res = context.connection.execute(text("SELECT COALESCE(MAX(sequence_number), 0) + 1 FROM workflow_event_records")).scalar()
+            return int(res) if res is not None else 1
+        except Exception:
+            return 1
+    return 1
 
 
 class WorkflowEventRecord(Base):

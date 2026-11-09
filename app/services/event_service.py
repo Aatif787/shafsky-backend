@@ -97,6 +97,7 @@ class WorkflowEventService:
         # 3. Persist WorkflowEventRecord
         rec = WorkflowEventRecord(
             id=event_id,
+            sequence_number=next_seq,
             event_type=event_type,
             workflow_instance_id=workflow_instance_id,
             workflow_definition_version=workflow_definition_version,
