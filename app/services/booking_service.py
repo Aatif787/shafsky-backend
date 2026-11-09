@@ -744,7 +744,11 @@ class BookingService(BookingServiceExtMixin):
             )
 
         charge_amount = round(subtotal + express_fee, 2)
+        authoritative_currency = "INR" if charge_amount > 0 else (payload.currency or "INR")
         metadata_json = dict(metadata_json or {})
+        if payload.currency and str(payload.currency).upper() != authoritative_currency:
+            metadata_json["display_currency"] = str(payload.currency).upper()
+            metadata_json["display_total_amount"] = float(payload.total_amount or 0)
         metadata_json["subtotal"] = subtotal
         metadata_json["express_fee"] = express_fee
         metadata_json["taxes"] = taxes
@@ -814,7 +818,7 @@ class BookingService(BookingServiceExtMixin):
                 service_options=service_options,
                 metadata_json=metadata_json,
                 total_amount=charge_amount,
-                currency=payload.currency or "INR",
+                currency=authoritative_currency,
                 status=BookingStatus.PENDING,
                 version=1,
                 notes=payload.notes,

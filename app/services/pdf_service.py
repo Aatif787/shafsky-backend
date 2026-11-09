@@ -476,15 +476,26 @@ def _booking_meta(booking) -> Dict[str, str]:
     )
     tz = airport_tzinfo(meta.get("airport_timezone") or "Asia/Kolkata")
     jt = normalize_journey_type(meta.get("journey_type") or meta.get("direction") or journey)
-    scheduled = service_leg_scheduled_datetime(
-        jt,
+    raw_dep = (
         getattr(booking, "departure_time", None)
         or getattr(booking, "flight_date", None)
         or (getattr(first_flight, "scheduled_time", None) if first_flight else None)
-        or meta.get("departure_scheduled"),
-        getattr(booking, "arrival_time", None) or meta.get("arrival_scheduled"),
+        or meta.get("departure_scheduled")
+    )
+    raw_arr = getattr(booking, "arrival_time", None) or meta.get("arrival_scheduled")
+    scheduled = service_leg_scheduled_datetime(
+        jt,
+        raw_dep,
+        raw_arr,
         tz,
     )
+    if scheduled is None:
+        scheduled = service_leg_scheduled_datetime(
+            "DEPARTURE",
+            raw_dep or raw_arr or meta.get("service_date"),
+            None,
+            tz,
+        )
     pax_rel = getattr(booking, "passengers", None)
     pax_rel_count = len(list(pax_rel)) if pax_rel and not isinstance(pax_rel, (str, bytes)) else 0
     adults = int(meta.get("pax_adults") or getattr(booking, "adults", None) or meta.get("billable_pax") or pax_rel_count or 1)
@@ -523,6 +534,47 @@ def _booking_meta(booking) -> Dict[str, str]:
 
 def build_invoice_storage_path(booking_ref: str, invoice_number: str) -> str:
     return f"invoices/{_safe_path_part(booking_ref)}/{_safe_path_part(invoice_number)}.pdf"
+
+
+def mint_invoice_pdf_token(booking_ref: str, invoice_number: str) -> str:
+    import hashlib
+    import hmac
+    from app.config import settings
+
+    raw_secret = (
+        getattr(settings, "JWT_SECRET", None)
+        or getattr(settings, "PAYMENT_SESSION_SECRET", None)
+        or os.getenv("PAYMENT_SESSION_SECRET")
+        or "shafsky-invoice-secret"
+    )
+    secret = str(raw_secret).encode("utf-8")
+    msg = f"invoice_pdf:{_safe_text(booking_ref)}:{_safe_text(invoice_number)}".encode("utf-8")
+    return hmac.new(secret, msg, hashlib.sha256).hexdigest()
+
+
+def verify_invoice_pdf_token(booking_ref: str, invoice_number: str, token: str) -> bool:
+    import hmac
+
+    if not booking_ref or not invoice_number or not token:
+        return False
+    expected = mint_invoice_pdf_token(booking_ref, invoice_number)
+    return hmac.compare_digest(expected, str(token).strip())
+
+
+def build_public_invoice_pdf_url(booking_ref: str, invoice_number: str) -> Optional[str]:
+    from app.config import settings
+
+    if not booking_ref or not invoice_number or booking_ref == "unknown":
+        return None
+    base_url = _safe_text(
+        getattr(settings, "PUBLIC_BACKEND_URL", None)
+        or os.getenv("PUBLIC_BACKEND_URL")
+        or "https://shafsky-backend-1.onrender.com"
+    ).rstrip("/")
+    if not base_url.startswith("https://") or "localhost" in base_url or "127.0.0.1" in base_url:
+        return None
+    token = mint_invoice_pdf_token(booking_ref, invoice_number)
+    return f"{base_url}/api/payments/invoices/{_safe_path_part(booking_ref)}/pdf?invoice={_safe_path_part(invoice_number)}&token={token}"
 
 
 def generate_tax_invoice_pdf(data: Dict[str, Any]) -> bytes:
@@ -931,22 +983,34 @@ def _notification_context(
         if booking
         else getattr(transaction, "entity_id", None)
     )
+    raw_b_meta = getattr(booking, "metadata_json", None) if booking else None
+    raw_b_meta = raw_b_meta if isinstance(raw_b_meta, dict) else {}
     dep_dt = (
         getattr(booking, "departure_time", None)
+        or getattr(booking, "arrival_time", None)
         or getattr(booking, "flight_date", None)
         or (getattr(first_flight, "scheduled_time", None) if first_flight else None)
+        or raw_b_meta.get("service_date")
     ) if booking else None
+    arr_dt = getattr(booking, "arrival_time", None) if booking else None
     dep_iso = dep_dt.isoformat() if dep_dt and hasattr(dep_dt, "isoformat") else (_safe_text(dep_dt) or None)
+    arr_iso = arr_dt.isoformat() if arr_dt and hasattr(arr_dt, "isoformat") else (_safe_text(arr_dt) or None)
     raw_total = (
         getattr(booking, "total_amount", None)
         if booking and getattr(booking, "total_amount", None) is not None
         else (getattr(booking, "total_price", None) if booking else None)
+    )
+    pax_count = (
+        raw_b_meta.get("guest_count")
+        or raw_b_meta.get("passenger_count")
+        or (getattr(booking, "total_passengers", None) if booking else None)
     )
     ctx: Dict[str, Any] = {
         "booking_ref": booking_ref,
         "passenger_name": resolve_customer_name(booking=booking, invoice=invoice, transaction=transaction, default="Valued Guest"),
         "passenger_email": resolve_customer_email(booking=booking, invoice=invoice, transaction=transaction),
         "passenger_phone": resolve_customer_phone(booking=booking, transaction=transaction),
+        "passenger_count": pax_count,
         "flight_num": (
             getattr(booking, "flight_num", None)
             or getattr(booking, "flight_number", None)
@@ -966,6 +1030,7 @@ def _notification_context(
         "service_type": (getattr(booking, "service_type", None) or getattr(booking, "service_package", None)) if booking else None,
         "service_name": meta.get("service_name") or (getattr(booking, "service_type", None) or getattr(booking, "service_package", None) if booking else None),
         "departure_time": dep_iso,
+        "arrival_time": arr_iso,
         "terminal": meta.get("terminal") or (getattr(booking, "terminal", None) if booking else None),
         "total_amount": float(raw_total) if raw_total is not None else float(getattr(invoice, "total_amount", 0) or 0),
         "currency": (getattr(booking, "currency", None) if booking else None) or getattr(invoice, "currency", None) or "INR",
@@ -1115,6 +1180,8 @@ def _fulfill_paid_invoice_inner(
 
         if invoice.pdf_url:
             signed_url = create_signed_invoice_url(invoice.pdf_url)
+        if not signed_url and pdf_bytes and resolved_booking_ref and resolved_booking_ref != "unknown":
+            signed_url = build_public_invoice_pdf_url(str(resolved_booking_ref), invoice.invoice_number)
         attached = bool(pdf_bytes)
 
         if send_notifications:

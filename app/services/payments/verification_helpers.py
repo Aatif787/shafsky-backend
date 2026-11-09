@@ -142,6 +142,23 @@ def validate_amount_and_currency(
                     if not received_currency_raw:
                         received_currency_raw = ord_data.get("currency")
             if (
+                not gateway_order_confirmed
+                and payment_id
+                and not str(payment_id).startswith("pay_sim_")
+                and razorpay_provider.is_configured()
+                and hasattr(razorpay_provider, "fetch_payment")
+            ):
+                pay_res = razorpay_provider.fetch_payment(str(payment_id))
+                if pay_res.get("success") and isinstance(pay_res.get("payment"), dict):
+                    pay_data = pay_res["payment"]
+                    pay_ord = str(pay_data.get("order_id") or "")
+                    if not order_id or not pay_ord or pay_ord == str(order_id):
+                        gateway_order_confirmed = True
+                        if received_amount_raw is None:
+                            received_amount_raw = pay_data.get("amount")
+                        if not received_currency_raw:
+                            received_currency_raw = pay_data.get("currency")
+            if (
                 settings.is_production
                 and order_id
                 and razorpay_provider.is_configured()
@@ -371,8 +388,17 @@ def handle_payment_authorized(
         transaction.status = PaymentStatus.PROCESSING
         if payment_id:
             transaction.gateway_payment_id = payment_id
-        if raw_payload:
-            transaction.gateway_response = raw_payload
+        if raw_payload or order_id or payment_id:
+            from app.services.payments.initiation import merge_gateway_response
+            transaction.gateway_response = merge_gateway_response(
+                transaction.gateway_response,
+                raw_payload=raw_payload,
+                extra={
+                    "order_id": order_id,
+                    "payment_id": payment_id,
+                    "booking_ref": resolved_booking_ref,
+                },
+            )
         transaction.updated_at = datetime.now(timezone.utc)
 
     if booking:

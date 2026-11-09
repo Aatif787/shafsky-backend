@@ -593,6 +593,16 @@ async def razorpay_webhook_endpoint(
     channel = notes.get("channel") or plink_notes.get("channel") or "web"
 
     plink_id = plink_entity.get("id") if isinstance(plink_entity, dict) else None
+    if not booking_ref and (order_id or payment_id or plink_id):
+        from app.models.payment import PaymentTransaction
+        gw_candidates = [str(v) for v in (order_id, payment_id, plink_id) if v]
+        if gw_candidates:
+            booking_ref = db.scalar(
+                select(PaymentTransaction.entity_id)
+                .where(PaymentTransaction.gateway_payment_id.in_(gw_candidates))
+                .order_by(PaymentTransaction.created_at.desc())
+                .limit(1)
+            )
 
     # Construct canonical persistent event identifier
     unique_event_id = event_hdr_id or payload.get("event_id") or f"{event_name}:{payment_id or order_id or plink_id or booking_ref}"
@@ -872,6 +882,79 @@ def retry_payment_endpoint(
     except Exception as exc:
         logger.exception("Payment retry failed")
         raise HTTPException(status_code=500, detail="Payment retry failed.") from exc
+
+
+@router.get(
+    "/invoices/{booking_ref}/pdf",
+    summary="Download Tax Invoice PDF for a Paid Booking",
+)
+def download_invoice_pdf_endpoint(
+    booking_ref: str,
+    invoice: Optional[str] = None,
+    token: Optional[str] = None,
+    payment_token: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_optional_user),
+):
+    """Streams the authoritative Tax Invoice PDF for a confirmed, paid booking."""
+    from fastapi.responses import Response
+    from app.models.airport import AirportBooking
+    from app.models.payment import Invoice, PaymentStatus, PaymentTransaction
+    from app.models.schema import Booking
+    from app.security.payment_token import verify_payment_token
+    from app.services.pdf_service import generate_invoice_pdf_bytes, verify_invoice_pdf_token
+
+    clean_ref = (booking_ref or "").strip()
+    if not clean_ref:
+        raise HTTPException(status_code=404, detail="Invoice not found.")
+
+    tx = db.scalar(
+        select(PaymentTransaction)
+        .where(
+            PaymentTransaction.entity_id == clean_ref,
+            PaymentTransaction.status.in_([PaymentStatus.SUCCESSFUL, PaymentStatus.PARTIALLY_REFUNDED]),
+        )
+        .order_by(PaymentTransaction.created_at.desc())
+        .limit(1)
+    )
+    if not tx:
+        raise HTTPException(status_code=404, detail="Paid transaction not found for this booking.")
+
+    inv_row = db.scalar(select(Invoice).where(Invoice.transaction_id == tx.id))
+    if not inv_row:
+        raise HTTPException(status_code=404, detail="Tax invoice not found for this booking.")
+    if invoice and inv_row.invoice_number != invoice.strip():
+        raise HTTPException(status_code=404, detail="Invoice number mismatch.")
+
+    booking_obj = db.scalar(select(Booking).where(Booking.booking_ref == clean_ref))
+    if not booking_obj:
+        booking_obj = db.scalar(select(AirportBooking).where(AirportBooking.booking_reference == clean_ref))
+
+    authorized = False
+    if token and verify_invoice_pdf_token(clean_ref, inv_row.invoice_number, token):
+        authorized = True
+    elif payment_token and verify_payment_token(payment_token, booking_ref=clean_ref):
+        authorized = True
+    elif booking_obj is not None:
+        try:
+            assert_payment_access(booking=booking_obj, payment_token=payment_token or token, current_user=current_user)
+            authorized = True
+        except HTTPException:
+            authorized = False
+
+    if not authorized:
+        raise HTTPException(status_code=403, detail="Invalid or missing invoice access token.")
+
+    pdf_bytes = generate_invoice_pdf_bytes(inv_row, booking_obj, tx)
+    filename = f"Shafsky-Aviation-Tax-Invoice-{inv_row.invoice_number}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="{filename}"',
+            "Cache-Control": "private, max-age=300",
+        },
+    )
 
 
 router.include_router(admin_payment_router)

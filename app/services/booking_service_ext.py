@@ -561,7 +561,36 @@ class BookingServiceExtMixin:
         # by payment verification is skipped instead of messaged twice.
         if new_status == BookingStatus.CONFIRMED and previous_status != BookingStatus.CONFIRMED:
             try:
+                from app.models.payment import Invoice, PaymentStatus, PaymentTransaction
                 from app.services.notification_service import NotificationService
+                from app.services.payment_service import PaymentService
+                from app.services.pdf_service import fulfill_paid_invoice, resolve_customer_email, resolve_customer_name
+
+                paid_tx = db.scalar(
+                    select(PaymentTransaction)
+                    .where(
+                        PaymentTransaction.entity_id == booking.booking_ref,
+                        PaymentTransaction.status == PaymentStatus.SUCCESSFUL,
+                        PaymentTransaction.is_duplicate.isnot(True),
+                    )
+                    .order_by(PaymentTransaction.created_at.desc())
+                    .limit(1)
+                )
+                if paid_tx:
+                    inv = db.scalar(select(Invoice).where(Invoice.transaction_id == paid_tx.id))
+                    if not inv:
+                        inv = PaymentService.generate_invoice(
+                            db,
+                            transaction=paid_tx,
+                            customer_name=resolve_customer_name(booking=booking, transaction=paid_tx),
+                            customer_email=resolve_customer_email(booking=booking, transaction=paid_tx) or "",
+                        )
+                        if inv:
+                            db.commit()
+                    if inv:
+                        fulfill_paid_invoice(db, str(inv.id), send_notifications=True)
+                        return booking
+
                 meta = booking.metadata_json or {}
                 NotificationService.notify_booking_confirmed(db, {
                     "booking_ref": booking.booking_ref,
@@ -577,7 +606,7 @@ class BookingServiceExtMixin:
                     "dest_code": booking.dest_code,
                     "airport_code": meta.get("service_airport") or booking.origin_code or booking.dest_code,
                     "journey_type": meta.get("journey_type"),
-                    "departure_time": booking.departure_time.isoformat() if booking.departure_time else None,
+                    "departure_time": (booking.departure_time or booking.arrival_time).isoformat() if (booking.departure_time or booking.arrival_time) else None,
                     "terminal": meta.get("terminal"),
                     "total_amount": float(booking.total_amount or 0.0),
                     "currency": booking.currency or "INR",

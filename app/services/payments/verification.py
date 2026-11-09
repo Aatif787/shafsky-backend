@@ -271,8 +271,24 @@ def handle_verified_payment(
     if not channel:
         channel = extracted_ids.get("channel") or channel
 
+    # Pre-resolve booking_ref from PaymentTransaction when webhook notes omit booking_ref
+    # so VERIFY_ENDPOINT and webhook events acquire the exact same advisory lock.
+    pre_lock_ref = booking_ref
+    if not pre_lock_ref and (order_id or payment_id or payment_link_id):
+        gw_candidates = [v for v in (order_id, payment_id, payment_link_id) if v]
+        if gw_candidates:
+            try:
+                pre_lock_ref = db.scalar(
+                    select(PaymentTransaction.entity_id)
+                    .where(PaymentTransaction.gateway_payment_id.in_(gw_candidates))
+                    .order_by(PaymentTransaction.created_at.desc())
+                    .limit(1)
+                )
+            except Exception:
+                pre_lock_ref = None
+
     # Serialize distinct Razorpay events targeting the same booking
-    lock_key = booking_ref or order_id or payment_id or payment_link_id
+    lock_key = pre_lock_ref or order_id or payment_id or payment_link_id
     if lock_key and db.bind is not None and db.bind.dialect.name == "postgresql":
         db.execute(
             text("SELECT pg_advisory_xact_lock(hashtext(:payment_lock_key))"),
@@ -428,6 +444,23 @@ def handle_verified_payment(
             "status": "REF_MISMATCH",
             "reason": "Booking reference mismatch with order records."
         }
+
+    if (
+        resolved_booking_ref
+        and resolved_booking_ref != lock_key
+        and db.bind is not None
+        and db.bind.dialect.name == "postgresql"
+    ):
+        db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:payment_lock_key))"),
+            {"payment_lock_key": f"payment:{resolved_booking_ref}"},
+        )
+        if booking is not None:
+            db.refresh(booking)
+        if airport_booking is not None:
+            db.refresh(airport_booking)
+        if transaction is not None:
+            db.refresh(transaction)
 
     # 3. Handle Successful Payment Events
     if event_name in [

@@ -1017,3 +1017,132 @@ def test_verify_endpoint_then_webhook_replay_sends_single_email_and_single_whats
     customer_emails = [e for e in email_calls if e == "arthur@galaxy.com"]
     assert len(customer_emails) == 1
     assert len(wa_doc_calls) == 1
+
+
+def test_website_webhook_without_notes_booking_ref_generates_invoice_and_delivers_all(monkeypatch):
+    """
+    When Razorpay fires payment.authorized followed by payment.captured for a website
+    checkout where payment.entity.notes is empty, the backend resolves booking_ref via
+    PaymentTransaction, generates the paid invoice, sends the customer email with PDF,
+    and sends the WhatsApp invoice PDF.
+    """
+    email_calls = []
+    wa_doc_calls = []
+
+    def fake_send_email(cls, recipient_email, subject, html_content, attachments=None):
+        email_calls.append({"to": recipient_email, "attachments": attachments})
+        return {"status": "DELIVERED", "message_id": f"re_nonotes_{len(email_calls)}"}
+
+    def fake_send_doc(self, to_phone, *, filename, caption="", document_url=None, pdf_bytes=None):
+        wa_doc_calls.append({"to": to_phone, "filename": filename, "has_bytes": bool(pdf_bytes)})
+        return {"success": True, "message_id": f"wamid.nonotes_{len(wa_doc_calls)}", "status": "sent"}
+
+    monkeypatch.setattr("app.services.pdf_service.upload_invoice_pdf", lambda *a, **k: True)
+    monkeypatch.setattr(
+        "app.services.notification_service.NotificationService.send_email_resend_sync",
+        classmethod(fake_send_email),
+    )
+    monkeypatch.setattr(
+        "app.integrations.whatsapp.client.WhatsAppClient.send_document_message",
+        fake_send_doc,
+    )
+
+    db = next(get_db())
+    booking, tx, order_id, payment_id = create_paid_ready_booking(db)
+
+    # 1. payment.authorized with empty notes
+    auth_payload = {
+        "event": "payment.authorized",
+        "payload": {
+            "payment": {
+                "entity": {
+                    "id": payment_id,
+                    "order_id": order_id,
+                    "amount": AMOUNT_PAISE,
+                    "currency": "INR",
+                    "status": "authorized",
+                    "notes": {},
+                }
+            }
+        },
+    }
+    b_auth = json.dumps(auth_payload).encode("utf-8")
+    r_auth = client.post(
+        "/api/payments/razorpay/webhook",
+        content=b_auth,
+        headers={"X-Razorpay-Signature": generate_webhook_signature(b_auth)},
+    )
+    assert r_auth.status_code == 200
+
+    # 2. payment.captured with empty notes
+    cap_payload = {
+        "event": "payment.captured",
+        "payload": {
+            "payment": {
+                "entity": {
+                    "id": payment_id,
+                    "order_id": order_id,
+                    "amount": AMOUNT_PAISE,
+                    "currency": "INR",
+                    "status": "captured",
+                    "notes": {},
+                }
+            }
+        },
+    }
+    b_cap = json.dumps(cap_payload).encode("utf-8")
+    r_cap = client.post(
+        "/api/payments/razorpay/webhook",
+        content=b_cap,
+        headers={"X-Razorpay-Signature": generate_webhook_signature(b_cap)},
+    )
+    assert r_cap.status_code == 200
+    assert r_cap.json()["data"]["status"] == "CONFIRMED"
+
+    db.expire_all()
+    inv = db.scalar(select(Invoice).where(Invoice.transaction_id == tx.id))
+    assert inv is not None
+    assert inv.status == InvoiceStatus.PAID
+    customer_emails = [c for c in email_calls if c["to"] == "arthur@galaxy.com"]
+    assert len(customer_emails) == 1
+    assert customer_emails[0]["attachments"]
+    assert len(wa_doc_calls) == 1
+    assert wa_doc_calls[0]["to"] == "919876543210"
+
+
+def test_public_invoice_pdf_download_endpoint(monkeypatch):
+    from app.security.payment_token import mint_payment_token
+    from app.services.pdf_service import mint_invoice_pdf_token
+
+    monkeypatch.setattr("app.services.pdf_service.upload_invoice_pdf", lambda *a, **k: True)
+    db = next(get_db())
+    booking, tx, order_id, payment_id = create_paid_ready_booking(db)
+    confirm_via_service(db, booking, tx, order_id, payment_id)
+
+    db.expire_all()
+    inv = db.scalar(select(Invoice).where(Invoice.transaction_id == tx.id))
+    assert inv is not None
+
+    # 1. Valid invoice HMAC token
+    inv_token = mint_invoice_pdf_token(booking.booking_ref, inv.invoice_number)
+    res_ok = client.get(
+        f"/api/payments/invoices/{booking.booking_ref}/pdf?invoice={inv.invoice_number}&token={inv_token}"
+    )
+    assert res_ok.status_code == 200
+    assert res_ok.headers["content-type"].startswith("application/pdf")
+    assert res_ok.content.startswith(b"%PDF")
+
+    # 2. Valid payment_token
+    pay_token = mint_payment_token(booking.booking_ref)
+    res_pt = client.get(
+        f"/api/payments/invoices/{booking.booking_ref}/pdf?payment_token={pay_token}"
+    )
+    assert res_pt.status_code == 200
+    assert res_pt.content.startswith(b"%PDF")
+
+    # 3. Invalid token -> 403
+    res_bad = client.get(
+        f"/api/payments/invoices/{booking.booking_ref}/pdf?token=invalid_token"
+    )
+    assert res_bad.status_code == 403
+

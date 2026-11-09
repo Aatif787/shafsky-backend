@@ -93,6 +93,8 @@ def build_customer_summary(
     amount: Optional[float] = None,
     currency: Optional[str] = None,
     status_label: Optional[str] = None,
+    invoice_number: Optional[str] = None,
+    invoice_url: Optional[str] = None,
 ) -> str:
     """Builds the clean single-line summary used inside the approved template.
 
@@ -142,6 +144,11 @@ def build_customer_summary(
                 parts.append(f"₹{amount_value:,.0f}")
             else:
                 parts.append(f"{code} {amount_value:,.0f}")
+
+    if invoice_number:
+        parts.append(f"Invoice {str(invoice_number).strip()}")
+    if invoice_url and str(invoice_url).strip().startswith("https://"):
+        parts.append(f"Invoice PDF: {str(invoice_url).strip()}")
 
     return build_template_parameter(" · ".join(part for part in parts if part))
 

@@ -538,11 +538,19 @@ class NotificationCustomerConfirmationMixin:
             f"• *Airport:* {airport_name}",
             f"• *Service:* {service_type}",
         ]
+        invoice_number = str(context.get("invoice_number") or "").strip() or None
+        invoice_url_raw = str(context.get("invoice_url") or "").strip()
+        invoice_url = invoice_url_raw if invoice_url_raw.startswith("https://") else None
+
         if flight_num:
             lines.append(f"• *Flight:* {flight_num}")
         if date_time_str:
             lines.append(f"• *Date & Time:* {date_time_str}")
+        if invoice_number:
+            lines.append(f"• *Invoice No:* {invoice_number}")
         lines.append("• *Status:* CONFIRMED")
+        if invoice_url:
+            lines.extend(["", f"📄 *Tax Invoice PDF:* {invoice_url}"])
         lines.extend([
             "",
             f"Our 24/7 command desk is at your disposal: {support_phone}.",
@@ -570,6 +578,8 @@ class NotificationCustomerConfirmationMixin:
             amount=total_amount_raw,
             currency=context.get("currency") or (getattr(booking, "currency", None) if booking else None),
             status_label="CONFIRMED",
+            invoice_number=invoice_number,
+            invoice_url=invoice_url,
         )
 
         payload = {

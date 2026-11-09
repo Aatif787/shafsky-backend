@@ -244,6 +244,22 @@ class NotificationService(NotificationServiceExtMixin):
                 except Exception as fb_exc:
                     logger.error("Resend fallback request error: %s", type(fb_exc).__name__)
 
+            # If sending with PDF attachment was rejected by the provider, retry once without attachment
+            if body.get("attachments"):
+                no_att_body = {k: v for k, v in body.items() if k != "attachments"}
+                try:
+                    with httpx.Client(timeout=15.0) as client:
+                        retry_resp = client.post(url, json=no_att_body, headers=headers)
+                    if retry_resp.status_code in (200, 201):
+                        retry_id = ""
+                        try:
+                            retry_id = str((retry_resp.json() or {}).get("id") or "")
+                        except Exception:
+                            retry_id = ""
+                        return {"status": "DELIVERED", "message_id": retry_id or "RESEND-NO-ATT-OK"}
+                except Exception:
+                    pass
+
             logger.error(
                 "Resend rejected email",
                 extra={"http_status": resp.status_code, "provider_error": resp_text[:400]},
