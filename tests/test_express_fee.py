@@ -164,12 +164,12 @@ def test_bom_before_effective_date_no_fee():
     assert fee == 0.0
 
 
-# ── 8. Non-Mumbai airport → existing behavior unchanged ──────────────────
-def test_non_mumbai_airport_no_fee():
-    """Express Fee applies only to BOM. Other airports must not be affected."""
+# ── 8. Unaffected airports → 0 fee ──────────────────────────────────────────
+def test_unaffected_airports_no_fee():
+    """Airports without express fee rules must return 0."""
     dep_time = _AFTER_EFFECTIVE + timedelta(hours=5)
 
-    for code in ["DEL", "HYD", "BLR", "MAA", "GOI"]:
+    for code in ["BLR", "MAA", "GOI", "AMD", "CCU", "JAI"]:
         fee = calculate_express_fee(
             airport_code=code,
             service_fee=10000.0,
@@ -180,6 +180,55 @@ def test_non_mumbai_airport_no_fee():
             arrival_time=None,
         )
         assert fee == 0.0, f"Expected 0 for {code}, got {fee}"
+
+
+# ── 8b. Flat 500 fee airports under 24h: HYD, GOX, DEL, VTZ ─────────────────
+def test_flat_500_airports_under_24h_express_fee():
+    """Hyderabad, Goa Mopa, Delhi, and Visakhapatnam under 24h receive flat INR 500 fee."""
+    dep_time = _AFTER_EFFECTIVE + timedelta(hours=5)
+    for code in ["HYD", "GOX", "DEL", "VTZ"]:
+        fee = calculate_express_fee(
+            airport_code=code,
+            service_fee=8500.0,
+            booking_created_at=_AFTER_EFFECTIVE,
+            journey_type="DEPARTURE",
+            flight_type="DOMESTIC",
+            departure_time=dep_time,
+            arrival_time=None,
+        )
+        assert fee == 500.0, f"Expected flat 500.0 for {code}, got {fee}"
+
+
+def test_flat_500_airports_more_than_24h_no_fee():
+    """Flat 500 airports booked more than 24h in advance receive 0 fee."""
+    dep_time = _AFTER_EFFECTIVE + timedelta(hours=48)
+    for code in ["HYD", "GOX", "DEL", "VTZ"]:
+        fee = calculate_express_fee(
+            airport_code=code,
+            service_fee=8500.0,
+            booking_created_at=_AFTER_EFFECTIVE,
+            journey_type="DEPARTURE",
+            flight_type="DOMESTIC",
+            departure_time=dep_time,
+            arrival_time=None,
+        )
+        assert fee == 0.0, f"Expected 0 for {code} when > 24h, got {fee}"
+
+
+def test_flat_500_airports_transit_under_24h():
+    """Transit at flat 500 airports under 24h receives flat INR 500 fee."""
+    arr_time = _AFTER_EFFECTIVE + timedelta(hours=8)
+    for code in ["HYD", "GOX", "DEL", "VTZ"]:
+        fee = calculate_express_fee(
+            airport_code=code,
+            service_fee=7500.0,
+            booking_created_at=_AFTER_EFFECTIVE,
+            journey_type="TRANSIT",
+            flight_type="DOMESTIC",
+            departure_time=None,
+            arrival_time=arr_time,
+        )
+        assert fee == 500.0, f"Expected flat 500.0 for transit at {code}, got {fee}"
 
 
 # ── 9. Frontend-submitted Express Fee/final price cannot override backend ─

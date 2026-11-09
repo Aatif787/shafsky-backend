@@ -26,6 +26,23 @@ def _is_production_url(url: str) -> bool:
     return any(marker in lowered for marker in PROD_HOST_MARKERS)
 
 
+def _is_db_reachable(url: str) -> bool:
+    if not url:
+        return False
+    if url.startswith("sqlite"):
+        return True
+    try:
+        from urllib.parse import urlparse
+        import socket
+        parsed = urlparse(url)
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or 5432
+        with socket.create_connection((host, port), timeout=0.5):
+            return True
+    except Exception:
+        return False
+
+
 def configure_test_database() -> None:
     load_dotenv()
 
@@ -71,7 +88,15 @@ def configure_test_database() -> None:
     os.environ.setdefault("WHATSAPP_BOOKING_NOTIFY_PHONE_5", "9599087959")
 
     if test_url:
-        os.environ["DATABASE_URL"] = test_url
+        if _is_db_reachable(test_url):
+            os.environ["DATABASE_URL"] = test_url
+            return
+        sqlite_fallback = "sqlite:///./test_shafsky.db"
+        os.environ["DATABASE_URL"] = sqlite_fallback
+        sys.stderr.write(
+            f"\n[Pytest] Configured test database ({test_url}) is unreachable.\n"
+            f"Using local SQLite fallback: {sqlite_fallback}\n\n"
+        )
         return
 
     if _is_production_url(current) and not allow_prod:

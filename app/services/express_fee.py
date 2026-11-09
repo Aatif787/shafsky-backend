@@ -19,8 +19,7 @@ _DEFAULT_EFFECTIVE = datetime(2026, 10, 1, 0, 0, 0, tzinfo=_IST)
 _env_effective = os.getenv("EXPRESS_FEE_EFFECTIVE_DATE")
 if _env_effective:
     try:
-        from dateutil.parser import isoparse
-        EXPRESS_FEE_EFFECTIVE_DATE = isoparse(_env_effective)
+        EXPRESS_FEE_EFFECTIVE_DATE = datetime.fromisoformat(_env_effective.replace("Z", "+00:00"))
         if EXPRESS_FEE_EFFECTIVE_DATE.tzinfo is None:
             EXPRESS_FEE_EFFECTIVE_DATE = EXPRESS_FEE_EFFECTIVE_DATE.replace(tzinfo=_IST)
     except Exception:
@@ -29,7 +28,11 @@ else:
     EXPRESS_FEE_EFFECTIVE_DATE = _DEFAULT_EFFECTIVE
 
 _MUMBAI_IATA = "BOM"
+_FLAT_500_AIRPORTS = {"HYD", "GOX", "DEL", "VTZ"}
+_EXPRESS_FEE_AIRPORTS = {_MUMBAI_IATA} | _FLAT_500_AIRPORTS
+
 _EXPRESS_FEE_RATE = Decimal("0.50")
+_FLAT_EXPRESS_FEE_AMOUNT = Decimal("500.00")
 _EXPRESS_THRESHOLD = timedelta(hours=24)
 _TWOPLACES = Decimal("0.01")
 
@@ -103,7 +106,10 @@ def calculate_express_fee(
       - Advance time < 24 hours (strictly less than)
     """
     code = (airport_code or "").strip().upper()
-    if code != _MUMBAI_IATA:
+    if code not in _EXPRESS_FEE_AIRPORTS:
+        return 0.0
+
+    if service_fee <= 0:
         return 0.0
 
     # Effective date gate — booking_created_at must be on or after 1 Oct 2026
@@ -129,9 +135,12 @@ def calculate_express_fee(
 
     advance_time = service_start_at - bca
     if advance_time < _EXPRESS_THRESHOLD:
-        fee_dec = (Decimal(str(service_fee)) * _EXPRESS_FEE_RATE).quantize(
-            _TWOPLACES, rounding=ROUND_HALF_UP
-        )
-        return float(fee_dec)
+        if code == _MUMBAI_IATA:
+            fee_dec = (Decimal(str(service_fee)) * _EXPRESS_FEE_RATE).quantize(
+                _TWOPLACES, rounding=ROUND_HALF_UP
+            )
+            return float(fee_dec)
+        elif code in _FLAT_500_AIRPORTS:
+            return float(_FLAT_EXPRESS_FEE_AMOUNT)
 
     return 0.0
