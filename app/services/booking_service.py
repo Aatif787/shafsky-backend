@@ -704,8 +704,7 @@ class BookingService(BookingServiceExtMixin):
                 ]:
                     if raw_t:
                         try:
-                            from dateutil.parser import isoparse
-                            dt_val = isoparse(str(raw_t)) if not isinstance(raw_t, datetime) else raw_t
+                            dt_val = datetime.fromisoformat(str(raw_t).replace("Z", "+00:00")) if not isinstance(raw_t, datetime) else raw_t
                             if dt_val.tzinfo is None:
                                 dt_val = dt_val.replace(tzinfo=timezone.utc)
                             if setter == "dep":

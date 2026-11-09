@@ -28,9 +28,11 @@ Covers:
 """
 
 import pytest
+import uuid
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import select, func
+from sqlalchemy.sql.functions import count
 from sqlalchemy.orm import Session
 
 from app.main import app
@@ -118,7 +120,7 @@ def test_bom_transit_no_legacy_records(db_session: Session):
     ]
     for lid in legacy_ids:
         rec = db_session.execute(
-            select(AirportService).where(AirportService.id == lid)
+            select(AirportService).where(AirportService.id == uuid.UUID(lid))
         ).scalar_one_or_none()
         assert rec is None, f"Legacy transit record {lid} must not exist in the database"
 
@@ -226,7 +228,7 @@ def test_bom_non_transit_services_unmodified(db_session: Session):
     assert bom_airport is not None
 
     dep_count = db_session.execute(
-        select(func.count(AirportService.id)).where(
+        select(count(AirportService.id)).where(
             AirportService.airport_id == bom_airport.id,
             AirportService.journey_type == "DEPARTURE",
             AirportService.is_available.is_(True),
@@ -235,7 +237,7 @@ def test_bom_non_transit_services_unmodified(db_session: Session):
     assert dep_count == 6, f"Expected 6 active departure records, got {dep_count}"
 
     arr_count = db_session.execute(
-        select(func.count(AirportService.id)).where(
+        select(count(AirportService.id)).where(
             AirportService.airport_id == bom_airport.id,
             AirportService.journey_type == "ARRIVAL",
             AirportService.is_available.is_(True),

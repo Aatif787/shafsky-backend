@@ -33,69 +33,6 @@ from app.workflow.definitions import seed_default_workflows
 
 
 def get_test_db():
-    from sqlalchemy import text
-    with engine.connect() as conn:
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS airport_bookings (
-                id UUID PRIMARY KEY,
-                booking_reference VARCHAR UNIQUE NOT NULL,
-                customer_id VARCHAR NOT NULL,
-                service_package VARCHAR NOT NULL DEFAULT 'STANDARD_MEET_GREET',
-                status VARCHAR NOT NULL DEFAULT 'DRAFT',
-                total_price NUMERIC(10, 2) NOT NULL DEFAULT 0.00,
-                currency VARCHAR(3) NOT NULL DEFAULT 'USD',
-                special_instructions TEXT,
-                workflow_instance_id UUID,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-            );
-            CREATE INDEX IF NOT EXISTS ix_airport_bookings_customer ON airport_bookings (customer_id);
-            CREATE INDEX IF NOT EXISTS ix_airport_bookings_status ON airport_bookings (status);
-            CREATE UNIQUE INDEX IF NOT EXISTS ix_airport_bookings_ref ON airport_bookings (booking_reference);
-
-            CREATE TABLE IF NOT EXISTS airport_passengers (
-                id UUID PRIMARY KEY,
-                booking_id UUID NOT NULL REFERENCES airport_bookings(id) ON DELETE CASCADE,
-                full_name VARCHAR NOT NULL,
-                gender VARCHAR(10),
-                dob VARCHAR(20),
-                nationality VARCHAR(100),
-                passport_number VARCHAR(50),
-                contact_email VARCHAR,
-                contact_phone VARCHAR,
-                is_primary BOOLEAN DEFAULT FALSE NOT NULL,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-            );
-            CREATE INDEX IF NOT EXISTS ix_airport_passengers_booking ON airport_passengers (booking_id);
-
-            CREATE TABLE IF NOT EXISTS airport_flight_details (
-                id UUID PRIMARY KEY,
-                booking_id UUID NOT NULL REFERENCES airport_bookings(id) ON DELETE CASCADE,
-                airline VARCHAR NOT NULL,
-                flight_number VARCHAR NOT NULL,
-                departure_airport VARCHAR(5) NOT NULL,
-                arrival_airport VARCHAR(5) NOT NULL,
-                terminal VARCHAR(20),
-                scheduled_time TIMESTAMP WITH TIME ZONE NOT NULL,
-                flight_type VARCHAR(20) DEFAULT 'ARRIVAL' NOT NULL,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-            );
-            CREATE INDEX IF NOT EXISTS ix_airport_flights_booking ON airport_flight_details (booking_id);
-            CREATE INDEX IF NOT EXISTS ix_airport_flights_number ON airport_flight_details (flight_number);
-
-            CREATE TABLE IF NOT EXISTS airport_service_addons (
-                id UUID PRIMARY KEY,
-                booking_id UUID NOT NULL REFERENCES airport_bookings(id) ON DELETE CASCADE,
-                service_code VARCHAR NOT NULL,
-                quantity INTEGER DEFAULT 1 NOT NULL,
-                unit_price NUMERIC(10, 2) DEFAULT 0.00 NOT NULL,
-                total_price NUMERIC(10, 2) DEFAULT 0.00 NOT NULL,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-            );
-            CREATE INDEX IF NOT EXISTS ix_airport_addons_booking ON airport_service_addons (booking_id);
-        """))
-        conn.commit()
-
     try:
         Base.metadata.create_all(bind=engine, checkfirst=True)
     except Exception:

@@ -206,7 +206,8 @@ class ServiceConfigService:
         airport_code: str,
         db: Optional[Session] = None,
         journey_type: Optional[str] = None,
-        flight_type: Optional[str] = None
+        flight_type: Optional[str] = None,
+        terminal: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Return database & catalog driven configuration for specific airport hub."""
         code = (airport_code or "DEL").upper().strip()
@@ -227,6 +228,14 @@ class ServiceConfigService:
                 )
                 if journey_type:
                     stmt = stmt.where(AirportService.journey_type == journey_type.strip().upper())
+                if terminal:
+                    normalized_term = str(terminal).strip()
+                    if normalized_term in ("Terminal 3", "T3", "3"):
+                        stmt = stmt.where(AirportService.terminal.in_(["Terminal 3", "T3"]))
+                    elif normalized_term in ("Terminal 1 & 2", "T1 & T2", "T1", "T2", "1", "2", "Terminal 1", "Terminal 2"):
+                        stmt = stmt.where(AirportService.terminal.in_(["Terminal 1 & 2", "T1 & T2", "Terminal 1", "Terminal 2"]))
+                    else:
+                        stmt = stmt.where(AirportService.terminal == normalized_term)
                 if flight_type:
                     from app.services.service_airport_rules import normalize_flight_type
 
@@ -397,6 +406,7 @@ class ServiceConfigService:
             db=db,
             journey_type=j_norm,
             flight_type=catalog_flight_type,
+            terminal=terminal,
         )
 
         is_covered = bool(
@@ -544,11 +554,13 @@ class ServiceConfigService:
         except ValueError:
             authoritative_ft = client_ft  # graceful fallback for validation context
 
+        terminal_val = payload.get("terminal")
         config = cls.get_airport_configuration(
             target_airport_code,
             db=db,
             journey_type=journey_type,
             flight_type=authoritative_ft,
+            terminal=terminal_val,
         )
 
         # Check coverage in database
@@ -663,8 +675,7 @@ class ServiceConfigService:
                     if isinstance(raw, datetime):
                         dt_val = raw
                     else:
-                        from dateutil.parser import isoparse
-                        dt_val = isoparse(str(raw))
+                        dt_val = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
                     if dt_val.tzinfo is None:
                         import zoneinfo
                         dt_val = dt_val.replace(tzinfo=zoneinfo.ZoneInfo("Asia/Kolkata"))
@@ -682,8 +693,7 @@ class ServiceConfigService:
                 if isinstance(created_at_raw, datetime):
                     bca = created_at_raw
                 else:
-                    from dateutil.parser import isoparse
-                    bca = isoparse(str(created_at_raw))
+                    bca = datetime.fromisoformat(str(created_at_raw).replace("Z", "+00:00"))
                 if bca.tzinfo is None:
                     bca = bca.replace(tzinfo=timezone.utc)
             except Exception:

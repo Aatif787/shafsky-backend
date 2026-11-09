@@ -90,6 +90,7 @@ def calculate_authoritative_price_endpoint(payload: Dict[str, Any] = Body(...), 
         db=db,
         journey_type=payload.get("journey_type") or payload.get("service_type"),
         flight_type=payload.get("flight_type"),
+        terminal=payload.get("terminal"),
     )
     packages = config.get("packages", [])
     individual_services = config.get("individualServices", [])

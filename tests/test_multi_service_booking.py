@@ -106,7 +106,27 @@ def db():
         is_supported=False,
         is_active=False,
     )
-    session.add_all([del_apt, bom_apt, blr_apt, dxb_apt, lhr_apt])
+    hyd_apt = SupportedAirport(
+        id=uuid.uuid4(),
+        airport_name="Rajiv Gandhi International Airport",
+        iata_code="HYD",
+        city="Hyderabad",
+        country="India",
+        timezone="Asia/Kolkata",
+        is_supported=True,
+        is_active=True,
+    )
+    vtz_apt = SupportedAirport(
+        id=uuid.uuid4(),
+        airport_name="Visakhapatnam International Airport",
+        iata_code="VTZ",
+        city="Visakhapatnam",
+        country="India",
+        timezone="Asia/Kolkata",
+        is_supported=True,
+        is_active=True,
+    )
+    session.add_all([del_apt, bom_apt, blr_apt, dxb_apt, lhr_apt, hyd_apt, vtz_apt])
 
     # 2. Seed Services
     silver = Service(
@@ -183,6 +203,34 @@ def db():
             journey_type="TRANSIT",
             flight_type="DOMESTIC_DOMESTIC",
             price=4500.00,
+            currency="INR",
+            min_booking_notice_hours=2,
+            is_available=True,
+            display_priority=1,
+        ),
+    ])
+
+    # HYD & VTZ Services
+    session.add_all([
+        AirportService(
+            id=uuid.uuid4(),
+            airport_id=hyd_apt.id,
+            service_id=silver.id,
+            journey_type="DEPARTURE",
+            flight_type="DOMESTIC",
+            price=2500.00,
+            currency="INR",
+            min_booking_notice_hours=2,
+            is_available=True,
+            display_priority=1,
+        ),
+        AirportService(
+            id=uuid.uuid4(),
+            airport_id=vtz_apt.id,
+            service_id=silver.id,
+            journey_type="ARRIVAL",
+            flight_type="DOMESTIC",
+            price=2500.00,
             currency="INR",
             min_booking_notice_hours=2,
             is_available=True,
@@ -937,12 +985,12 @@ def test_multi_service_express_fee_bom_departure_del_arrival(db: Session):
     Multi-service booking: BOM Departure (2500.00) + DEL Arrival (2500.00).
     Scheduled flight is in 10 hours (< 24h).
     BOM Departure qualifies for 50% express fee (1250.00).
-    DEL Arrival is at DEL, so express fee is 0.
-    Total amount must be 2500 + 2500 + 1250 = 6250.00.
+    DEL Arrival qualifies for flat 500.00 express fee.
+    Total amount must be 2500 + 2500 + 1250 + 500 = 6750.00.
     """
     short_notice_dep = datetime.now(timezone.utc) + timedelta(hours=10)
     base_subtotal = 2500.00 + 2500.00
-    expected_express_fee = 1250.00
+    expected_express_fee = 1750.00  # 1250 (BOM 50%) + 500 (DEL flat)
     expected_total = base_subtotal + expected_express_fee
 
     payload = BookingCreate(
@@ -986,21 +1034,21 @@ def test_multi_service_express_fee_bom_departure_del_arrival(db: Session):
     bom_svc = next(s for s in services if s["airport_code"] == "BOM")
     del_svc = next(s for s in services if s["airport_code"] == "DEL")
     assert bom_svc["express_fee"] == 1250.00
-    assert del_svc["express_fee"] == 0.0
+    assert del_svc["express_fee"] == 500.00
 
 
 def test_multi_service_express_fee_del_departure_bom_arrival(db: Session):
     """
     Multi-service booking: DEL Departure (2500.00) + BOM Arrival (2500.00).
     Flight departs DEL in 8 hours and arrives BOM in 10 hours (< 24h).
-    DEL Departure fee = 0.
+    DEL Departure fee = flat 500.00.
     BOM Arrival fee = 50% of 2500 = 1250.00.
-    Total amount must be 2500 + 2500 + 1250 = 6250.00.
+    Total amount must be 2500 + 2500 + 500 + 1250 = 6750.00.
     """
     short_notice_dep = datetime.now(timezone.utc) + timedelta(hours=8)
     short_notice_arr = short_notice_dep + timedelta(hours=2)
     base_subtotal = 2500.00 + 2500.00
-    expected_express_fee = 1250.00
+    expected_express_fee = 1750.00  # 500 (DEL flat) + 1250 (BOM 50%)
     expected_total = base_subtotal + expected_express_fee
 
     payload = BookingCreate(
@@ -1039,7 +1087,7 @@ def test_multi_service_express_fee_del_departure_bom_arrival(db: Session):
     services = booking.metadata_json.get("available_services", [])
     del_svc = next(s for s in services if s["airport_code"] == "DEL")
     bom_svc = next(s for s in services if s["airport_code"] == "BOM")
-    assert del_svc["express_fee"] == 0.0
+    assert del_svc["express_fee"] == 500.00
     assert bom_svc["express_fee"] == 1250.00
 
 
@@ -1092,3 +1140,107 @@ def test_multi_service_express_fee_both_bom_services(db: Session):
     services = booking.metadata_json.get("available_services", [])
     for svc in services:
         assert svc["express_fee"] == 1250.00
+
+
+def test_multi_service_express_fee_bom_departure_blr_arrival_unaffected(db: Session):
+    """
+    Multi-service booking: BOM Departure (2500.00) + BLR Arrival (2500.00).
+    BLR is unaffected (express fee = 0).
+    BOM Departure fee = 50% of 2500 = 1250.00.
+    Total amount must be 2500 + 2500 + 1250 = 6250.00.
+    """
+    short_notice_dep = datetime.now(timezone.utc) + timedelta(hours=10)
+    base_subtotal = 2500.00 + 2500.00
+    expected_express_fee = 1250.00
+    expected_total = base_subtotal + expected_express_fee
+
+    payload = BookingCreate(
+        passenger_name="Siddharth Rao",
+        passenger_email="siddharth.rao@shafsky.in",
+        passenger_phone="+919876543219",
+        flight_num="AI505",
+        service_category="Airport Assistance",
+        service_type="multi_service",
+        origin_code="BOM",
+        dest_code="BLR",
+        departure_time=short_notice_dep,
+        arrival_time=short_notice_dep + timedelta(hours=2),
+        total_amount=expected_total,
+        selected_services={
+            "multi_service": True,
+            "services": [
+                {"service_type": "DEPARTURE", "airport_code": "BOM", "package": "silver"},
+                {"service_type": "ARRIVAL", "airport_code": "BLR", "package": "silver"},
+            ]
+        },
+        metadata_json={
+            "multi_service": True,
+            "services": [
+                {"service_type": "DEPARTURE", "airport_code": "BOM", "package": "silver"},
+                {"service_type": "ARRIVAL", "airport_code": "BLR", "package": "silver"},
+            ]
+        }
+    )
+
+    booking = BookingService.create_booking(db, payload)
+    assert booking is not None
+    assert float(booking.total_amount) == expected_total
+    assert booking.metadata_json.get("express_fee") == expected_express_fee
+
+    services = booking.metadata_json.get("available_services", [])
+    bom_svc = next(s for s in services if s["airport_code"] == "BOM")
+    blr_svc = next(s for s in services if s["airport_code"] == "BLR")
+    assert bom_svc["express_fee"] == 1250.00
+    assert blr_svc["express_fee"] == 0.0
+
+
+def test_multi_service_express_fee_hyd_departure_vtz_arrival(db: Session):
+    """
+    Multi-service booking: HYD Departure (2500.00) + VTZ Arrival (2500.00).
+    Both HYD and VTZ have flat 500.00 express fee under 24 hours.
+    Expected express fee: 500 + 500 = 1000.00.
+    Total amount: 5000 + 1000 = 6000.00.
+    """
+    short_notice_dep = datetime.now(timezone.utc) + timedelta(hours=6)
+    base_subtotal = 5000.00
+    expected_express_fee = 1000.00
+    expected_total = base_subtotal + expected_express_fee
+
+    payload = BookingCreate(
+        passenger_name="Ananya Reddy",
+        passenger_email="ananya.reddy@shafsky.in",
+        passenger_phone="+919876543220",
+        flight_num="6E444",
+        service_category="Airport Assistance",
+        service_type="multi_service",
+        origin_code="HYD",
+        dest_code="VTZ",
+        departure_time=short_notice_dep,
+        arrival_time=short_notice_dep + timedelta(hours=1, minutes=30),
+        total_amount=expected_total,
+        selected_services={
+            "multi_service": True,
+            "services": [
+                {"service_type": "DEPARTURE", "airport_code": "HYD", "package": "silver"},
+                {"service_type": "ARRIVAL", "airport_code": "VTZ", "package": "silver"},
+            ]
+        },
+        metadata_json={
+            "multi_service": True,
+            "services": [
+                {"service_type": "DEPARTURE", "airport_code": "HYD", "package": "silver"},
+                {"service_type": "ARRIVAL", "airport_code": "VTZ", "package": "silver"},
+            ]
+        }
+    )
+
+    booking = BookingService.create_booking(db, payload)
+    assert booking is not None
+    assert float(booking.total_amount) == expected_total
+    assert booking.metadata_json.get("express_fee") == expected_express_fee
+
+    services = booking.metadata_json.get("available_services", [])
+    hyd_svc = next(s for s in services if s["airport_code"] == "HYD")
+    vtz_svc = next(s for s in services if s["airport_code"] == "VTZ")
+    assert hyd_svc["express_fee"] == 500.00
+    assert vtz_svc["express_fee"] == 500.00
