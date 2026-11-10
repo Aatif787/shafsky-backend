@@ -149,7 +149,7 @@ def confirmed_booking_payment_result(
                 }
             )
         except Exception:
-            pass
+            logger.exception("[PaymentService] Audit log failed for DUPLICATE_PAYMENT_DETECTED")
         return {
             "success": True,
             "status": "DUPLICATE_PAYMENT_FLAGGED",

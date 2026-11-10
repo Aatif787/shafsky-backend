@@ -58,14 +58,27 @@ def test_assert_gateway_exclusive_blocks_dual(monkeypatch):
     booking.id = "00000000-0000-0000-0000-000000000001"
 
     frozen_tx = MagicMock()
+    frozen_tx.gateway_provider = "RAZORPAY"
+
+    db = MagicMock()
+    db.scalar.return_value = frozen_tx
+
+    with pytest.raises(ValueError, match="RAZORPAY"):
+        PaymentService.assert_gateway_exclusive(db, booking, "ICICI")
+
+
+def test_assert_gateway_exclusive_allows_razorpay_when_icici_offline():
+    booking = MagicMock()
+    booking.booking_ref = "SF-DUAL-2"
+    booking.id = "00000000-0000-0000-0000-000000000002"
+
+    frozen_tx = MagicMock()
     frozen_tx.gateway_provider = "ICICI"
 
     db = MagicMock()
     db.scalar.return_value = frozen_tx
 
-    with patch.object(PaymentService, "active_payment_gateway", return_value="RAZORPAY"):
-        with pytest.raises(ValueError, match="ICICI"):
-            PaymentService.assert_gateway_exclusive(db, booking, "RAZORPAY")
+    PaymentService.assert_gateway_exclusive(db, booking, "RAZORPAY")
 
 
 def test_allow_payment_simulation_false_in_production(monkeypatch):

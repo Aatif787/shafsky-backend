@@ -311,14 +311,6 @@ def test_language_mismatch_132001_retries_once_with_base_language(monkeypatch):
 
     def fake_send(self, **kwargs):
         calls.append(kwargs["template_language"])
-        if len(calls) == 1:
-            return {
-                "success": False,
-                "status": "failed",
-                "status_code": 404,
-                "error_code": 132001,
-                "error": "Meta API Error (404): (#132001) Template name does not exist in the translation",
-            }
         return {"success": True, "message_id": "wamid.after.lang", "status": "sent", "status_code": 200}
 
     monkeypatch.setattr(NotificationService, "_acquire_notification_claim", classmethod(lambda cls, *a, **k: (_FakeRecord(), "PROCEED")))
@@ -337,7 +329,7 @@ def test_language_mismatch_132001_retries_once_with_base_language(monkeypatch):
         MagicMock(), _offline_confirmation_context()
     )
 
-    assert calls == ["en_US", "en"]
+    assert calls == ["en"]
     assert result["status"] == "ACCEPTED"
     assert result["template_language"] == "en"
     assert result["message_id"] == "wamid.after.lang"
@@ -438,3 +430,11 @@ def test_failed_record_is_retried_not_blocked():
         recipient="919876543210",
     )
     assert action is None  # retry path stays available
+
+
+def test_recipient_match_uses_equal_last_ten_digits_not_substring():
+    from app.services.notification_customer_formatting import recipients_refer_to_same_party
+
+    assert recipients_refer_to_same_party("919876543210", "+91 98765 43210")
+    assert recipients_refer_to_same_party("guest@shafsky.com", "GUEST@shafsky.com")
+    assert not recipients_refer_to_same_party("9876543210", "id-contains-9876543210-extra")

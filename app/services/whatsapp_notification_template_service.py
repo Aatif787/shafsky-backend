@@ -18,6 +18,11 @@ from html import escape
 from datetime import datetime
 from typing import Any, Dict, Optional, List, Tuple
 
+from app.utils.service_display import (
+    is_multi_service_placeholder,
+    resolve_service_display_name,
+)
+
 
 def _safe(value: Any, default: str = "Not provided") -> str:
     """Escapes strings for safe HTML embedding, returning clean fallback if empty."""
@@ -70,7 +75,7 @@ def extract_operations_alert_fields(data: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     # 2. Service
-    service = (
+    raw_service = (
         data.get("service_name")
         or data.get("serviceName")
         or data.get("service_type")
@@ -80,6 +85,10 @@ def extract_operations_alert_fields(data: Dict[str, Any]) -> Dict[str, Any]:
         or data.get("service")
         or "Not provided"
     )
+    resolved_svc = resolve_service_display_name(raw_service, data)
+    if is_multi_service_placeholder(resolved_svc):
+        resolved_svc = data.get("service_category") or "Meet & Greet"
+    service = str(resolved_svc).strip()
 
     # 3. Customer
     customer = (

@@ -99,12 +99,8 @@ async def create_booking(
     from app.services.payment_service import PaymentService
     from app.schemas.payment import PaymentInitiateRequest, PaymentMethod
     
-    gw_choice = (
-        getattr(payload, "preferred_gateway", None)
-        or (payload.metadata_json.get("preferred_gateway") if payload.metadata_json else None)
-        or (payload.metadata_json.get("payment_gateway") if payload.metadata_json else None)
-        or "RAZORPAY"
-    )
+    # Live checkout is Razorpay while ICICI hosted page is offline.
+    gw_choice = "RAZORPAY"
     init_request = PaymentInitiateRequest(
         entity_type="AIRPORT_BOOKING",
         entity_id=booking.booking_ref,

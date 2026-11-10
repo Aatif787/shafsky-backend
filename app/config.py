@@ -133,16 +133,16 @@ class Settings(BaseSettings):
     WHATSAPP_DEPT2_NOTIFY_PHONE: str = os.getenv("WHATSAPP_DEPT2_NOTIFY_PHONE", "")
     WHATSAPP_DEPT3_NOTIFY_PHONE: str = os.getenv("WHATSAPP_DEPT3_NOTIFY_PHONE", "")
     WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE: str = os.getenv("WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE", "")
-    WHATSAPP_DEPARTMENT_TEMPLATE_LANG: str = os.getenv("WHATSAPP_DEPARTMENT_TEMPLATE_LANG", "en_US")
+    WHATSAPP_DEPARTMENT_TEMPLATE_LANG: str = os.getenv("WHATSAPP_DEPARTMENT_TEMPLATE_LANG", "en")
     # Customer WhatsApp Confirmation Notifications
     WHATSAPP_CUSTOMER_CONFIRMATION_TEMPLATE: str = os.getenv("WHATSAPP_CUSTOMER_CONFIRMATION_TEMPLATE", "")
-    WHATSAPP_CUSTOMER_TEMPLATE_LANG: str = os.getenv("WHATSAPP_CUSTOMER_TEMPLATE_LANG", "en_US")
+    WHATSAPP_CUSTOMER_TEMPLATE_LANG: str = os.getenv("WHATSAPP_CUSTOMER_TEMPLATE_LANG", "en")
     SUPPORT_PHONE: str = os.getenv("SUPPORT_PHONE", "+91 9599087959")
     WHATSAPP_BOOKING_PHONE: str = os.getenv("WHATSAPP_BOOKING_PHONE", os.getenv("WHATSAPP_BOT_PHONE", "917428300207"))
     WHATSAPP_BOT_PHONE: str = WHATSAPP_BOOKING_PHONE
 
     # AeroDataBox RapidAPI Configuration
-    AERODATABOX_API_KEY: str = os.getenv("AERODATABOX_API_KEY", "60574a0b26msh0ed79f408fc4760p1a9e23jsnb2eccb3f41d4")
+    AERODATABOX_API_KEY: str = os.getenv("AERODATABOX_API_KEY", "")
     AERODATABOX_BASE_URL: str = os.getenv("AERODATABOX_BASE_URL", "https://aerodatabox.p.rapidapi.com")
     RAPIDAPI_HOST: str = os.getenv("RAPIDAPI_HOST", "aerodatabox.p.rapidapi.com")
     AERODATABOX_TIMEOUT: float = float(os.getenv("AERODATABOX_TIMEOUT", "6.0"))
@@ -157,7 +157,7 @@ class Settings(BaseSettings):
     PAYMENT_GATEWAY: str = "RAZORPAY"
 
     # Signed guest payment-session tokens (retry / create-order / ICICI initiate)
-    PAYMENT_SESSION_SECRET: str = os.getenv("PAYMENT_SESSION_SECRET", "") or os.getenv("JWT_SECRET", "")
+    PAYMENT_SESSION_SECRET: str = os.getenv("PAYMENT_SESSION_SECRET", "")
     PAYMENT_SESSION_TTL_MINUTES: int = int(os.getenv("PAYMENT_SESSION_TTL_MINUTES", "120"))
     # Explicit opt-in for simulated Razorpay signatures/orders (never in production)
     ALLOW_PAYMENT_SIMULATION: bool = os.getenv("ALLOW_PAYMENT_SIMULATION", "").lower() in (

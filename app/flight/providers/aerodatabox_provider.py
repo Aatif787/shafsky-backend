@@ -111,7 +111,7 @@ class AeroDataBoxProvider(FlightProvider):
         self.api_key = (
             api_key
             or getattr(settings, "AERODATABOX_API_KEY", "")
-            or "60574a0b26msh0ed79f408fc4760p1a9e23jsnb2eccb3f41d4"
+            or ""
         )
         self.base_url = (
             (base_url or getattr(settings, "AERODATABOX_BASE_URL", "https://aerodatabox.p.rapidapi.com"))

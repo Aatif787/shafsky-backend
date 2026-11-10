@@ -17,6 +17,7 @@ from app.services.notification_customer_formatting import (
     build_template_parameter,
     _format_datetime,
     build_customer_summary,
+    recipients_refer_to_same_party,
 )
 
 
@@ -220,6 +221,27 @@ class NotificationCustomerConfirmationMixin:
             return None
 
         from app.services.whatsapp_department_service import WhatsAppDepartmentService
+        from app.utils.service_display import (
+            is_multi_service_placeholder,
+            resolve_service_display_name,
+        )
+
+        combined_meta = dict(meta) if isinstance(meta, dict) else {}
+        sel_svcs = getattr(booking, "selected_services", None)
+        if isinstance(sel_svcs, dict):
+            combined_meta.setdefault("selected_services", sel_svcs)
+        elif isinstance(sel_svcs, list):
+            combined_meta.setdefault("services", sel_svcs)
+
+        raw_svc = (
+            context.get("service_name")
+            or context.get("service_type")
+            or getattr(booking, "service_type", None)
+            or getattr(booking, "service_package", None)
+        )
+        resolved_svc = resolve_service_display_name(raw_svc, combined_meta)
+        if is_multi_service_placeholder(resolved_svc):
+            resolved_svc = context.get("service_category") or getattr(booking, "service_category", None) or "Meet & Greet"
 
         raw_total = getattr(booking, "total_amount", None)
         if raw_total is None:
@@ -231,7 +253,10 @@ class NotificationCustomerConfirmationMixin:
             "passenger_email": context.get("passenger_email") or resolve_customer_email(booking=booking),
             "passenger_phone": context.get("passenger_phone") or resolve_customer_phone(booking=booking),
             "service_category": context.get("service_category") or getattr(booking, "service_category", None) or "Airport Assistance",
-            "service_type": context.get("service_type") or getattr(booking, "service_type", None) or getattr(booking, "service_package", None),
+            "service_type": resolved_svc,
+            "service_name": resolved_svc,
+            "metadata_json": combined_meta,
+            "details": combined_meta,
             "total_amount": float(raw_total) if raw_total is not None else 0.0,
             "currency": getattr(booking, "currency", None) or "INR",
             "status": "CONFIRMED",
@@ -290,6 +315,8 @@ class NotificationCustomerConfirmationMixin:
             # The approved template `shafsky_booking_confirmation` is registered on the
             # WhatsApp Business Account as language "en". Sending "en_US" for it returns
             # 132001 (template does not exist in the requested language).
+            template_lang = "en"
+        elif template_lang.replace("-", "_").lower() == "en_us":
             template_lang = "en"
 
         return template_name, template_lang
@@ -643,10 +670,7 @@ class NotificationCustomerConfirmationMixin:
             if ref != booking_ref.strip():
                 continue
             record_recipient = (record.recipient_email or record.recipient_phone or "").strip()
-            if rec_clean and not (
-                record_recipient == rec_clean
-                or (len(rec_clean) >= 10 and rec_clean[-10:] in record_recipient)
-            ):
+            if rec_clean and not recipients_refer_to_same_party(rec_clean, record_recipient):
                 continue
             if record.status in (
                 NotificationStatus.DELIVERED,

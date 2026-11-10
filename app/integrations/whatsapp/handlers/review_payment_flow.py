@@ -27,6 +27,7 @@ from app.utils.customer_email import (
     REAL_EMAIL_HELP as _REAL_EMAIL_HELP,
 )
 
+from app.utils.service_display import resolve_service_display_name
 from app.integrations.whatsapp.handlers.base import BaseFlowMixin
 
 logger = logging.getLogger(__name__)
@@ -770,7 +771,7 @@ class ReviewPaymentFlowMixin(BaseFlowMixin):
                     "airport_code": meta.get("service_airport") or booking.origin_code or booking.dest_code,
                     "journey_type": meta.get("journey_type") or booking.service_type,
                     "service_type": booking.service_type,
-                    "service_name": meta.get("package") or booking.service_type,
+                    "service_name": resolve_service_display_name(meta.get("package") or booking.service_type, meta),
                     "departure_time": booking.departure_time or booking.arrival_time,
                     "arrival_time": booking.arrival_time,
                     "total_amount": booking.total_amount or 0.0,

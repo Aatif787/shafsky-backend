@@ -42,6 +42,11 @@ else:
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from app.utils.service_display import (
+    is_multi_service_placeholder,
+    resolve_service_display_name,
+)
+
 logger = logging.getLogger(__name__)
 
 STORAGE_BUCKET = "booking-docs"
@@ -458,10 +463,15 @@ def _booking_meta(booking) -> Dict[str, str]:
         or meta.get("travel_type")
         or (getattr(first_flight, "flight_type", None) if first_flight else None)
     )
+    from app.utils.service_display import resolve_service_display_name
+
     service_name = _safe_text(
-        meta.get("package")
-        or getattr(booking, "service_type", None)
-        or getattr(booking, "service_package", None)
+        resolve_service_display_name(
+            meta.get("package")
+            or getattr(booking, "service_type", None)
+            or getattr(booking, "service_package", None),
+            meta,
+        )
     )
     origin = _safe_text(
         meta.get("origin_iata")
@@ -1005,6 +1015,20 @@ def _notification_context(
         or raw_b_meta.get("passenger_count")
         or (getattr(booking, "total_passengers", None) if booking else None)
     )
+    combined_meta = dict(raw_b_meta)
+    combined_meta.update(meta)
+    if booking:
+        sel_svcs = getattr(booking, "selected_services", None)
+        if isinstance(sel_svcs, dict):
+            combined_meta.setdefault("selected_services", sel_svcs)
+        elif isinstance(sel_svcs, list):
+            combined_meta.setdefault("services", sel_svcs)
+
+    raw_svc = meta.get("service_name") or getattr(booking, "service_type", None) or getattr(booking, "service_package", None)
+    resolved_svc = resolve_service_display_name(raw_svc, combined_meta)
+    if is_multi_service_placeholder(resolved_svc):
+        resolved_svc = getattr(booking, "service_category", None) or "Meet & Greet"
+
     ctx: Dict[str, Any] = {
         "booking_ref": booking_ref,
         "passenger_name": resolve_customer_name(booking=booking, invoice=invoice, transaction=transaction, default="Valued Guest"),
@@ -1027,8 +1051,10 @@ def _notification_context(
         ) if booking else None,
         "airport_code": meta.get("airport") or (getattr(booking, "airport_code", None) if booking else None),
         "journey_type": meta.get("journey") or (getattr(booking, "service_type", None) or getattr(booking, "service_package", None) if booking else None),
-        "service_type": (getattr(booking, "service_type", None) or getattr(booking, "service_package", None)) if booking else None,
-        "service_name": meta.get("service_name") or (getattr(booking, "service_type", None) or getattr(booking, "service_package", None) if booking else None),
+        "service_type": resolved_svc,
+        "service_name": resolved_svc,
+        "metadata_json": combined_meta,
+        "details": combined_meta,
         "departure_time": dep_iso,
         "arrival_time": arr_iso,
         "terminal": meta.get("terminal") or (getattr(booking, "terminal", None) if booking else None),
