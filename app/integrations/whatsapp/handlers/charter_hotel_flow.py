@@ -203,6 +203,13 @@ class CharterHotelFlowMixin:
     @classmethod
     def _notify_charter_desk(cls, conv: WhatsAppConversation, request_reference: str) -> None:
         """Stage 3: land the enquiry on the charter desk with full details."""
+        from app.services.notification_routing_service import database_routing_active
+
+        if database_routing_active():
+            logger.info(
+                "[WhatsApp Charter] Charter desk alert skipped. Database service routing owns this enquiry."
+            )
+            return
         officer_phone = os.getenv("WHATSAPP_OFFICER_NOTIFY_PHONE", "919599087959").strip()
         metadata = conv.flight_details_json if isinstance(conv.flight_details_json, dict) else {}
         team_msg = (

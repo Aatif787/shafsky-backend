@@ -787,6 +787,13 @@ def trigger_booking_whatsapp_notifications(booking: Any) -> None:
     settings = s.settings
     logger = s.logger
     try:
+        from app.services.notification_routing_service import database_routing_active
+
+        if database_routing_active():
+            logger.info(
+                "[WhatsApp Notification Hook] Officer alert skipped. Database service routing owns operations alerts."
+            )
+            return
         if not whatsapp_client.is_configured():
             return
         officer_phone = (

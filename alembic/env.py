@@ -50,6 +50,7 @@ import app.models.lounge_models
 import app.models.ticketing
 import app.models.system_events
 import app.models.admin_notification
+import app.models.notification_routing
 
 target_metadata = Base.metadata
 

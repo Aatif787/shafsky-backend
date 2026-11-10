@@ -46,7 +46,7 @@ def test_format_booking_notification_exact_layout(sample_meet_and_greet_context)
         "✈️ *NEW BOOKING / ENQUIRY — Meet & Greet / Lounge*\n\n"
         "• *Reference*: `SHF-20261101-BE8FC46A`\n"
         "• *Service*: Meet & Greet — Multi Service\n"
-        "• *Customer*: Aariz Farooqui\n"
+        "• *Customer*: *Aariz Farooqui*\n"
         "• *Contact*: +91 0846931247 | aariz.farooqui@gmail.com\n"
         "• *Guests / Pax / Passengers*: 1\n"
         "• *Airport / Location*: DEL\n"
@@ -91,7 +91,7 @@ def test_format_booking_notification_ground_transport():
     assert "🚗 *NEW TRANSPORT ENQUIRY" in output
     assert "• *Reference*: `SHF-20261031-342205`" in output
     assert "• *Service*: Ground Transport" in output
-    assert "• *Customer*: Test Customer" in output
+    assert "• *Customer*: *Test Customer*" in output
     assert "• *Contact*: +91 77058 81139 | test@gmail.com" in output
     assert "• *Route*: Village East Mehram Nagar Road → Lucknow BKT" in output
     assert "• *Vehicle*: Mercedes-Benz E-Class (ID: merc-e-class)" in output

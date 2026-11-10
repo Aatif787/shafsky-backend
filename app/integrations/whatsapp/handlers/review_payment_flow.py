@@ -574,6 +574,13 @@ class ReviewPaymentFlowMixin(BaseFlowMixin):
         link_sent: bool,
         quote_request: bool = False,
     ) -> None:
+        from app.services.notification_routing_service import database_routing_active
+
+        if database_routing_active():
+            logger.info(
+                "[WhatsApp Booking] Officer alert skipped. Database service routing owns this booking event."
+            )
+            return
         officer_phone = (
             os.getenv("WHATSAPP_BOOKING_NOTIFY_PHONE_1")
             or os.getenv("WHATSAPP_OFFICER_NOTIFY_PHONE")

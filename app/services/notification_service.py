@@ -791,7 +791,14 @@ class NotificationService(NotificationServiceExtMixin):
             or "919599087957"
         ).strip()
 
-        if not officer_phone:
+        from app.models.notification_routing import ROUTING_MODE_DATABASE
+        from app.services.notification_routing_service import (
+            deliver_operations_text,
+            resolve_operations_recipients,
+        )
+
+        routing = resolve_operations_recipients("Ground Transport")
+        if routing["routing_mode"] != ROUTING_MODE_DATABASE and not officer_phone:
             logger.warning(
                 "Ground Transport enquiry WhatsApp skipped: staff phone is not configured",
                 extra={"booking_ref": booking_ref},
@@ -903,6 +910,17 @@ class NotificationService(NotificationServiceExtMixin):
         lines.append("⚡ *Action*: Team to contact customer manually for availability & quotation.")
 
         message_body = "\n".join(lines)
+
+        if routing["routing_mode"] == ROUTING_MODE_DATABASE:
+            logger.info(
+                "Dispatching Ground Transport enquiry through database routing for %s",
+                booking_ref,
+            )
+            return deliver_operations_text(
+                routing["recipients"],
+                message_body,
+                lambda phone, body: whatsapp_client.send_text_message(phone, body),
+            )
 
         try:
             logger.info("Dispatching Ground Transport enquiry WhatsApp notification for %s", booking_ref)
