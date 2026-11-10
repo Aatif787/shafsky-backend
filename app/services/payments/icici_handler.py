@@ -47,7 +47,17 @@ def retry_booking_payment(
         raise ValueError(f"Booking '{booking_ref}' is cancelled/rejected and cannot be paid.")
 
     frozen = cls.frozen_gateway_for_booking(db, booking)
-    gateway_to_use = frozen or cls.active_payment_gateway(preferred=preferred_gateway)
+    # ICICI hosted checkout is offline — never pin retries to a frozen ICICI session.
+    if frozen == "ICICI":
+        logger.warning(
+            "[Payments] Ignoring frozen ICICI session for %s; retrying on Razorpay.",
+            booking_ref,
+        )
+        frozen = None
+    preferred = (preferred_gateway or "RAZORPAY").strip().upper()
+    if preferred == "ICICI":
+        preferred = "RAZORPAY"
+    gateway_to_use = frozen or cls.active_payment_gateway(preferred=preferred)
     if gateway_to_use == "ICICI":
         return cls._retry_icici_payment(db, booking, user_id=user_id)
 

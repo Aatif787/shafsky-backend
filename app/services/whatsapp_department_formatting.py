@@ -10,6 +10,10 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.config import settings
+from app.utils.service_display import (
+    is_multi_service_placeholder,
+    resolve_service_display_name,
+)
 
 logger = logging.getLogger("shafsky.whatsapp_department")
 
@@ -211,6 +215,52 @@ class WhatsAppDepartmentFormattingMixin:
         ]
 
     @classmethod
+    def _resolve_service_text(
+        cls,
+        context: Dict[str, Any],
+        service_label: str,
+        service_type_raw: Optional[str] = None,
+    ) -> Tuple[str, str]:
+        """
+        Resolves (service_type, service_text) cleanly without internal multi_service placeholders.
+        Extracts package details (e.g. Platinum, Gold, Elite, Elite Plus) from context, metadata_json,
+        selected_services, or details. Never outputs 'multi_service'.
+        """
+        meta = context.get("metadata_json") if isinstance(context.get("metadata_json"), dict) else {}
+        resolution_dict = dict(context)
+        if isinstance(meta, dict):
+            for k, v in meta.items():
+                if k not in resolution_dict or not resolution_dict[k]:
+                    resolution_dict[k] = v
+
+        raw_svc = (
+            context.get("service_name")
+            or service_type_raw
+            or context.get("package")
+            or meta.get("package")
+            or service_label
+        )
+        resolved_pkg = resolve_service_display_name(raw_svc, resolution_dict)
+        if is_multi_service_placeholder(resolved_pkg):
+            resolved_pkg = resolve_service_display_name("multi_service", resolution_dict)
+            if is_multi_service_placeholder(resolved_pkg):
+                resolved_pkg = None
+
+        service_type = str(resolved_pkg or service_label).strip()
+
+        if service_label and service_type and service_label.lower() not in service_type.lower():
+            service_text = f"{service_label} — {service_type}"
+        else:
+            service_text = service_type or service_label
+
+        if is_multi_service_placeholder(service_text) or "multi_service" in service_text.lower() or "multi-service" in service_text.lower():
+            service_text = resolve_service_display_name(service_text, resolution_dict)
+            if is_multi_service_placeholder(service_text) or "multi_service" in str(service_text).lower() or "multi-service" in str(service_text).lower():
+                service_text = service_label or "Meet & Greet"
+
+        return service_type, service_text
+
+    @classmethod
     def _build_shafsky_clean_booking_alert_components(
         cls, context: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
@@ -231,18 +281,7 @@ class WhatsAppDepartmentFormattingMixin:
         category = context.get("service_category") or context.get("serviceCategory")
         service_type_raw = context.get("service_type") or context.get("serviceType")
         department, service_label = cls.resolve_department(category, service_type_raw, context)
-
-        service_type = str(
-            context.get("service_name")
-            or service_type_raw
-            or context.get("package")
-            or service_label
-        ).strip()
-
-        if service_label and service_type and service_label.lower() not in service_type.lower():
-            service_text = f"{service_label} — {service_type}"
-        else:
-            service_text = service_type or service_label
+        service_type, service_text = cls._resolve_service_text(context, service_label, service_type_raw)
 
         if department == Department.DEPARTMENT_1:
             dept_title = "Meet & Greet / Lounge"
@@ -333,18 +372,7 @@ class WhatsAppDepartmentFormattingMixin:
         category = context.get("service_category") or context.get("serviceCategory")
         service_type_raw = context.get("service_type") or context.get("serviceType")
         _, service_label = cls.resolve_department(category, service_type_raw, context)
-
-        service_type = str(
-            context.get("service_name")
-            or service_type_raw
-            or context.get("package")
-            or service_label
-        ).strip()
-
-        if service_label and service_type and service_label.lower() not in service_type.lower():
-            service_text = f"{service_label} — {service_type}"
-        else:
-            service_text = service_type or service_label
+        service_type, service_text = cls._resolve_service_text(context, service_label, service_type_raw)
 
         raw_origin = str(context.get("origin_code") or context.get("origin") or context.get("airport_code") or "").strip()
         raw_dest = str(context.get("dest_code") or context.get("destination") or "").strip()
@@ -411,18 +439,7 @@ class WhatsAppDepartmentFormattingMixin:
         category = context.get("service_category") or context.get("serviceCategory")
         service_type_raw = context.get("service_type") or context.get("serviceType")
         _, service_label = cls.resolve_department(category, service_type_raw, context)
-
-        service_type = str(
-            context.get("service_name")
-            or service_type_raw
-            or context.get("package")
-            or service_label
-        ).strip()
-
-        if service_label and service_type and service_label.lower() not in service_type.lower():
-            service_text = f"{service_label} — {service_type}"
-        else:
-            service_text = service_type or service_label
+        service_type, service_text = cls._resolve_service_text(context, service_label, service_type_raw)
 
         raw_origin = str(context.get("origin_code") or context.get("origin") or context.get("airport_code") or "").strip()
         raw_dest = str(context.get("dest_code") or context.get("destination") or "").strip()
@@ -598,17 +615,7 @@ class WhatsAppDepartmentFormattingMixin:
             or 1
         )
 
-        service_type = str(
-            context.get("service_name")
-            or context.get("service_type")
-            or context.get("package")
-            or service_label
-        ).strip()
-
-        if service_label and service_type and service_label.lower() not in service_type.lower():
-            service_text = f"{service_label} — {service_type}"
-        else:
-            service_text = service_type or service_label
+        service_type, service_text = cls._resolve_service_text(context, service_label, context.get("service_type"))
 
         raw_origin = str(context.get("origin_code") or context.get("origin") or context.get("airport_code") or "").strip()
         raw_dest = str(context.get("dest_code") or context.get("destination") or "").strip()
@@ -809,12 +816,7 @@ class WhatsAppDepartmentFormattingMixin:
         booking_ref = str(context.get("booking_ref") or context.get("bookingRef") or "N/A").strip()
         customer_name = str(context.get("passenger_name") or context.get("passengerName") or "").strip()
         customer_phone = str(context.get("passenger_phone") or context.get("passengerPhone") or "").strip()
-        service_type = str(
-            context.get("service_name")
-            or context.get("service_type")
-            or context.get("package")
-            or ""
-        ).strip()
+        service_type, _ = cls._resolve_service_text(context, service_label, context.get("service_type"))
         airport = str(
             context.get("airport_code")
             or context.get("origin_code")

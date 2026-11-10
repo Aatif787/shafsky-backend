@@ -123,6 +123,7 @@ def test_1_rapid_payment_authorized_and_captured_single_fulfillment(db_session):
     with patch("app.services.pdf_service.generate_invoice_pdf_bytes", return_value=b"%PDF-1.4 test"), \
          patch("app.services.pdf_service.upload_invoice_pdf", return_value=True), \
          patch("app.integrations.whatsapp.client.whatsapp_client.send_text_message", return_value={"success": True, "message_id": "wamid.1"}), \
+         patch("app.integrations.whatsapp.client.whatsapp_client.send_message", return_value={"success": True, "message_id": "wamid.1"}), \
          patch("app.integrations.whatsapp.client.whatsapp_client.send_document_message", return_value={"success": True, "message_id": "wamid.2"}), \
          patch("app.services.notification_service.NotificationService.send_email_resend_sync", return_value={"status": "DELIVERED", "message_id": "resend_1"}):
 
@@ -194,6 +195,7 @@ def test_2_concurrent_fulfill_paid_invoice_calls(db_session):
             with patch("app.services.pdf_service.generate_invoice_pdf_bytes", return_value=b"%PDF-1.4 test"), \
                  patch("app.services.pdf_service.upload_invoice_pdf", return_value=True), \
                  patch("app.integrations.whatsapp.client.whatsapp_client.send_text_message", return_value={"success": True, "message_id": "wamid.1"}), \
+                 patch("app.integrations.whatsapp.client.whatsapp_client.send_message", return_value={"success": True, "message_id": "wamid.1"}), \
                  patch("app.integrations.whatsapp.client.whatsapp_client.send_document_message", return_value={"success": True, "message_id": "wamid.2"}), \
                  patch("app.services.notification_service.NotificationService.send_email_resend_sync", return_value={"status": "DELIVERED", "message_id": "resend_1"}):
                 res = fulfill_paid_invoice(db, str(invoice.id))
@@ -290,6 +292,7 @@ def test_5_payment_link_paid_and_captured_single_fulfillment(db_session):
     with patch("app.services.pdf_service.generate_invoice_pdf_bytes", return_value=b"%PDF-1.4 test"), \
          patch("app.services.pdf_service.upload_invoice_pdf", return_value=True), \
          patch("app.integrations.whatsapp.client.whatsapp_client.send_text_message", return_value={"success": True, "message_id": "wamid.1"}), \
+         patch("app.integrations.whatsapp.client.whatsapp_client.send_message", return_value={"success": True, "message_id": "wamid.1"}), \
          patch("app.integrations.whatsapp.client.whatsapp_client.send_document_message", return_value={"success": True, "message_id": "wamid.2"}), \
          patch("app.services.notification_service.NotificationService.send_email_resend_sync", return_value={"status": "DELIVERED", "message_id": "resend_1"}):
 
@@ -331,6 +334,7 @@ def test_6_order_paid_and_captured_single_fulfillment(db_session):
     with patch("app.services.pdf_service.generate_invoice_pdf_bytes", return_value=b"%PDF-1.4 test"), \
          patch("app.services.pdf_service.upload_invoice_pdf", return_value=True), \
          patch("app.integrations.whatsapp.client.whatsapp_client.send_text_message", return_value={"success": True, "message_id": "wamid.1"}), \
+         patch("app.integrations.whatsapp.client.whatsapp_client.send_message", return_value={"success": True, "message_id": "wamid.1"}), \
          patch("app.integrations.whatsapp.client.whatsapp_client.send_document_message", return_value={"success": True, "message_id": "wamid.2"}), \
          patch("app.services.notification_service.NotificationService.send_email_resend_sync", return_value={"status": "DELIVERED", "message_id": "resend_1"}):
 

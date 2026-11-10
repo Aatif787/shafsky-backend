@@ -39,6 +39,11 @@ def _force_customer_freeform_window(monkeypatch):
         "_customer_service_window_open",
         classmethod(lambda cls, db, phone: True),
     )
+    monkeypatch.setattr(
+        whatsapp_client,
+        "send_message",
+        lambda *args, **kwargs: {"success": True, "message_id": "wamid.template"},
+    )
 
 
 def _purge_customer_notifications():
@@ -426,7 +431,7 @@ def test_template_dispatch_when_configured(monkeypatch):
     kwargs = mock_send_template.call_args[1]
     assert kwargs["to_phone"] == "919876543210"
     assert kwargs["template_name"] == "shafsky_booking_confirmation"
-    assert kwargs["template_language"] == "en_US"
+    assert kwargs["template_language"] == "en"
     assert len(kwargs["template_components"]) == 1
     assert kwargs["template_components"][0]["type"] == "body"
     assert "Deepak Sharma" in kwargs["template_components"][0]["parameters"][0]["text"]

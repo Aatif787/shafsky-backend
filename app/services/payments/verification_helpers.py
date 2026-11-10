@@ -23,6 +23,7 @@ from app.services.admin_service import AdminService
 from app.services.notification_service import NotificationService
 from app.services.pdf_service import schedule_invoice_fulfillment
 from app.services.payments.whatsapp_links import mark_payment_link_terminal
+from app.utils.service_display import resolve_service_display_name
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -317,7 +318,7 @@ def _build_booking_confirmation_fallback_context(booking, *, invoice_attached: b
         "airport_code": meta.get("service_airport") or getattr(booking, "airport_code", None) or getattr(booking, "origin_code", None) or getattr(booking, "dest_code", None),
         "journey_type": meta.get("journey_type") or getattr(booking, "service_type", None) or getattr(booking, "service_package", None),
         "service_type": getattr(booking, "service_type", None) or getattr(booking, "service_package", None),
-        "service_name": __import__("app.utils.service_display", fromlist=["x"]).resolve_service_display_name(meta.get("package") or getattr(booking, "service_type", None) or getattr(booking, "service_package", None), meta),
+        "service_name": resolve_service_display_name(meta.get("package") or getattr(booking, "service_type", None) or getattr(booking, "service_package", None), meta),
         "departure_time": dep_iso,
         "terminal": meta.get("terminal") or getattr(booking, "terminal", None),
         "total_amount": float(raw_total) if raw_total is not None else 0.0,
@@ -369,7 +370,7 @@ def sync_whatsapp_conversation_on_payment(db: Session, resolved_booking_ref: Opt
             conv.updated_at = datetime.now(timezone.utc)
             db.commit()
     except Exception as wa_err:
-        logger.debug(f"[PaymentService] WhatsApp session sync notice: {wa_err}")
+        logger.warning("[PaymentService] WhatsApp session sync failed: %s", wa_err)
 
 
 def handle_payment_authorized(
@@ -426,7 +427,7 @@ def handle_payment_authorized(
             },
         )
     except Exception:
-        pass
+        logger.exception("[PaymentService] Timeline write failed for PAYMENT_AUTHORIZED")
 
     db.commit()
     return {
@@ -511,7 +512,7 @@ def handle_payment_failed(
             details={"order_id": order_id, "payment_id": payment_id, "event": event_name}
         )
     except Exception:
-        pass
+        logger.exception("[PaymentService] Audit log failed for PAYMENT_FAILED")
 
     db.commit()
     return {

@@ -19,6 +19,29 @@ def _ns():
     return ns_mod
 
 
+def recipients_refer_to_same_party(left: str, right: str) -> bool:
+    """True when two stored recipient strings are the same email or same phone.
+
+    Phone comparison uses the last 10 digits of each side (equality), never a
+    substring `in` check, so a 10-digit suffix cannot match inside a longer id.
+    """
+    a = (left or "").strip()
+    b = (right or "").strip()
+    if not a or not b:
+        return False
+    if a.lower() == b.lower():
+        return True
+    if any(ch.isalpha() for ch in a) or any(ch.isalpha() for ch in b):
+        return False
+    digits_a = "".join(ch for ch in a if ch.isdigit())
+    digits_b = "".join(ch for ch in b if ch.isdigit())
+    if not digits_a or not digits_b:
+        return False
+    if digits_a == digits_b:
+        return True
+    return len(digits_a) >= 10 and len(digits_b) >= 10 and digits_a[-10:] == digits_b[-10:]
+
+
 # Meta Cloud API rejects any template body parameter that contains a new-line or
 # tab character, or more than four consecutive spaces. A formatted multi-line
 # alert therefore cannot be used directly as {{1}} -- the request is accepted by

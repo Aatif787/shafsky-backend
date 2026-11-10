@@ -26,6 +26,7 @@ from app.models.schema import NotificationRecord, NotificationStatus, UserNotifi
 from app.schemas.notification import NotificationSendRequest
 from app.services.notification_service_ext import NotificationServiceExtMixin
 from app.services.notification_templates import NotificationTemplateEngine
+from app.services.notification_customer_formatting import recipients_refer_to_same_party
 
 
 class _WhatsAppClientProxy:
@@ -595,7 +596,7 @@ class NotificationService(NotificationServiceExtMixin):
             if b_ref == ref_clean:
                 if rec_clean:
                     r_rec = (r.recipient_email or r.recipient_phone or "").strip()
-                    if r_rec == rec_clean or (len(rec_clean) >= 10 and rec_clean[-10:] in r_rec):
+                    if recipients_refer_to_same_party(rec_clean, r_rec):
                         matching_records.append(r)
                 else:
                     matching_records.append(r)
@@ -945,7 +946,20 @@ class NotificationService(NotificationServiceExtMixin):
 
         try:
             from app.services.whatsapp_department_service import WhatsAppDepartmentService
-            wa_res = WhatsAppDepartmentService.dispatch_booking_or_enquiry_notification(context)
+            from app.utils.service_display import (
+                is_multi_service_placeholder,
+                resolve_service_display_name,
+            )
+
+            enriched_context = dict(context)
+            raw_svc = context.get("service_name") or context.get("service_type")
+            resolved_svc = resolve_service_display_name(raw_svc, context)
+            if not is_multi_service_placeholder(resolved_svc):
+                enriched_context["service_name"] = resolved_svc
+                if is_multi_service_placeholder(enriched_context.get("service_type")):
+                    enriched_context["service_type"] = resolved_svc
+
+            wa_res = WhatsAppDepartmentService.dispatch_booking_or_enquiry_notification(enriched_context)
             summary["admin"].append({
                 "channel": "WHATSAPP",
                 "status": wa_res.get("status", "DISPATCHED"),

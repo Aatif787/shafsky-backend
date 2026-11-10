@@ -4,26 +4,24 @@ Handles determining active gateway (Razorpay / ICICI), checkout payload preparat
 and cross-gateway session exclusivity checks.
 """
 
-import os
 import logging
 from typing import Dict, Any, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import select, desc
 
 from app.models.payment import PaymentTransaction, PaymentStatus
-from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 
 def active_payment_gateway(preferred: Optional[str] = None) -> str:
-    """RAZORPAY (primary/default) or ICICI when selected and credentials are present.
+    """Live web checkout is Razorpay.
 
-    Reads process env on every call so a restarted process / updated env is honored
-    without relying on a stale Settings singleton.
+    ICICI hosted checkout is offline. Env PAYMENT_GATEWAY=ICICI is ignored so
+    Render can keep ICICI credentials without sending customers there.
+    Explicit preferred=ICICI still works for /icici/initiate and tests.
     """
     from app.providers.icici_provider import icici_provider
-    from app.providers.razorpay_provider import razorpay_provider
 
     if preferred:
         pref = preferred.strip().upper()
@@ -37,20 +35,6 @@ def active_payment_gateway(preferred: Optional[str] = None) -> str:
                 "PAYMENT_GATEWAY=ICICI requested but ICICI_MID / ICICI_KEY / ICICI_AGG_ID are not configured."
             )
 
-    requested = (
-        os.getenv("PRIMARY_PAYMENT_GATEWAY")
-        or os.getenv("PAYMENT_GATEWAY")
-        or getattr(settings, "PAYMENT_GATEWAY", None)
-        or "RAZORPAY"
-    )
-    requested = str(requested).strip().upper()
-    if requested == "ICICI":
-        icici_provider.reload()
-        if icici_provider.is_configured():
-            return "ICICI"
-        raise ValueError(
-            "PAYMENT_GATEWAY=ICICI but ICICI_MID / ICICI_KEY / ICICI_AGG_ID are not configured."
-        )
     return "RAZORPAY"
 
 
@@ -120,11 +104,19 @@ def assert_gateway_exclusive(db: Session, booking, requested_gateway: str) -> No
     """Reject dual Razorpay+ICICI sessions for new initiates on the same pending booking."""
     requested = (requested_gateway or "").strip().upper()
     frozen = frozen_gateway_for_booking(db, booking)
-    if frozen and frozen != requested:
-        raise ValueError(
-            f"Booking already has an active {frozen} payment session. "
-            f"Cannot start a {requested} checkout for the same booking."
+    if not frozen or frozen == requested:
+        return
+    # ICICI is offline: allow a Razorpay checkout on a booking that still has
+    # an open ICICI session so the customer can complete payment.
+    if frozen == "ICICI" and requested == "RAZORPAY":
+        logger.warning(
+            "Allowing Razorpay checkout despite an open ICICI session (ICICI offline)."
         )
+        return
+    raise ValueError(
+        f"Booking already has an active {frozen} payment session. "
+        f"Cannot start a {requested} checkout for the same booking."
+    )
 
 
 def sanitize_gateway_response(gateway_response: Any) -> Optional[Dict[str, Any]]:

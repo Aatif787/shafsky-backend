@@ -35,8 +35,8 @@ class WhatsAppDepartmentExtMixin:
 
         template_lang = getattr(settings, "WHATSAPP_DEPARTMENT_TEMPLATE_LANG", None)
         if template_lang is None:
-            template_lang = os.getenv("WHATSAPP_DEPARTMENT_TEMPLATE_LANG", "en_US")
-        template_lang = (template_lang or "en_US").strip()
+            template_lang = os.getenv("WHATSAPP_DEPARTMENT_TEMPLATE_LANG", "en")
+        template_lang = (template_lang or "en").strip()
 
         from app.core.runtime import in_automated_test_runtime
         if not template_name or template_name.lower() in ("none", "off", "unset"):
@@ -49,7 +49,7 @@ class WhatsAppDepartmentExtMixin:
             # template so alerts are never blocked by the 24-hour window (131047).
             template_name = "shafsky_operations_alert"
             if not template_lang:
-                template_lang = "en_US"
+                template_lang = "en"
             logger.warning(
                 "[WhatsApp Notify] using the approved default template '%s' (%s) for guaranteed delivery.",
                 template_name,

@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import StaleDataError
 
+from app.utils.service_display import resolve_service_display_name
 from app.models.schema import Booking, BookingStatus
 
 
@@ -600,7 +601,7 @@ class BookingServiceExtMixin:
                     "passenger_count": meta.get("passenger_count") or meta.get("guest_count"),
                     "service_category": getattr(booking, "service_category", None),
                     "service_type": booking.service_type,
-                    "service_name": __import__("app.utils.service_display", fromlist=["x"]).resolve_service_display_name(meta.get("package") or booking.service_type, meta),
+                    "service_name": resolve_service_display_name(meta.get("package") or booking.service_type, meta),
                     "flight_num": booking.flight_num,
                     "origin_code": booking.origin_code,
                     "dest_code": booking.dest_code,

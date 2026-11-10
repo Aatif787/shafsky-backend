@@ -33,7 +33,15 @@ class NotificationTemplateEngine:
         
         airport = _safe(data.get("airportCode") or data.get("airport_code") or origin)
         journey = _safe(data.get("journeyType") or data.get("journey_type") or data.get("serviceType") or data.get("service_type"))
-        service = _safe(data.get("serviceName") or data.get("service_name") or data.get("package") or journey)
+        raw_service_val = data.get("serviceName") or data.get("service_name") or data.get("package") or journey
+        from app.utils.service_display import (
+            is_multi_service_placeholder,
+            resolve_service_display_name,
+        )
+        resolved_service_val = resolve_service_display_name(raw_service_val, data)
+        if is_multi_service_placeholder(resolved_service_val):
+            resolved_service_val = journey or "Airport Assistance"
+        service = _safe(resolved_service_val)
         phone = _safe(data.get("passengerPhone") or data.get("passenger_phone") or data.get("phone"))
         terminal = _safe(data.get("terminal"))
         status = _safe(data.get("status"), "PENDING")
