@@ -16,6 +16,7 @@ from app.booking.exceptions import ConcurrencyException
 from app.booking.service_validator import ServiceValidator
 from app.services.booking_service_ext import BookingServiceExtMixin
 from app.utils.customer_email import is_acceptable_customer_email, REAL_EMAIL_HELP
+from app.utils.service_display import resolve_service_display_name
 
 logger = logging.getLogger("shafsky.booking")
 
@@ -846,7 +847,7 @@ class BookingService(BookingServiceExtMixin):
                         "airport_code": meta.get("service_airport") or new_booking.origin_code or new_booking.dest_code,
                         "journey_type": meta.get("journey_type") or new_booking.service_type,
                         "service_type": new_booking.service_type,
-                        "service_name": meta.get("package") or new_booking.service_type,
+                        "service_name": resolve_service_display_name(meta.get("package") or new_booking.service_type, meta),
                         "departure_time": new_booking.departure_time.isoformat() if new_booking.departure_time else None,
                         "arrival_time": new_booking.arrival_time.isoformat() if new_booking.arrival_time else None,
                         "terminal": meta.get("terminal"),

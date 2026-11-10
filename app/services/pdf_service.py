@@ -458,10 +458,15 @@ def _booking_meta(booking) -> Dict[str, str]:
         or meta.get("travel_type")
         or (getattr(first_flight, "flight_type", None) if first_flight else None)
     )
+    from app.utils.service_display import resolve_service_display_name
+
     service_name = _safe_text(
-        meta.get("package")
-        or getattr(booking, "service_type", None)
-        or getattr(booking, "service_package", None)
+        resolve_service_display_name(
+            meta.get("package")
+            or getattr(booking, "service_type", None)
+            or getattr(booking, "service_package", None),
+            meta,
+        )
     )
     origin = _safe_text(
         meta.get("origin_iata")

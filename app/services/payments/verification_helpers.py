@@ -317,7 +317,7 @@ def _build_booking_confirmation_fallback_context(booking, *, invoice_attached: b
         "airport_code": meta.get("service_airport") or getattr(booking, "airport_code", None) or getattr(booking, "origin_code", None) or getattr(booking, "dest_code", None),
         "journey_type": meta.get("journey_type") or getattr(booking, "service_type", None) or getattr(booking, "service_package", None),
         "service_type": getattr(booking, "service_type", None) or getattr(booking, "service_package", None),
-        "service_name": meta.get("package") or getattr(booking, "service_type", None) or getattr(booking, "service_package", None),
+        "service_name": __import__("app.utils.service_display", fromlist=["x"]).resolve_service_display_name(meta.get("package") or getattr(booking, "service_type", None) or getattr(booking, "service_package", None), meta),
         "departure_time": dep_iso,
         "terminal": meta.get("terminal") or getattr(booking, "terminal", None),
         "total_amount": float(raw_total) if raw_total is not None else 0.0,

@@ -770,7 +770,7 @@ class ReviewPaymentFlowMixin(BaseFlowMixin):
                     "airport_code": meta.get("service_airport") or booking.origin_code or booking.dest_code,
                     "journey_type": meta.get("journey_type") or booking.service_type,
                     "service_type": booking.service_type,
-                    "service_name": meta.get("package") or booking.service_type,
+                    "service_name": __import__("app.utils.service_display", fromlist=["x"]).resolve_service_display_name(meta.get("package") or booking.service_type, meta),
                     "departure_time": booking.departure_time or booking.arrival_time,
                     "arrival_time": booking.arrival_time,
                     "total_amount": booking.total_amount or 0.0,
