@@ -264,6 +264,7 @@ from app.routers import lounge_router
 from app.routers import booking_draft_router
 from app.routers import admin_notification_router
 from app.routers import contact_settings_router
+from app.routers import notification_routing_router
 from app.ai import router as ai_router
 from app.integrations.whatsapp.router import router as whatsapp_router
 
@@ -282,6 +283,7 @@ app.include_router(workflow_admin_router.router)
 app.include_router(airport_router.router)
 app.include_router(config_router.router)
 app.include_router(contact_settings_router.router)
+app.include_router(notification_routing_router.router)
 app.include_router(ticketing_router.router)
 app.include_router(payment_router.router)
 app.include_router(ai_router.router)

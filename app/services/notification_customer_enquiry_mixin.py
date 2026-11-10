@@ -53,7 +53,14 @@ class NotificationCustomerEnquiryMixin:
             or "919599087959"
         ).strip()
 
-        if not officer_phone:
+        from app.models.notification_routing import ROUTING_MODE_DATABASE
+        from app.services.notification_routing_service import (
+            deliver_operations_text,
+            resolve_operations_recipients,
+        )
+
+        routing = resolve_operations_recipients("Round Trip")
+        if routing["routing_mode"] != ROUTING_MODE_DATABASE and not officer_phone:
             logger.warning(
                 "Round Trip enquiry WhatsApp skipped: staff phone is not configured",
                 extra={"booking_ref": booking_ref},
@@ -114,6 +121,14 @@ class NotificationCustomerEnquiryMixin:
 
         message_body = "\n".join(lines)
 
+        if routing["routing_mode"] == ROUTING_MODE_DATABASE:
+            logger.info("Dispatching Round Trip enquiry through database routing for %s", booking_ref)
+            return deliver_operations_text(
+                routing["recipients"],
+                message_body,
+                lambda phone, body: whatsapp_client.send_text_message(phone, body),
+            )
+
         try:
             logger.info("Dispatching Round Trip enquiry WhatsApp notification for %s", booking_ref)
             result = whatsapp_client.send_text_message(officer_phone, message_body)
@@ -161,7 +176,14 @@ class NotificationCustomerEnquiryMixin:
             or "919599087957"
         ).strip()
 
-        if not officer_phone:
+        from app.models.notification_routing import ROUTING_MODE_DATABASE
+        from app.services.notification_routing_service import (
+            deliver_operations_text,
+            resolve_operations_recipients,
+        )
+
+        routing = resolve_operations_recipients("Ticketing")
+        if routing["routing_mode"] != ROUTING_MODE_DATABASE and not officer_phone:
             logger.warning(
                 "Ticketing enquiry WhatsApp skipped: staff phone is not configured",
                 extra={"booking_ref": booking_ref},
@@ -214,6 +236,14 @@ class NotificationCustomerEnquiryMixin:
 
         message_body = "\n".join(lines)
 
+        if routing["routing_mode"] == ROUTING_MODE_DATABASE:
+            logger.info("Dispatching Ticketing enquiry through database routing for %s", booking_ref)
+            return deliver_operations_text(
+                routing["recipients"],
+                message_body,
+                lambda phone, body: whatsapp_client.send_text_message(phone, body),
+            )
+
         try:
             logger.info("Dispatching Ticketing enquiry WhatsApp notification for %s", booking_ref)
             result = whatsapp_client.send_text_message(officer_phone, message_body)
@@ -261,7 +291,14 @@ class NotificationCustomerEnquiryMixin:
             or "919599087957"
         ).strip()
 
-        if not officer_phone:
+        from app.models.notification_routing import ROUTING_MODE_DATABASE
+        from app.services.notification_routing_service import (
+            deliver_operations_text,
+            resolve_operations_recipients,
+        )
+
+        routing = resolve_operations_recipients("Lounge")
+        if routing["routing_mode"] != ROUTING_MODE_DATABASE and not officer_phone:
             logger.warning(
                 "Lounge enquiry WhatsApp skipped: staff phone is not configured",
                 extra={"booking_ref": booking_ref},
@@ -310,6 +347,14 @@ class NotificationCustomerEnquiryMixin:
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"⚡ *Action Required:* Please contact the guest with lounge availability and rates."
         )
+
+        if routing["routing_mode"] == ROUTING_MODE_DATABASE:
+            logger.info("Dispatching Lounge enquiry through database routing for %s", booking_ref)
+            return deliver_operations_text(
+                routing["recipients"],
+                message_body,
+                lambda phone, body: whatsapp_client.send_text_message(phone, body),
+            )
 
         try:
             result = whatsapp_client.send_text_message(

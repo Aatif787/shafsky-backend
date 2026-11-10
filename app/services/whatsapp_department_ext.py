@@ -237,11 +237,16 @@ class WhatsAppDepartmentExtMixin:
         Reports what is missing instead of failing silently at booking time.
         """
         whatsapp_client = _wds().whatsapp_client
-        recipients = cls.get_recipient_phone_numbers()
+        from app.models.notification_routing import ROUTING_MODE_DATABASE
+        from app.services.notification_routing_service import resolve_operations_recipients
+
+        decision = resolve_operations_recipients(None)
+        routing_mode = decision["routing_mode"]
+        recipients = [] if routing_mode == ROUTING_MODE_DATABASE else decision["recipients"]
         template_name, template_lang = cls._resolve_template()
         problems: List[str] = []
 
-        if not recipients:
+        if routing_mode != ROUTING_MODE_DATABASE and not recipients:
             problems.append(
                 "No recipient numbers: set WHATSAPP_BOOKING_NOTIFY_PHONE_1..5 in the deployment environment."
             )
@@ -257,6 +262,7 @@ class WhatsAppDepartmentExtMixin:
 
         return {
             "ok": not problems,
+            "routing_mode": routing_mode,
             "recipients_configured": len(recipients),
             "recipients_masked": [cls._mask_phone(phone) for phone in recipients],
             "template": template_name or None,
@@ -298,8 +304,21 @@ class WhatsAppDepartmentExtMixin:
                     "booking_ref": booking_ref,
                 }
 
-            # 2. Resolve recipients
-            recipients = cls.get_recipient_phone_numbers()
+            # 2. Resolve recipients once for this event.
+            from app.services.notification_routing_service import resolve_operations_recipients
+
+            service_key = str(
+                context.get("service_category") or context.get("serviceCategory") or ""
+            ).strip()
+            decision = resolve_operations_recipients(service_key)
+            recipients = decision["recipients"]
+            logger.info(
+                "[WhatsApp Notify] Routing mode %s for booking %s service %s (%d recipients).",
+                decision["routing_mode"],
+                booking_ref,
+                service_key or "(none)",
+                len(recipients),
+            )
             if not recipients:
                 logger.warning(
                     "[WhatsApp Notify] Notification skipped for %s: no recipient phones configured.",
@@ -466,8 +485,19 @@ class WhatsAppDepartmentExtMixin:
                     "request_reference": ref,
                 }
 
-            # 2. Resolve recipients
-            recipients = cls.get_recipient_phone_numbers()
+            # 2. Resolve recipients once for this event.
+            from app.services.notification_routing_service import resolve_operations_recipients
+
+            service_key = str(getattr(charter_req, "service_category", None) or "Private Charter").strip()
+            decision = resolve_operations_recipients(service_key)
+            recipients = decision["recipients"]
+            logger.info(
+                "[WhatsApp Notify] Routing mode %s for charter %s service %s (%d recipients).",
+                decision["routing_mode"],
+                ref,
+                service_key or "(none)",
+                len(recipients),
+            )
             if not recipients:
                 logger.warning(
                     "[WhatsApp Notify] Charter notification skipped for %s: no recipient phones configured.",

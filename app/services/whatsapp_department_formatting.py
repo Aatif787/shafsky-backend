@@ -711,7 +711,7 @@ class WhatsAppDepartmentFormattingMixin:
             "",
             f"• *Reference*: `{booking_ref}`",
             f"• *Service*: {service_text}",
-            f"• *Customer*: {customer_name}",
+            f"• *Customer*: *{customer_name}*",
             f"• *Contact*: {contact_str}",
             f"• *Guests / Pax / Passengers*: {final_pax}",
         ]
@@ -904,7 +904,7 @@ class WhatsAppDepartmentFormattingMixin:
             "🛩️ *NEW AIR CHARTER REQUEST — Charter Desk*",
             "",
             f"• *Reference*: `{ref}`",
-            f"• *Customer*: {name}",
+            f"• *Customer*: *{name}*",
             f"• *Contact*: {phone} | {email}",
             f"• *Trip Type*: {trip_type}",
             f"• *Route*: {origin} ➔ {destination}",
