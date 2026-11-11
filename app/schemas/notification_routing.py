@@ -187,9 +187,15 @@ class ServiceKeyListResponse(BaseModel):
     data: List[ServiceKeyItem]
 
 
+class LiveRecipient(BaseModel):
+    label: str
+    phone_number: str
+
+
 class RoutingSettingsResponse(BaseModel):
     routing_mode: str
     settings_id: uuid.UUID
+    live_recipients: List[LiveRecipient] = []
 
 
 class RoutingSettingsEnvelope(BaseModel):

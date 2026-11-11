@@ -553,7 +553,39 @@ class NotificationRoutingService:
         if created:
             cls._persist(db)
             db.refresh(row)
-        return {"routing_mode": row.routing_mode, "settings_id": row.id}
+        return {
+            "routing_mode": row.routing_mode,
+            "settings_id": row.id,
+            "live_recipients": cls._live_recipients(db, row.routing_mode),
+        }
+
+    @classmethod
+    def _live_recipients(cls, db: Session, routing_mode: str) -> List[Dict[str, str]]:
+        """Numbers that receive an operations alert for the current routing mode."""
+        if routing_mode != ROUTING_MODE_DATABASE:
+            from app.services.whatsapp_department_formatting import WhatsAppDepartmentFormattingMixin
+
+            return WhatsAppDepartmentFormattingMixin.describe_recipient_phone_numbers()
+
+        rows = db.execute(
+            select(NotificationRecipient.label, NotificationRecipient.phone_number)
+            .join(
+                NotificationServiceRoute,
+                NotificationServiceRoute.recipient_id == NotificationRecipient.id,
+            )
+            .where(
+                NotificationServiceRoute.is_active.is_(True),
+                NotificationRecipient.is_active.is_(True),
+            )
+            .order_by(NotificationRecipient.created_at, NotificationRecipient.id)
+        ).all()
+        described: List[Dict[str, str]] = []
+        seen = set()
+        for label, phone in rows:
+            if phone and phone not in seen:
+                seen.add(phone)
+                described.append({"label": (label or "").strip() or "Recipient", "phone_number": phone})
+        return described
 
     @classmethod
     def update_settings(

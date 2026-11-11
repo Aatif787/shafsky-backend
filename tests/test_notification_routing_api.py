@@ -11,6 +11,7 @@ from __future__ import annotations
 import inspect
 import socket
 import uuid
+from types import SimpleNamespace
 from urllib.parse import quote, urlparse
 
 import pytest
@@ -186,6 +187,28 @@ def test_admin_and_operations_manager_are_forbidden(client, tokens):
     assert [row["id"] for row in after] == [row["id"] for row in before]
     assert after[0]["label"] == "Keep"
     assert settings_row["routing_mode"] == "env"
+
+
+def test_settings_shows_the_backend_numbers_receiving_notifications(client, tokens, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.whatsapp_department_service.settings",
+        SimpleNamespace(
+            WHATSAPP_BOOKING_NOTIFY_PHONE_1="9811111111",
+            WHATSAPP_BOOKING_NOTIFY_PHONE_2="9822222222",
+            WHATSAPP_BOOKING_NOTIFY_PHONE_3="",
+            WHATSAPP_BOOKING_NOTIFY_PHONE_4="",
+            WHATSAPP_BOOKING_NOTIFY_PHONE_5="",
+            WHATSAPP_OFFICER_NOTIFY_PHONE="9833333333",
+        ),
+    )
+
+    data = client.get(f"{PREFIX}/settings", headers=_auth(tokens["super"])).json()["data"]
+
+    assert data["routing_mode"] == "env"
+    assert data["live_recipients"] == [
+        {"label": "Environment recipient 1", "phone_number": "919811111111"},
+        {"label": "Environment recipient 2", "phone_number": "919822222222"},
+    ]
 
 
 def test_super_admin_can_manage_recipients_and_routes(client, tokens, db, users):

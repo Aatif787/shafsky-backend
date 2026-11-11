@@ -115,6 +115,11 @@ class WhatsAppDepartmentFormattingMixin:
         - WHATSAPP_BOOKING_NOTIFY_PHONE_5
         Fallback: If none of the 5 are configured, checks legacy WHATSAPP_OFFICER_NOTIFY_PHONE.
         """
+        return [item["phone_number"] for item in cls.describe_recipient_phone_numbers()]
+
+    @classmethod
+    def describe_recipient_phone_numbers(cls) -> List[Dict[str, str]]:
+        """The numbers live env-mode dispatch sends to, in delivery order."""
         env_vars = [
             "WHATSAPP_BOOKING_NOTIFY_PHONE_1",
             "WHATSAPP_BOOKING_NOTIFY_PHONE_2",
@@ -122,26 +127,32 @@ class WhatsAppDepartmentFormattingMixin:
             "WHATSAPP_BOOKING_NOTIFY_PHONE_4",
             "WHATSAPP_BOOKING_NOTIFY_PHONE_5",
         ]
-        recipients: List[str] = []
+        described: List[Dict[str, str]] = []
+        seen = set()
         current_settings = _get_settings()
-        for var in env_vars:
+        for index, var in enumerate(env_vars, start=1):
             val = getattr(current_settings, var, None)
             if val is None:
                 val = os.getenv(var, "")
             norm = cls.normalize_phone_number(val)
-            if norm and norm not in recipients:
-                recipients.append(norm)
+            if norm and norm not in seen:
+                seen.add(norm)
+                described.append({
+                    "label": f"Environment recipient {index}",
+                    "phone_number": norm,
+                })
 
-        # Fallback if none of the 5 are configured
-        if not recipients:
+        if not described:
             legacy_officer = getattr(current_settings, "WHATSAPP_OFFICER_NOTIFY_PHONE", None)
             if legacy_officer is None:
                 legacy_officer = os.getenv("WHATSAPP_OFFICER_NOTIFY_PHONE", "")
             norm = cls.normalize_phone_number(legacy_officer)
             if norm:
-                recipients.append(norm)
-
-        return recipients
+                described.append({
+                    "label": "Officer notification number",
+                    "phone_number": norm,
+                })
+        return described
 
     @classmethod
     def _mask_phone(cls, phone: str) -> str:
