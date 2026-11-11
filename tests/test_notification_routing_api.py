@@ -512,6 +512,78 @@ def test_failed_commit_does_not_keep_a_recipient(db, users):
     assert db.scalars(select(AuditLog)).all() == []
 
 
+def test_endpoints_create_missing_routing_tables(monkeypatch):
+    import app.services.notification_routing_service as routing_module
+    from sqlalchemy import inspect as sa_inspect
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    UserAuth.__table__.create(engine)
+    AuditLog.__table__.create(engine)
+    session = sessionmaker(bind=engine)()
+    monkeypatch.setattr(routing_module, "_schema_ready", False)
+    try:
+        user = _add_user(session, Role.SUPER_ADMIN, "missing-tables@shafsky.test")
+        app = FastAPI()
+        app.include_router(notification_routing_router.router)
+        app.dependency_overrides[get_db] = lambda: session
+        with TestClient(app) as test_client:
+            unauthenticated = test_client.get(f"{PREFIX}/recipients")
+            assert unauthenticated.status_code == 401
+            assert "notification_recipients" not in sa_inspect(engine).get_table_names()
+
+            token = _token(user, "SUPER_ADMIN")
+            recipients = test_client.get(f"{PREFIX}/recipients", headers=_auth(token))
+            routing = test_client.get(f"{PREFIX}/settings", headers=_auth(token))
+
+        assert recipients.status_code == 200
+        assert recipients.json()["data"] == []
+        assert routing.status_code == 200
+        assert routing.json()["data"]["routing_mode"] == "env"
+        assert {
+            "notification_recipients",
+            "notification_service_routes",
+            "notification_settings",
+        } <= set(sa_inspect(engine).get_table_names())
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_postgres_missing_routing_tables_are_created_in_rolled_back_schema(monkeypatch):
+    import app.services.notification_routing_service as routing_module
+    from sqlalchemy import inspect as sa_inspect, text
+
+    url = _local_postgres_test_url()
+    if url is None:
+        pytest.skip("Local Postgres test database is not running. Production was not migrated.")
+
+    engine = create_engine(url)
+    schema = f"routing_check_{uuid.uuid4().hex[:8]}"
+    connection = engine.connect()
+    transaction = connection.begin()
+    monkeypatch.setattr(routing_module, "_schema_ready", False)
+    try:
+        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+        connection.execute(text(f'SET LOCAL search_path TO "{schema}"'))
+        session = sessionmaker(bind=connection)()
+        NotificationRoutingService.ensure_schema(session)
+        tables = set(sa_inspect(connection).get_table_names(schema=schema))
+        assert {
+            "notification_recipients",
+            "notification_service_routes",
+            "notification_settings",
+        } <= tables
+        session.close()
+    finally:
+        transaction.rollback()
+        connection.close()
+        engine.dispose()
+
+
 def test_main_app_mounts_the_router():
     from app.main import app
 

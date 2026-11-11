@@ -14,11 +14,12 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from app.config import settings
+from app.database import Base
 from app.models.notification_routing import (
     NOTIFICATION_SETTINGS_ROW_ID,
     ROUTING_MODE_DATABASE,
@@ -76,7 +77,42 @@ def _as_uuid(value: Any) -> uuid.UUID:
     return uuid.UUID(str(value))
 
 
+_ROUTING_TABLES = (
+    NotificationRecipient.__table__,
+    NotificationServiceRoute.__table__,
+    NotificationSettings.__table__,
+)
+_schema_ready = False
+
+
 class NotificationRoutingService:
+    @staticmethod
+    def ensure_schema(db: Session) -> None:
+        """Create the routing tables when a deploy skipped migration d3e4f5a6b7c8.
+
+        Same DDL and names as that migration, so a later alembic upgrade skips
+        the tables. No settings row is written here; reads create it as env.
+        """
+        global _schema_ready
+        if _schema_ready:
+            return
+        bind = db.get_bind()
+        try:
+            existing = set(inspect(bind).get_table_names())
+            missing = [table for table in _ROUTING_TABLES if table.name not in existing]
+            if missing:
+                logger.warning(
+                    "Notification routing tables missing (%s). Creating them.",
+                    ", ".join(table.name for table in missing),
+                )
+                Base.metadata.create_all(bind=bind, tables=missing, checkfirst=True)
+        except Exception:
+            logger.exception("Notification routing tables could not be created.")
+            existing = set(inspect(bind).get_table_names())
+            if any(table.name not in existing for table in _ROUTING_TABLES):
+                raise
+        _schema_ready = True
+
     @staticmethod
     def _postgres(db: Session) -> bool:
         bind = db.get_bind()

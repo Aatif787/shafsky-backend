@@ -32,7 +32,18 @@ from app.schemas.notification_routing import (
 from app.security.dependencies import get_required_super_admin
 from app.services.notification_routing_service import NotificationRoutingService
 
-router = APIRouter(prefix="/api/admin/whatsapp-notifications", tags=["WhatsApp Notification Routing"])
+def _routing_schema(
+    db: Session = Depends(get_db),
+    _admin: Dict[str, Any] = Depends(get_required_super_admin),
+) -> None:
+    NotificationRoutingService.ensure_schema(db)
+
+
+router = APIRouter(
+    prefix="/api/admin/whatsapp-notifications",
+    tags=["WhatsApp Notification Routing"],
+    dependencies=[Depends(_routing_schema)],
+)
 
 
 def _ip(request: Request) -> Optional[str]:
