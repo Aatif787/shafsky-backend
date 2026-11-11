@@ -310,7 +310,7 @@ class WhatsAppDepartmentExtMixin:
             service_key = str(
                 context.get("service_category") or context.get("serviceCategory") or ""
             ).strip()
-            decision = resolve_operations_recipients(service_key)
+            decision = resolve_operations_recipients(service_key, context=context)
             recipients = decision["recipients"]
             logger.info(
                 "[WhatsApp Notify] Routing mode %s for booking %s service %s (%d recipients).",
@@ -489,7 +489,7 @@ class WhatsAppDepartmentExtMixin:
             from app.services.notification_routing_service import resolve_operations_recipients
 
             service_key = str(getattr(charter_req, "service_category", None) or "Private Charter").strip()
-            decision = resolve_operations_recipients(service_key)
+            decision = resolve_operations_recipients(service_key, context=charter_dict)
             recipients = decision["recipients"]
             logger.info(
                 "[WhatsApp Notify] Routing mode %s for charter %s service %s (%d recipients).",

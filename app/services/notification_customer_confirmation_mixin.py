@@ -247,6 +247,8 @@ class NotificationCustomerConfirmationMixin:
         if raw_total is None:
             raw_total = getattr(booking, "total_price", None)
         ops_context = dict(context)
+        if db is not None:
+            ops_context["db"] = db
         ops_context.update({
             "booking_ref": getattr(booking, "booking_ref", None) or getattr(booking, "booking_reference", None) or booking_ref,
             "passenger_name": context.get("passenger_name") or resolve_customer_name(booking=booking, default="Valued Guest"),

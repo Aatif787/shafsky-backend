@@ -885,17 +885,52 @@ def _dedupe_normalized_phones(raw_numbers: Sequence[Any]) -> List[str]:
 
 
 def resolve_operations_recipients(
-    service_key: Optional[str] = None,
+    service_key: Union[str, Dict[str, Any], None] = None,
     db: Optional[Session] = None,
+    context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Read routing once and return the phones for this operations event.
 
-    A missing settings row, an unreadable settings table, or any mode other
-    than database keeps the existing environment recipients, including the
-    officer fallback inside get_recipient_phone_numbers. Database mode never
-    uses that fallback: an empty or unknown service key, or a failed route
-    query, returns nobody.
+    Database mode is the authoritative source of truth:
+    1. Resolves service_key via NotificationServiceMapper across website and WhatsApp flows.
+    2. Queries active recipients on active routes for the resolved service.
+    3. Normalizes phone numbers to international format (E.164) and deduplicates them.
+    4. If no active recipient is assigned to a service, sends to NOBODY (never falls back).
+    5. Unknown service keys log a routing failure and return nobody.
+
+    Env mode is only used if routing_mode is explicitly set to 'env' or if settings table is missing.
     """
+    ctx: Dict[str, Any] = {}
+    raw_service: Optional[str] = None
+    if isinstance(service_key, dict):
+        ctx = dict(service_key)
+        raw_service = (
+            ctx.get("service_category")
+            or ctx.get("serviceCategory")
+            or ctx.get("service_name")
+            or ctx.get("selected_service_name")
+            or ""
+        )
+        if db is None and "db" in ctx:
+            db = ctx.get("db")
+    elif isinstance(service_key, str):
+        raw_service = service_key.strip()
+        if context and isinstance(context, dict):
+            ctx = dict(context)
+            if db is None and "db" in ctx:
+                db = ctx.get("db")
+    elif context and isinstance(context, dict):
+        ctx = dict(context)
+        raw_service = (
+            ctx.get("service_category")
+            or ctx.get("serviceCategory")
+            or ctx.get("service_name")
+            or ctx.get("selected_service_name")
+            or ""
+        )
+        if db is None and "db" in ctx:
+            db = ctx.get("db")
+
     owned = False
     if db is None:
         try:
@@ -921,35 +956,51 @@ def resolve_operations_recipients(
         if row is None or row.routing_mode != ROUTING_MODE_DATABASE:
             return _env_recipients()
 
-        key = str(service_key or "").strip()
-        if not key:
+        from app.services.notification_service_mapping import NotificationServiceMapper
+
+        # If caller passed an exact service key with no extra context, check that exact key
+        if raw_service and raw_service in NOTIFICATION_SERVICE_KEY_SET and not ctx:
+            candidates = [raw_service]
+        else:
+            candidates = NotificationServiceMapper.resolve_candidate_service_keys(
+                raw_service, ctx
+            )
+
+        if not candidates:
             return {"routing_mode": ROUTING_MODE_DATABASE, "recipients": []}
 
         try:
-            rows = db.execute(
-                select(NotificationRecipient.phone_number)
-                .join(
-                    NotificationServiceRoute,
-                    NotificationServiceRoute.recipient_id == NotificationRecipient.id,
-                )
-                .where(
-                    NotificationServiceRoute.service_key == key,
-                    NotificationServiceRoute.is_active.is_(True),
-                    NotificationRecipient.is_active.is_(True),
-                )
-                .order_by(NotificationRecipient.created_at, NotificationRecipient.id)
-            ).all()
-        except Exception:
+            selected_rows = []
+            for candidate in candidates:
+                rows = db.execute(
+                    select(NotificationRecipient.phone_number)
+                    .join(
+                        NotificationServiceRoute,
+                        NotificationServiceRoute.recipient_id == NotificationRecipient.id,
+                    )
+                    .where(
+                        NotificationServiceRoute.service_key == candidate,
+                        NotificationServiceRoute.is_active.is_(True),
+                        NotificationRecipient.is_active.is_(True),
+                    )
+                    .order_by(NotificationRecipient.created_at, NotificationRecipient.id)
+                ).all()
+                if rows:
+                    selected_rows = rows
+                    break
+
+            raw_phones = [item[0] for item in selected_rows]
+            return {
+                "routing_mode": ROUTING_MODE_DATABASE,
+                "recipients": _dedupe_normalized_phones(raw_phones),
+            }
+        except Exception as exc:
             logger.warning(
-                "Notification routes could not be read for %s. Database mode sends to nobody for this event.",
-                key,
+                "Notification routes could not be read for %s: %s. Database mode sends to nobody for this event.",
+                candidates,
+                exc,
             )
             return {"routing_mode": ROUTING_MODE_DATABASE, "recipients": []}
-
-        return {
-            "routing_mode": ROUTING_MODE_DATABASE,
-            "recipients": _dedupe_normalized_phones([item[0] for item in rows]),
-        }
     finally:
         if owned and db is not None:
             db.close()

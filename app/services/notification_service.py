@@ -797,7 +797,7 @@ class NotificationService(NotificationServiceExtMixin):
             resolve_operations_recipients,
         )
 
-        routing = resolve_operations_recipients("Ground Transport")
+        routing = resolve_operations_recipients("Ground Transport", context=context)
         if routing["routing_mode"] != ROUTING_MODE_DATABASE and not officer_phone:
             logger.warning(
                 "Ground Transport enquiry WhatsApp skipped: staff phone is not configured",
@@ -970,6 +970,8 @@ class NotificationService(NotificationServiceExtMixin):
             )
 
             enriched_context = dict(context)
+            if db is not None:
+                enriched_context["db"] = db
             raw_svc = context.get("service_name") or context.get("service_type")
             resolved_svc = resolve_service_display_name(raw_svc, context)
             if not is_multi_service_placeholder(resolved_svc):

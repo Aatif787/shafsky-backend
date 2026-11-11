@@ -574,20 +574,26 @@ class ReviewPaymentFlowMixin(BaseFlowMixin):
         link_sent: bool,
         quote_request: bool = False,
     ) -> None:
-        from app.services.notification_routing_service import database_routing_active
+        from app.models.notification_routing import ROUTING_MODE_DATABASE
+        from app.services.notification_routing_service import (
+            deliver_operations_text,
+            resolve_operations_recipients,
+        )
 
-        if database_routing_active():
-            logger.info(
-                "[WhatsApp Booking] Officer alert skipped. Database service routing owns this booking event."
-            )
-            return
-        officer_phone = (
-            os.getenv("WHATSAPP_BOOKING_NOTIFY_PHONE_1")
-            or os.getenv("WHATSAPP_OFFICER_NOTIFY_PHONE")
-            or "919599087959"
-        ).strip()
-        if not officer_phone:
-            return
+        service_name = (
+            getattr(conv, "selected_service_name", None)
+            or getattr(conv, "selected_category", None)
+            if conv
+            else None
+        )
+        context = {
+            "service_name": service_name,
+            "service_category": getattr(conv, "selected_category", None) if conv else None,
+            "quote_request": quote_request,
+            "booking_ref": booking_ref,
+        }
+        routing = resolve_operations_recipients(service_name, context=context)
+
         if quote_request:
             status_line = "QUOTE REQUESTED — no online price, send a manual quote + payment link"
         elif link_sent:
@@ -601,27 +607,50 @@ class ReviewPaymentFlowMixin(BaseFlowMixin):
         )
         amount_line = "On request" if quote_request else f"₹{int(amount):,}"
         flight_note = ""
-        if isinstance(conv.flight_details_json, dict) and conv.flight_details_json.get("flight_later") is True:
+        if conv and isinstance(conv.flight_details_json, dict) and conv.flight_details_json.get("flight_later") is True:
             flight_note = " • *Flight*: TO BE CONFIRMED with customer\n"
         team_msg = (
             headline
             + f"• *Booking Ref*: {booking_ref}\n"
-            + f"• *Customer*: {conv.customer_name} ({conv.customer_phone})\n"
-            + f"• *Email*: {conv.customer_email}\n"
-            + f"• *Service*: {conv.selected_service_name}\n"
-            + f"• *Airport*: {conv.selected_airport_iata or 'N/A'}\n"
-            + f"• *Flight*: {conv.flight_num or 'N/A'}\n"
+            + f"• *Customer*: {getattr(conv, 'customer_name', 'N/A')} ({getattr(conv, 'customer_phone', 'N/A')})\n"
+            + f"• *Email*: {getattr(conv, 'customer_email', 'N/A')}\n"
+            + f"• *Service*: {getattr(conv, 'selected_service_name', 'N/A')}\n"
+            + f"• *Airport*: {getattr(conv, 'selected_airport_iata', 'N/A') or 'N/A'}\n"
+            + f"• *Flight*: {getattr(conv, 'flight_num', 'N/A') or 'N/A'}\n"
             + flight_note
-            + f"• *Date*: {conv.booking_date}\n"
-            + f"• *Passengers*: {conv.passenger_count}\n"
+            + f"• *Date*: {getattr(conv, 'booking_date', 'N/A')}\n"
+            + f"• *Passengers*: {getattr(conv, 'passenger_count', 'N/A')}\n"
             + (
                 f" • Also travelling: {', '.join((conv.flight_details_json or {}).get('passenger_names') or [])}\n"
-                if isinstance(conv.flight_details_json, dict) and (conv.flight_details_json or {}).get("passenger_names")
+                if conv and isinstance(conv.flight_details_json, dict) and (conv.flight_details_json or {}).get("passenger_names")
                 else ""
             )
             + f"• *Amount*: {amount_line}\n"
             + f"• *Status*: {status_line}"
         )
+
+        if routing["routing_mode"] == ROUTING_MODE_DATABASE:
+            recipients = routing.get("recipients", [])
+            if not recipients:
+                logger.info(
+                    "[WhatsApp Booking] No active recipients assigned for %s in database routing mode. Alert skipped.",
+                    service_name or "(none)",
+                )
+                return
+            deliver_operations_text(
+                recipients,
+                team_msg,
+                lambda ph, body: whatsapp_client.send_text_message(ph, body),
+            )
+            return
+
+        officer_phone = (
+            os.getenv("WHATSAPP_BOOKING_NOTIFY_PHONE_1")
+            or os.getenv("WHATSAPP_OFFICER_NOTIFY_PHONE")
+            or "919599087959"
+        ).strip()
+        if not officer_phone:
+            return
         try:
             whatsapp_client.send_text_message(officer_phone, team_msg)
         except Exception as err:

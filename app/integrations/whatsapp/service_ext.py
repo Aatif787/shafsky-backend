@@ -787,22 +787,19 @@ def trigger_booking_whatsapp_notifications(booking: Any) -> None:
     settings = s.settings
     logger = s.logger
     try:
-        from app.services.notification_routing_service import database_routing_active
+        from app.models.notification_routing import ROUTING_MODE_DATABASE
+        from app.services.notification_routing_service import (
+            deliver_operations_text,
+            resolve_operations_recipients,
+        )
 
-        if database_routing_active():
-            logger.info(
-                "[WhatsApp Notification Hook] Officer alert skipped. Database service routing owns operations alerts."
-            )
-            return
-        if not whatsapp_client.is_configured():
-            return
-        officer_phone = (
-            getattr(settings, "WHATSAPP_OFFICER_NOTIFY_PHONE", None)
-            or os.getenv("WHATSAPP_OFFICER_NOTIFY_PHONE", "")
-        ).strip()
-        if not officer_phone:
-            logger.warning("[WhatsApp Notification Hook] WHATSAPP_OFFICER_NOTIFY_PHONE not set; skipping officer notify")
-            return
+        svc_key = getattr(booking, "service_category", None) or getattr(booking, "service_type", None)
+        booking_ctx = {
+            "service_category": getattr(booking, "service_category", None),
+            "service_type": getattr(booking, "service_type", None),
+            "service_name": getattr(booking, "service_type", None),
+        }
+        routing = resolve_operations_recipients(svc_key, context=booking_ctx)
         msg = (
             "🚨 *NEW DIRECT BOOKING CREATED*\n\n"
             f"• *Booking Ref*: {getattr(booking, 'booking_ref', 'N/A')}\n"
@@ -812,6 +809,32 @@ def trigger_booking_whatsapp_notifications(booking: Any) -> None:
             f"• *Amount*: ₹{int(getattr(booking, 'total_amount', 0)):,}\n"
             f"• *Status*: {getattr(booking, 'status', 'PENDING')}"
         )
+        if routing["routing_mode"] == ROUTING_MODE_DATABASE:
+            recipients = routing.get("recipients", [])
+            if not recipients:
+                logger.info(
+                    "[WhatsApp Notification Hook] No active recipients assigned for %s in database mode.",
+                    svc_key or "(none)",
+                )
+                return
+            if not whatsapp_client.is_configured():
+                return
+            deliver_operations_text(
+                recipients,
+                msg,
+                lambda ph, body: whatsapp_client.send_text_message(ph, body),
+            )
+            return
+
+        if not whatsapp_client.is_configured():
+            return
+        officer_phone = (
+            getattr(settings, "WHATSAPP_OFFICER_NOTIFY_PHONE", None)
+            or os.getenv("WHATSAPP_OFFICER_NOTIFY_PHONE", "")
+        ).strip()
+        if not officer_phone:
+            logger.warning("[WhatsApp Notification Hook] WHATSAPP_OFFICER_NOTIFY_PHONE not set; skipping officer notify")
+            return
         whatsapp_client.send_text_message(officer_phone, msg)
     except Exception as err:  # pylint: disable=broad-exception-caught
         logger.warning("[WhatsApp Notification Hook] Exception: %s", err)
