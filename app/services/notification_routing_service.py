@@ -385,22 +385,14 @@ class NotificationRoutingService:
     ) -> Dict[str, Any]:
         actor_id, email = cls._require_actor(db, actor)
         row = cls._load_recipient(db, recipient_id, lock=True)
-        if row.is_active:
-            raise HTTPException(
-                status_code=409,
-                detail="This recipient is active. Disable the recipient before deleting it.",
-            )
-        assigned = db.scalar(
-            select(func.count())
-            .select_from(NotificationServiceRoute)
-            .where(NotificationServiceRoute.recipient_id == row.id)
-        )
-        if assigned:
-            raise HTTPException(
-                status_code=409,
-                detail="This recipient is assigned to one or more services. Remove those assignments before deleting it.",
-            )
+        routes = db.scalars(
+            select(NotificationServiceRoute).where(NotificationServiceRoute.recipient_id == row.id)
+        ).all()
+        for route in routes:
+            db.delete(route)
+        db.flush()
         previous = cls._snapshot(row)
+        previous["service_keys"] = [route.service_key for route in routes]
         resource_id = str(row.id)
         db.delete(row)
         cls._audit(
@@ -546,6 +538,160 @@ class NotificationRoutingService:
         )
         cls._persist(db)
         return cls._service_state(db, key)
+
+    @classmethod
+    def set_recipient_services(
+        cls,
+        db: Session,
+        recipient_id: uuid.UUID,
+        service_keys: Sequence[str],
+        actor: Dict[str, Any],
+        ip_address: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Replace the services one recipient receives. Other recipients stay unchanged."""
+        keys = [cls._require_service_key(key) for key in service_keys]
+        actor_id, email = cls._require_actor(db, actor)
+        row = cls._load_recipient(db, recipient_id, lock=True)
+        existing = list(
+            db.scalars(
+                cls._lock(
+                    select(NotificationServiceRoute).where(NotificationServiceRoute.recipient_id == row.id),
+                    db,
+                )
+            ).all()
+        )
+        previous = [route.service_key for route in existing]
+        desired = set(keys)
+        existing_by_key = {route.service_key: route for route in existing}
+        now = datetime.now(timezone.utc)
+        for service_key, route in existing_by_key.items():
+            if service_key not in desired:
+                db.delete(route)
+                continue
+            route.is_active = True
+            route.updated_at = now
+        for service_key in keys:
+            if service_key in existing_by_key:
+                continue
+            db.add(
+                NotificationServiceRoute(
+                    service_key=service_key,
+                    recipient_id=row.id,
+                    is_active=True,
+                )
+            )
+        try:
+            db.flush()
+        except IntegrityError as exc:
+            db.rollback()
+            raise cls._conflict(exc) from exc
+        cls._audit(
+            db,
+            actor_id=actor_id,
+            actor_email=email,
+            action=ACTION_SERVICE_ROUTING_CHANGED,
+            resource_id=str(row.id),
+            previous={"recipient_id": str(row.id), "service_keys": previous},
+            new={"recipient_id": str(row.id), "service_keys": keys},
+            ip_address=ip_address,
+        )
+        cls._persist(db)
+        return {"recipient_id": row.id, "service_keys": keys}
+
+    @classmethod
+    def adopt_environment_routing(
+        cls,
+        db: Session,
+        actor: Dict[str, Any],
+        ip_address: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Make the current environment numbers editable without changing who is notified.
+
+        The first adoption copies those numbers, assigns every service to each of
+        them, and switches live routing to the database. Later calls leave the
+        admin's edits in place.
+        """
+        from app.services.whatsapp_department_formatting import WhatsAppDepartmentFormattingMixin
+
+        actor_id, email = cls._require_actor(db, actor)
+        settings_row, _created = cls._settings(db, lock=True)
+        if settings_row.routing_mode == ROUTING_MODE_DATABASE:
+            return {
+                "routing_mode": settings_row.routing_mode,
+                "adopted": False,
+                "recipients_created": 0,
+                "routes_created": 0,
+            }
+
+        live = WhatsAppDepartmentFormattingMixin.describe_recipient_phone_numbers()
+        if not live:
+            return {
+                "routing_mode": settings_row.routing_mode,
+                "adopted": False,
+                "recipients_created": 0,
+                "routes_created": 0,
+            }
+
+        existing_rows = list(db.scalars(select(NotificationRecipient)).all())
+        by_phone = {row.phone_number: row for row in existing_rows}
+        created = 0
+        managed: List[NotificationRecipient] = []
+        for item in live:
+            row = by_phone.get(item["phone_number"])
+            if row is None:
+                row = NotificationRecipient(
+                    label=item["label"],
+                    phone_number=item["phone_number"],
+                    is_active=True,
+                )
+                db.add(row)
+                db.flush()
+                by_phone[row.phone_number] = row
+                created += 1
+            managed.append(row)
+
+        route_count = db.scalar(select(func.count()).select_from(NotificationServiceRoute)) or 0
+        routes_created = 0
+        if route_count == 0:
+            for row in managed:
+                if not row.is_active:
+                    continue
+                for service_key in NOTIFICATION_SERVICE_KEYS:
+                    db.add(
+                        NotificationServiceRoute(
+                            service_key=service_key,
+                            recipient_id=row.id,
+                            is_active=True,
+                        )
+                    )
+                    routes_created += 1
+            db.flush()
+
+        previous_mode = settings_row.routing_mode
+        settings_row.routing_mode = ROUTING_MODE_DATABASE
+        settings_row.updated_at = datetime.now(timezone.utc)
+        cls._audit(
+            db,
+            actor_id=actor_id,
+            actor_email=email,
+            action=ACTION_ROUTING_MODE_CHANGED,
+            resource_id=str(settings_row.id),
+            previous={"routing_mode": previous_mode, "recipients_created": 0, "routes_created": 0},
+            new={
+                "routing_mode": settings_row.routing_mode,
+                "recipients_created": created,
+                "routes_created": routes_created,
+            },
+            ip_address=ip_address,
+        )
+        cls._persist(db)
+        db.refresh(settings_row)
+        return {
+            "routing_mode": settings_row.routing_mode,
+            "adopted": True,
+            "recipients_created": created,
+            "routes_created": routes_created,
+        }
 
     @classmethod
     def get_settings(cls, db: Session) -> Dict[str, Any]:

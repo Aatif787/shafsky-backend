@@ -142,6 +142,8 @@ def _protected_calls(recipient_id: str):
         ("post", f"{PREFIX}/recipients", {"phone_number": "9876543210", "label": "Blocked"}),
         ("patch", f"{PREFIX}/recipients/{recipient_id}", {"label": "Blocked"}),
         ("delete", f"{PREFIX}/recipients/{recipient_id}", None),
+        ("put", f"{PREFIX}/recipients/{recipient_id}/services", {"service_keys": ["Lounge"]}),
+        ("post", f"{PREFIX}/adopt-env-routing", None),
         ("get", f"{PREFIX}/services", None),
         ("get", f"{PREFIX}/routes", None),
         ("put", f"{PREFIX}/routes/Lounge", {"assignments": []}),
@@ -187,6 +189,67 @@ def test_admin_and_operations_manager_are_forbidden(client, tokens):
     assert [row["id"] for row in after] == [row["id"] for row in before]
     assert after[0]["label"] == "Keep"
     assert settings_row["routing_mode"] == "env"
+
+
+def test_admin_can_choose_services_edit_and_delete_live_numbers(client, tokens, monkeypatch):
+    from app.schemas.notification_routing import NOTIFICATION_SERVICE_KEYS
+
+    monkeypatch.setattr(
+        "app.services.whatsapp_department_service.settings",
+        SimpleNamespace(
+            WHATSAPP_BOOKING_NOTIFY_PHONE_1="9811111111",
+            WHATSAPP_BOOKING_NOTIFY_PHONE_2="9822222222",
+            WHATSAPP_BOOKING_NOTIFY_PHONE_3="",
+            WHATSAPP_BOOKING_NOTIFY_PHONE_4="",
+            WHATSAPP_BOOKING_NOTIFY_PHONE_5="",
+            WHATSAPP_OFFICER_NOTIFY_PHONE="",
+        ),
+    )
+
+    adopted = client.post(f"{PREFIX}/adopt-env-routing", headers=_auth(tokens["super"]))
+    assert adopted.status_code == 200, adopted.text
+    assert adopted.json()["data"]["routing_mode"] == "database"
+    assert adopted.json()["data"]["recipients_created"] == 2
+    assert adopted.json()["data"]["routes_created"] == 2 * len(NOTIFICATION_SERVICE_KEYS)
+
+    recipients = client.get(f"{PREFIX}/recipients", headers=_auth(tokens["super"])).json()["data"]
+    first = next(item for item in recipients if item["phone_number"] == "919811111111")
+    second = next(item for item in recipients if item["phone_number"] == "919822222222")
+
+    chosen = client.put(
+        f"{PREFIX}/recipients/{first['id']}/services",
+        json={"service_keys": ["Lounge", "Private Charter"]},
+        headers=_auth(tokens["super"]),
+    )
+    assert chosen.status_code == 200, chosen.text
+    assert chosen.json()["data"]["service_keys"] == ["Lounge", "Private Charter"]
+
+    routes = client.get(f"{PREFIX}/routes", headers=_auth(tokens["super"])).json()["data"]
+    lounge = next(item for item in routes if item["service_key"] == "Lounge")
+    hotel = next(item for item in routes if item["service_key"] == "Hotel")
+    assert first["id"] in [item["recipient_id"] for item in lounge["assignments"]]
+    assert first["id"] not in [item["recipient_id"] for item in hotel["assignments"]]
+    assert second["id"] in [item["recipient_id"] for item in hotel["assignments"]]
+
+    again = client.post(f"{PREFIX}/adopt-env-routing", headers=_auth(tokens["super"]))
+    assert again.json()["data"]["adopted"] is False
+    routes_again = client.get(f"{PREFIX}/routes", headers=_auth(tokens["super"])).json()["data"]
+    hotel_again = next(item for item in routes_again if item["service_key"] == "Hotel")
+    assert first["id"] not in [item["recipient_id"] for item in hotel_again["assignments"]]
+
+    edited = client.patch(
+        f"{PREFIX}/recipients/{first['id']}",
+        json={"label": "Desk", "phone_number": "9833333333"},
+        headers=_auth(tokens["super"]),
+    )
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["data"]["phone_number"] == "919833333333"
+
+    deleted = client.delete(f"{PREFIX}/recipients/{first['id']}", headers=_auth(tokens["super"]))
+    assert deleted.status_code == 200, deleted.text
+    remaining = [item["id"] for item in client.get(f"{PREFIX}/recipients", headers=_auth(tokens["super"])).json()["data"]]
+    assert first["id"] not in remaining
+    assert second["id"] in remaining
 
 
 def test_settings_shows_the_backend_numbers_receiving_notifications(client, tokens, monkeypatch):
@@ -349,7 +412,7 @@ def test_duplicate_assignment_in_one_service_is_rejected(client, tokens):
     assert response.status_code == 422
 
 
-def test_disabled_recipient_is_not_effective_and_delete_is_guarded(client, tokens, db):
+def test_disabled_recipient_is_not_effective_and_delete_removes_assignments(client, tokens, db):
     recipient = _create_recipient(client, tokens["super"], "9876543210")
     other = _create_recipient(client, tokens["super"], "9988776655")
     assigned = client.put(
@@ -381,32 +444,12 @@ def test_disabled_recipient_is_not_effective_and_delete_is_guarded(client, token
         f"{PREFIX}/recipients/{other['id']}",
         headers=_auth(tokens["super"]),
     )
-    assert active_delete.status_code == 409
-
-    client.patch(
-        f"{PREFIX}/recipients/{other['id']}",
-        json={"is_active": False},
-        headers=_auth(tokens["super"]),
-    )
-    assigned_delete = client.delete(
-        f"{PREFIX}/recipients/{other['id']}",
-        headers=_auth(tokens["super"]),
-    )
-    assert assigned_delete.status_code == 409
-
-    cleared = client.put(
-        f"{PREFIX}/routes/Transport",
-        json={"assignments": [{"recipient_id": recipient["id"], "is_active": False}]},
-        headers=_auth(tokens["super"]),
-    )
-    assert cleared.status_code == 200
-    deleted = client.delete(
-        f"{PREFIX}/recipients/{other['id']}",
-        headers=_auth(tokens["super"]),
-    )
-    assert deleted.status_code == 200, deleted.text
+    assert active_delete.status_code == 200, active_delete.text
     remaining = db.scalars(select(NotificationRecipient).where(NotificationRecipient.id == uuid.UUID(other["id"]))).first()
     assert remaining is None
+    after_delete = client.get(f"{PREFIX}/routes", headers=_auth(tokens["super"])).json()["data"]
+    transport_after = next(item for item in after_delete if item["service_key"] == "Transport")
+    assert [item["recipient_id"] for item in transport_after["assignments"]] == [recipient["id"]]
     delete_log = db.scalars(
         select(AuditLog).where(AuditLog.action == "RECIPIENT_DELETED")
     ).first()

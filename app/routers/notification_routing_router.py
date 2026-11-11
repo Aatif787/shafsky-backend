@@ -17,10 +17,13 @@ from app.database import get_db
 from app.schemas.notification_routing import (
     EnvImportEnvelope,
     NotificationConfigEnvelope,
+    AdoptEnvRoutingEnvelope,
     RecipientCreate,
     RecipientDeleteResponse,
     RecipientEnvelope,
     RecipientListResponse,
+    RecipientServicesEnvelope,
+    RecipientServicesUpdate,
     RecipientUpdate,
     RoutingSettingsEnvelope,
     RoutingSettingsUpdate,
@@ -96,6 +99,30 @@ def update_recipient(
     admin: Dict[str, Any] = Depends(get_required_super_admin),
 ):
     data = NotificationRoutingService.update_recipient(db, recipient_id, payload, admin, _ip(request))
+    return {"success": True, "data": data}
+
+
+@router.put("/recipients/{recipient_id}/services", response_model=RecipientServicesEnvelope)
+def set_recipient_services(
+    recipient_id: uuid.UUID,
+    payload: RecipientServicesUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    admin: Dict[str, Any] = Depends(get_required_super_admin),
+):
+    data = NotificationRoutingService.set_recipient_services(
+        db, recipient_id, payload.service_keys, admin, _ip(request)
+    )
+    return {"success": True, "data": data}
+
+
+@router.post("/adopt-env-routing", response_model=AdoptEnvRoutingEnvelope)
+def adopt_env_routing(
+    request: Request,
+    db: Session = Depends(get_db),
+    admin: Dict[str, Any] = Depends(get_required_super_admin),
+):
+    data = NotificationRoutingService.adopt_environment_routing(db, admin, _ip(request))
     return {"success": True, "data": data}
 
 
