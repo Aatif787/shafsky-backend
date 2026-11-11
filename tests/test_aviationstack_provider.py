@@ -9,7 +9,9 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.flight.exceptions import (
     FlightNotFoundException,
+    FlightProviderTimeoutException,
     FlightRateLimitExceededException,
+    FlightScheduleUnavailableException,
     InvalidFlightDateException,
     InvalidFlightNumberException,
 )
@@ -84,7 +86,7 @@ def test_aviationstack_validate_flight_success(mock_request):
 
     result = provider.validate_flight(
         flight_num="AI995",
-        date="2026-10-15",
+        date="2026-09-25",
         origin_code="DEL",
         destination_code="DXB",
     )
@@ -97,8 +99,7 @@ def test_aviationstack_validate_flight_success(mock_request):
     assert result.departure.terminal == "3"
     assert result.arrival.airport == "DXB"
     assert result.arrival.terminal == "3"
-    # Verify future date retargeting preserved the time and set the requested date
-    assert "2026-10-15" in (result.departure.scheduled or "")
+    assert "2026-09-25" in (result.departure.scheduled or "")
     assert result.status == "Scheduled"
 
 
@@ -140,25 +141,66 @@ def test_aviationstack_negative_cache_prevents_api_call(mock_request):
     assert mock_request.call_count == initial_count
 
 
+def _sample_on(day: str) -> dict:
+    item = {
+        **SAMPLE_AVIATIONSTACK_RESPONSE,
+        "flight_date": day,
+        "departure": {**SAMPLE_AVIATIONSTACK_RESPONSE["departure"], "scheduled": f"{day}T11:20:00+00:00"},
+        "arrival": {**SAMPLE_AVIATIONSTACK_RESPONSE["arrival"], "scheduled": f"{day}T13:40:00+00:00"},
+    }
+    return item
+
+
 @patch.object(AviationStackProvider, "_make_request")
 def test_aviationstack_get_flight_status(mock_request):
-    mock_request.return_value = [SAMPLE_AVIATIONSTACK_RESPONSE]
+    from datetime import datetime
+    today = datetime.now().strftime("%Y-%m-%d")
+    mock_request.return_value = [_sample_on(today)]
     provider = AviationStackProvider(api_key="test_key")
 
     result = provider.get_flight_status(flight_num="AI995")
     assert isinstance(result, FlightStatusData)
     assert result.flight.iata == "AI995"
     assert result.departure.airport == "DEL"
+    assert today in (result.departure.scheduled or "")
 
 
 @patch.object(AviationStackProvider, "_make_request")
 def test_aviationstack_search_flights(mock_request):
-    mock_request.return_value = [SAMPLE_AVIATIONSTACK_RESPONSE]
+    from datetime import datetime
+    today = datetime.now().strftime("%Y-%m-%d")
+    mock_request.return_value = [_sample_on(today)]
     provider = AviationStackProvider(api_key="test_key")
 
     results = provider.search_flights(query="AI995")
     assert len(results) == 1
     assert results[0].flight.iata == "AI995"
+
+
+@patch.object(AviationStackProvider, "_make_request")
+def test_aviationstack_does_not_copy_another_day_onto_the_booking_date(mock_request):
+    mock_request.return_value = [SAMPLE_AVIATIONSTACK_RESPONSE]
+    provider = AviationStackProvider(api_key="test_key")
+
+    with pytest.raises(FlightScheduleUnavailableException):
+        provider.validate_flight(flight_num="AI771", date="2026-10-15")
+
+    calls_after_mismatch = mock_request.call_count
+    with pytest.raises(FlightScheduleUnavailableException):
+        provider.validate_flight(flight_num="AI771", date="2026-10-15")
+    assert mock_request.call_count > calls_after_mismatch
+
+
+@patch.object(AviationStackProvider, "_make_request")
+def test_aviationstack_timeout_is_not_cached_as_not_found(mock_request):
+    mock_request.side_effect = FlightProviderTimeoutException()
+    provider = AviationStackProvider(api_key="test_key")
+
+    with pytest.raises(FlightProviderTimeoutException):
+        provider.validate_flight(flight_num="AI661", date="2026-09-25")
+    with pytest.raises(FlightProviderTimeoutException):
+        provider.validate_flight(flight_num="AI661", date="2026-09-25")
+    assert mock_request.call_count >= 2
 
 
 @patch.object(AviationStackProvider, "_make_request")

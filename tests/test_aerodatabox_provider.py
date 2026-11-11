@@ -88,6 +88,7 @@ def test_aerodatabox_validate_flight_not_found(mock_request):
 
     with pytest.raises(FlightNotFoundException):
         provider.validate_flight("AI9999", "2026-10-28")
+    assert mock_request.call_count == 1
 
 
 def test_endpoint_validate_flight_rejects_gibberish():

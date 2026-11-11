@@ -373,7 +373,7 @@ def validate_flight(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={
                 "success": False,
-                "error": f"An unexpected error occurred: {str(exc)}",
+                "error": "Flight lookup failed. Please try again or enter the flight details manually.",
                 "code": "FLIGHT_ERROR",
                 "data": {"valid": False, "flightData": None}
             }

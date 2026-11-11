@@ -36,7 +36,7 @@ _RAM_LOCK = threading.Lock()
 
 DEFAULT_RAM_TTL = 3600         # 1 hour in RAM
 DEFAULT_REDIS_TTL = 86400      # 24 hours in Redis
-DEFAULT_DB_TTL = 31536000      # 1 year in DB (persistent)
+DEFAULT_DB_TTL = 6 * 3600      # 6 hours; a schedule change must be fetched again
 
 
 def normalize_flight_code(code: Optional[str]) -> str:
@@ -180,10 +180,8 @@ def get_unified_flight(
             record = None
             if clean_date and clean_date not in ("ANY", "unknown", "None", ""):
                 record = query.filter(FlightAPICache.flight_date == clean_date).order_by(FlightAPICache.created_at.desc()).first()
-            if not record and not (direction or origin or dest):
+            if not record and not clean_date and not (direction or origin or dest):
                 record = query.filter(FlightAPICache.flight_date.in_(["LATEST", "PERPETUAL"])).order_by(FlightAPICache.created_at.desc()).first()
-            if not record and not (direction or origin or dest):
-                record = query.order_by(FlightAPICache.created_at.desc()).first()
 
             if record and isinstance(record.response_data, dict) and _matches_route(record.response_data):
                 # When direction is requested without origin/dest, don't return unsectored DB cache
@@ -213,6 +211,15 @@ def get_unified_flight(
                     fs_query = fs_query.filter(FlightStatusRecord.dest_code == dest.strip().upper())
 
                 fs_rec = fs_query.order_by(FlightStatusRecord.updated_at.desc()).first()
+                if (
+                    fs_rec
+                    and clean_date
+                    and clean_date not in ("ANY", "unknown", "None", "")
+                    and isinstance(fs_rec.raw_details, dict)
+                ):
+                    stored_day = str(((fs_rec.raw_details.get("departure") or {}).get("scheduled") or ""))[:10]
+                    if stored_day != clean_date:
+                        fs_rec = None
                 if fs_rec and isinstance(fs_rec.raw_details, dict) and _matches_route(fs_rec.raw_details):
                     data = fs_rec.raw_details
                     logger.info(
@@ -304,11 +311,11 @@ def store_unified_flight(
         logger.debug("Redis store error: %s", err)
 
     # 3. Store in PostgreSQL DB (FlightAPICache & FlightStatusRecord)
-    if not skip_db:
+    if not skip_db and not data.get("not_found"):
         try:
-            expires_at = now_dt + timedelta(seconds=max(ttl, DEFAULT_DB_TTL))
+            expires_at = now_dt + timedelta(seconds=max(60, int(ttl)))
             with SessionLocal() as session:
-                # 3a. Save into FlightAPICache
+                # 3a. Save into FlightAPICache for this flight and date only.
                 session.query(FlightAPICache).filter(
                     FlightAPICache.flight_iata == clean_flight,
                     FlightAPICache.flight_date == clean_date,
@@ -322,20 +329,6 @@ def store_unified_flight(
                     expires_at=expires_at,
                 )
                 session.add(cache_entry)
-
-                # Perpetual entry for future queries beyond schedule publishing horizon
-                session.query(FlightAPICache).filter(
-                    FlightAPICache.flight_iata == clean_flight,
-                    FlightAPICache.flight_date == "PERPETUAL",
-                ).delete()
-                perpetual_entry = FlightAPICache(
-                    provider=provider,
-                    flight_iata=clean_flight,
-                    flight_date="PERPETUAL",
-                    response_data=data,
-                    expires_at=expires_at,
-                )
-                session.add(perpetual_entry)
 
                 # 3b. Upsert into FlightStatusRecord (dedicated operational relational model)
                 dep_iata = (dep_dict.get("airport") or dep_dict.get("iata") or origin or "").strip().upper()
@@ -436,21 +429,8 @@ def to_flight_status_data(
             status_obj = FlightStatusData.model_validate(cached)
             if target_date:
                 cached_dep_date = (status_obj.departure.scheduled or "")[:10]
-                if cached_dep_date and cached_dep_date != target_date:
-                    from app.flight.providers.aviation_edge_provider import _retarget_schedule_dates
-                    dep_sched, arr_sched = _retarget_schedule_dates(
-                        status_obj.departure.scheduled,
-                        status_obj.arrival.scheduled,
-                        target_date
-                    )
-                    if dep_sched != status_obj.departure.scheduled:
-                        status_obj.departure = status_obj.departure.model_copy(
-                            update={"scheduled": dep_sched, "estimated": None, "actual": None, "delay": None}
-                        )
-                    if arr_sched != status_obj.arrival.scheduled:
-                        status_obj.arrival = status_obj.arrival.model_copy(
-                            update={"scheduled": arr_sched, "estimated": None, "actual": None, "delay": None}
-                        )
+                if cached_dep_date and cached_dep_date != target_date[:10]:
+                    return None
             return status_obj
         except Exception:
             pass
@@ -472,20 +452,9 @@ def to_flight_status_data(
     arr_act = arr_raw.get("actual")
 
     if target_date:
-        from app.flight.providers.aviation_edge_provider import _retarget_schedule_dates
-        retargeted_dep, retargeted_arr = _retarget_schedule_dates(
-            dep_sched,
-            arr_sched,
-            target_date
-        )
-        if retargeted_dep != dep_sched:
-            dep_sched = retargeted_dep
-            dep_est = None
-            dep_act = None
-        if retargeted_arr != arr_sched:
-            arr_sched = retargeted_arr
-            arr_est = None
-            arr_act = None
+        cached_dep_date = str(dep_sched or "")[:10]
+        if cached_dep_date and cached_dep_date != target_date[:10]:
+            return None
 
     dep_details = LocationEndpointDetails(
         airport=(dep_raw.get("iata") or dep_raw.get("airport") or "").upper(),

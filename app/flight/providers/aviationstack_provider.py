@@ -25,8 +25,10 @@ from app.flight.duration import compute_flight_duration
 from app.flight.exceptions import (
     FlightDomainException,
     FlightNotFoundException,
+    FlightProviderTimeoutException,
     FlightProviderUnavailableException,
     FlightRateLimitExceededException,
+    FlightScheduleUnavailableException,
     InvalidFlightDateException,
     InvalidFlightNumberException,
 )
@@ -173,7 +175,7 @@ class AviationStackProvider(FlightProvider):
 
     @staticmethod
     def _not_found_cache_key(flight_clean: str, date_clean: str) -> str:
-        return f"NOT_FOUND:{flight_clean}:{date_clean}"
+        return f"NOT_FOUND:aviationstack:{flight_clean}:{date_clean}"
 
     @staticmethod
     def _is_not_found_cached(flight_clean: str, date_clean: str) -> bool:
@@ -202,23 +204,16 @@ class AviationStackProvider(FlightProvider):
 
     @staticmethod
     def _set_not_found_cache(flight_clean: str, date_clean: str) -> None:
-        """Mark this flight+date as not-found in RAM, Redis, and DB for 15 minutes."""
+        """Remember a confirmed empty schedule for 15 minutes. Provider failures are not cached."""
         key = AviationStackProvider._not_found_cache_key(flight_clean, date_clean)
         _NOT_FOUND_CACHE[key] = time.time() + NOT_FOUND_CACHE_TTL
         try:
-            from app.flight.unified_cache import get_redis_client, store_unified_flight
+            from app.flight.unified_cache import get_redis_client
             r = get_redis_client()
             if r:
                 r.setex(key, NOT_FOUND_CACHE_TTL, "1")
-            store_unified_flight(
-                flight_clean,
-                {"not_found": True, "flight_iata": flight_clean, "flight_date": date_clean},
-                provider="aviationstack",
-                flight_date=date_clean,
-                ttl=NOT_FOUND_CACHE_TTL,
-            )
         except Exception as err:
-            logger.debug("Failed to store not-found in unified cache: %s", err)
+            logger.debug("Failed to store not-found in Redis: %s", err)
         logger.info(
             "[NOT-FOUND CACHE SET] Flight: %s on %s — will skip API for 15 min across RAM, Redis, and DB",
             flight_clean, date_clean
@@ -229,8 +224,7 @@ class AviationStackProvider(FlightProvider):
         Execute an HTTP GET request to AviationStack with retries, timeout, and masked key logging.
         """
         if not self.api_key:
-            logger.warning("AVIATIONSTACK_API_KEY is not configured.")
-            return []
+            raise FlightProviderUnavailableException("AviationStack API key is not configured.")
 
         query_params = dict(params)
         query_params["access_key"] = self.api_key
@@ -239,6 +233,7 @@ class AviationStackProvider(FlightProvider):
         log_params = {k: ("***HIDDEN***" if k == "access_key" else v) for k, v in query_params.items()}
         logger.info("[AVIATIONSTACK REQUEST] GET %s | Params: %s", url, log_params)
 
+        last_failure: Optional[FlightDomainException] = None
         for attempt in range(1, self.max_retries + 1):
             try:
                 start_time = time.perf_counter()
@@ -262,51 +257,66 @@ class AviationStackProvider(FlightProvider):
 
                 if response.status_code in (401, 403):
                     logger.error("[AVIATIONSTACK AUTH FAILED] Status: %s", response.status_code)
-                    return []
+                    raise FlightProviderUnavailableException("AviationStack rejected the API credentials.")
 
                 if 500 <= response.status_code < 600:
                     logger.warning("[AVIATIONSTACK SERVER ERROR] Status: %s", response.status_code)
+                    last_failure = FlightProviderUnavailableException(
+                        f"AviationStack server error {response.status_code}."
+                    )
                     if attempt < self.max_retries:
                         time.sleep(0.35 * attempt)
                         continue
-                    return []
+                    raise last_failure
 
                 if response.status_code != 200:
                     logger.warning("[AVIATIONSTACK UNEXPECTED STATUS] %s", response.status_code)
-                    return []
+                    raise FlightProviderUnavailableException(
+                        f"AviationStack returned status {response.status_code}."
+                    )
 
-                payload = response.json()
+                try:
+                    payload = response.json()
+                except Exception as parse_err:
+                    raise FlightProviderUnavailableException(
+                        "AviationStack returned an unreadable response."
+                    ) from parse_err
+
                 if isinstance(payload, dict) and payload.get("error"):
                     err = payload.get("error")
                     logger.warning("[AVIATIONSTACK ERROR PAYLOAD] %s", err)
                     if isinstance(err, dict) and err.get("code") in ("usage_limit_reached", "rate_limit_reached"):
                         raise FlightRateLimitExceededException("AviationStack provider rate limit exceeded.")
-                    return []
+                    raise FlightProviderUnavailableException("AviationStack returned an error instead of a schedule.")
 
                 if isinstance(payload, dict):
                     data = payload.get("data")
                     if isinstance(data, list):
                         return data
-                return []
+                raise FlightProviderUnavailableException("AviationStack returned an unreadable response.")
 
             except httpx.TimeoutException:
                 logger.warning("[AVIATIONSTACK TIMEOUT] Attempt: %s/%s", attempt, self.max_retries)
+                last_failure = FlightProviderTimeoutException()
                 if attempt < self.max_retries:
                     continue
-                return []
+                raise last_failure
             except httpx.TransportError as err:
                 logger.warning("[AVIATIONSTACK TRANSPORT ERROR] %s", type(err).__name__)
+                last_failure = FlightProviderUnavailableException(f"AviationStack transport error: {type(err).__name__}")
                 if attempt < self.max_retries:
                     time.sleep(0.3 * attempt)
                     continue
-                return []
+                raise last_failure
             except FlightDomainException:
                 raise
             except Exception as err:
                 logger.exception("[AVIATIONSTACK UNEXPECTED EXCEPTION] %s", err)
-                return []
+                raise FlightProviderUnavailableException("AviationStack request failed.") from err
 
-        return []
+        if last_failure:
+            raise last_failure
+        raise FlightProviderUnavailableException("AviationStack request failed.")
 
     def _normalize_flight_data(
         self,
@@ -570,19 +580,23 @@ class AviationStackProvider(FlightProvider):
                 pass
 
         # ── 3. Fetch from AviationStack API ───────────────────────────────────
-        raw_candidates = self._make_request("flights", {"flight_iata": flight_clean, "limit": 10})
+        dated_params = {"flight_iata": flight_clean, "flight_date": date_clean, "limit": 10}
+        raw_candidates = self._make_request("flights", dated_params)
         if not raw_candidates:
-            # Fallback query by flight_number + airline_iata
             carrier_iata, numeric_flight = split_flight_number(flight_clean)
             if carrier_iata and numeric_flight:
                 raw_candidates = self._make_request(
                     "flights",
-                    {"flight_number": numeric_flight, "airline_iata": carrier_iata, "limit": 10},
+                    {
+                        "flight_number": numeric_flight,
+                        "airline_iata": carrier_iata,
+                        "flight_date": date_clean,
+                        "limit": 10,
+                    },
                 )
 
         if not raw_candidates:
             logger.warning("[AVIATIONSTACK NO RECORDS] Flight: %s on %s", flight_clean, date_clean)
-            # Cache the negative result so repeated wrong-number lookups skip the API for 15 min
             self._set_not_found_cache(flight_clean, date_clean)
             raise FlightNotFoundException(flight_num=flight_clean, date=date_clean)
 
@@ -643,9 +657,15 @@ class AviationStackProvider(FlightProvider):
             if fl_date == date_clean or dep_date == date_clean:
                 exact_date_candidates.append(cand)
 
-        target_candidate = (
-            exact_date_candidates[0] if exact_date_candidates else pool[0]
-        )
+        if not exact_date_candidates:
+            logger.info(
+                "[AVIATIONSTACK DATE MISS] Flight %s was returned for another day, not %s",
+                flight_clean,
+                date_clean,
+            )
+            raise FlightScheduleUnavailableException(flight_num=flight_clean, date=date_clean)
+
+        target_candidate = exact_date_candidates[0]
 
         flight_status = self._normalize_flight_data(
             target_candidate,
@@ -691,51 +711,9 @@ class AviationStackProvider(FlightProvider):
         return flight_status
 
     def get_flight_status(self, flight_num: str) -> FlightStatusData:
-        """Retrieve real-time or master flight status for a flight number."""
-        flight_clean = normalize_flight_code(flight_num)
-        if not flight_clean:
-            raise InvalidFlightNumberException(flight_num)
-
+        """Retrieve today's verified schedule. Another day's row is not reused."""
         today_str = datetime.now().strftime("%Y-%m-%d")
-        if self._is_not_found_cached(flight_clean, today_str):
-            raise FlightNotFoundException(flight_num=flight_clean, date=today_str)
-
-        cache_key = f"flight:status:aviationstack:{flight_clean}"
-
-        # Check unified cache first
-        try:
-            unified_hit = get_unified_flight(flight_clean)
-            if unified_hit:
-                if unified_hit.get("not_found"):
-                    raise FlightNotFoundException(flight_num=flight_clean, date=today_str)
-                cached_status = to_flight_status_data(unified_hit, flight_clean)
-                if cached_status:
-                    return cached_status
-        except FlightNotFoundException:
-            raise
-        except Exception:
-            pass
-
-        cached = self._get_cached_data(cache_key)
-        if cached:
-            try:
-                return FlightStatusData.model_validate(cached)
-            except Exception:
-                pass
-
-        results = self._make_request("flights", {"flight_iata": flight_clean, "limit": 5})
-
-        if not results:
-            self._set_not_found_cache(flight_clean, today_str)
-            raise FlightNotFoundException(flight_num=flight_clean, date=today_str)
-
-        flight_status = self._normalize_flight_data(results[0], requested_flight=flight_clean)
-        self._set_cached_data(cache_key, flight_status.model_dump(mode="json"))
-        try:
-            store_unified_flight(flight_clean, flight_status.model_dump(mode="json"), provider="aviationstack")
-        except Exception:
-            pass
-        return flight_status
+        return self.validate_flight(flight_num, today_str)
 
     def search_flights(self, query: str) -> List[FlightStatusData]:
         """Search flights by flight number or 3-letter IATA airport code."""

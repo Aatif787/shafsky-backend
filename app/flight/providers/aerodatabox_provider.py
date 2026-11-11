@@ -22,13 +22,13 @@ from app.flight.exceptions import (
     FlightNotFoundException,
     FlightProviderTimeoutException,
     FlightProviderUnavailableException,
+    FlightScheduleUnavailableException,
     FlightRateLimitExceededException,
     InvalidFlightDateException,
     InvalidFlightNumberException,
 )
 from app.flight.provider import FlightProvider
 from app.flight.providers.aviation_edge_provider import (
-    _retarget_schedule_dates,
     normalize_flight_number,
     validate_date_string,
 )
@@ -161,7 +161,7 @@ class AeroDataBoxProvider(FlightProvider):
 
     @staticmethod
     def _not_found_cache_key(flight_clean: str, date_clean: str) -> str:
-        return f"NOT_FOUND:{flight_clean}:{date_clean}"
+        return f"NOT_FOUND:aerodatabox:{flight_clean}:{date_clean}"
 
     @staticmethod
     def _is_not_found_cached(flight_clean: str, date_clean: str) -> bool:
@@ -196,23 +196,15 @@ class AeroDataBoxProvider(FlightProvider):
             r = get_redis_client()
             if r:
                 r.setex(key, NOT_FOUND_CACHE_TTL, "1")
-            store_unified_flight(
-                flight_clean,
-                {"not_found": True, "flight_iata": flight_clean, "flight_date": date_clean},
-                provider="aerodatabox",
-                flight_date=date_clean,
-                ttl=NOT_FOUND_CACHE_TTL,
-            )
         except Exception as err:
-            logger.debug("Failed to store not-found in unified cache: %s", err)
+            logger.debug("Failed to store not-found in Redis: %s", err)
 
     def _make_request(self, flight_clean: str, date_str: str) -> List[Dict[str, Any]]:
         """
         Execute HTTP GET request to AeroDataBox RapidAPI with retries, timeout, and masked logging.
         """
         if not self.api_key:
-            logger.warning("AERODATABOX_API_KEY is not configured.")
-            return []
+            raise FlightProviderUnavailableException("AeroDataBox API key is not configured.")
 
         url = f"{self.base_url}/flights/number/{flight_clean}/{date_str}"
         headers = {
@@ -247,8 +239,10 @@ class AeroDataBoxProvider(FlightProvider):
                             return [data]
                     except Exception as parse_err:
                         logger.warning("[AERODATABOX JSON PARSE ERROR] %s", parse_err)
-                        return []
-                    return []
+                        raise FlightProviderUnavailableException(
+                            "AeroDataBox returned an unreadable response."
+                        ) from parse_err
+                    raise FlightProviderUnavailableException("AeroDataBox returned an unreadable response.")
 
                 if response.status_code in (204, 404):
                     logger.info("[AERODATABOX NOT FOUND] Status %s for %s on %s", response.status_code, flight_clean, date_str)
@@ -273,7 +267,9 @@ class AeroDataBoxProvider(FlightProvider):
                     raise FlightProviderUnavailableException(f"AeroDataBox server error {response.status_code}.")
 
                 logger.warning("[AERODATABOX UNEXPECTED STATUS] %s", response.status_code)
-                return []
+                raise FlightProviderUnavailableException(
+                    f"AeroDataBox returned status {response.status_code}."
+                )
 
             except (httpx.TimeoutException, TimeoutError):
                 logger.warning("[AERODATABOX TIMEOUT] Attempt %s/%s", attempt, self.max_retries)
@@ -326,15 +322,7 @@ class AeroDataBoxProvider(FlightProvider):
         dep_sched_str = dep_sched_raw.replace(" ", "T") if dep_sched_raw else None
         arr_sched_str = arr_sched_raw.replace(" ", "T") if arr_sched_raw else None
 
-        # Retarget schedule dates if requested target_date differs from candidate date
         is_retargeted = False
-        if target_date and dep_sched_str and arr_sched_str:
-            dep_orig = dep_sched_str
-            dep_sched_str, arr_sched_str = _retarget_schedule_dates(
-                dep_sched_str, arr_sched_str, target_date
-            )
-            if dep_orig[:10] != target_date[:10]:
-                is_retargeted = True
 
         # Compute durations from real timestamps
         dep_dt: Optional[datetime] = None
@@ -588,17 +576,6 @@ class AeroDataBoxProvider(FlightProvider):
         # ── 3. Fetch from AeroDataBox API ─────────────────────────────────────
         raw_candidates = self._make_request(flight_clean, date_clean)
 
-        # If not found on requested date, check if published on current date (fallback timetable)
-        if not raw_candidates:
-            today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            if today_str != date_clean:
-                logger.info(
-                    "[AERODATABOX TIMETABLE FALLBACK] Checking today's published timetable for %s to retarget to %s",
-                    flight_clean,
-                    date_clean,
-                )
-                raw_candidates = self._make_request(flight_clean, today_str)
-
         if not raw_candidates:
             logger.warning("[AERODATABOX NO RECORDS] Flight: %s on %s", flight_clean, date_clean)
             self._set_not_found_cache(flight_clean, date_clean)
@@ -618,6 +595,15 @@ class AeroDataBoxProvider(FlightProvider):
             requested_flight=flight_clean,
             target_date=date_clean,
         )
+        scheduled_day = (flight_status.departure.scheduled or "")[:10]
+        if scheduled_day and scheduled_day != date_clean:
+            logger.info(
+                "[AERODATABOX DATE MISS] Flight %s is published for %s, not %s",
+                flight_clean,
+                scheduled_day,
+                date_clean,
+            )
+            raise FlightScheduleUnavailableException(flight_num=flight_clean, date=date_clean)
 
         # ── 5. Cache Verified Real Flight ─────────────────────────────────────
         self._set_cached_data(cache_key, flight_status.model_dump(mode="json"))
@@ -662,15 +648,7 @@ class AeroDataBoxProvider(FlightProvider):
             return []
 
     def get_live_telemetry(self, flight_num: str) -> FlightTelemetry:
-        """Fetch telemetry coordinates."""
-        status = self.get_flight_status(flight_num)
-        orig_ap = build_flight_airport(status.departure.airport or "DEL")
-        lat = getattr(orig_ap, "latitude", 28.55) or 28.55
-        lon = getattr(orig_ap, "longitude", 77.10) or 77.10
-        return FlightTelemetry(
-            latitude=lat,
-            longitude=lon,
-            altitude=10000.0,
-            heading=90.0,
-            speed=450.0,
+        """AeroDataBox does not provide a live aircraft position."""
+        raise FlightProviderUnavailableException(
+            "Live aircraft position is not available from AeroDataBox."
         )

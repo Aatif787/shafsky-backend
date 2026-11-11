@@ -3,6 +3,7 @@ import pytest
 from app.flight.service import FlightIntelligenceService
 from app.flight.exceptions import (
     FlightNotFoundException,
+    FlightProviderTimeoutException,
     FlightRateLimitExceededException,
     FlightProviderUnavailableException,
 )
@@ -77,6 +78,20 @@ def test_primary_unavailable_falls_back_to_secondary():
 
     assert result == expected
     mock_primary.validate_flight.assert_called_once()
+    mock_fallback.validate_flight.assert_called_once()
+
+
+def test_primary_timeout_falls_back_to_secondary():
+    mock_primary = MagicMock()
+    mock_fallback = MagicMock()
+    mock_primary.validate_flight.side_effect = FlightProviderTimeoutException()
+    expected = _sample_flight_status("XY320")
+    mock_fallback.validate_flight.return_value = expected
+
+    service = FlightIntelligenceService(provider=mock_primary, fallback_provider=mock_fallback)
+    result = service.validate_flight("XY320", "2026-11-13")
+
+    assert result == expected
     mock_fallback.validate_flight.assert_called_once()
 
 
