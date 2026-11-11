@@ -333,7 +333,7 @@ class AeroDataBoxProvider(FlightProvider):
             dep_sched_str, arr_sched_str = _retarget_schedule_dates(
                 dep_sched_str, arr_sched_str, target_date
             )
-            if dep_sched_str != dep_orig:
+            if dep_orig[:10] != target_date[:10]:
                 is_retargeted = True
 
         # Compute durations from real timestamps
@@ -440,10 +440,11 @@ class AeroDataBoxProvider(FlightProvider):
             registration=aircraft_dict.get("reg"),
         )
 
-        if is_retargeted:
+        raw_status_clean = (item.get("status") or "Scheduled").strip().capitalize()
+        if is_retargeted and raw_status_clean.upper() in ("DEPARTED", "ACTIVE", "EN ROUTE", "IN-AIR", "IN FLIGHT", "LANDED", "ARRIVED"):
             status_str = "Scheduled"
         else:
-            status_str = (item.get("status") or "Scheduled").strip().capitalize()
+            status_str = raw_status_clean
 
         return FlightStatusData(
             airline=airline_details,

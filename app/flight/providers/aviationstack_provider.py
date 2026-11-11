@@ -434,21 +434,26 @@ class AviationStackProvider(FlightProvider):
         # 5. Retarget schedule date if requested booking date differs from returned timetable
         is_retargeted = False
         if date_context and dep_details.scheduled:
+            orig_dep_date = dep_details.scheduled[:10]
             retargeted_dep, retargeted_arr = _retarget_schedule_dates(
                 dep_details.scheduled, arr_details.scheduled, date_context
             )
-            if retargeted_dep != dep_details.scheduled:
+            if orig_dep_date != date_context[:10]:
+                is_retargeted = True
                 dep_details.scheduled = retargeted_dep
                 dep_details.estimated = None
                 dep_details.actual = None
                 dep_details.delay = None
-                is_retargeted = True
-            if retargeted_arr != arr_details.scheduled:
+            elif retargeted_dep != dep_details.scheduled:
+                dep_details.scheduled = retargeted_dep
+
+            if orig_dep_date != date_context[:10] and retargeted_arr:
                 arr_details.scheduled = retargeted_arr
                 arr_details.estimated = None
                 arr_details.actual = None
                 arr_details.delay = None
-                is_retargeted = True
+            elif retargeted_arr != arr_details.scheduled:
+                arr_details.scheduled = retargeted_arr
 
         # 6. Duration
         dep_dt = None
@@ -472,11 +477,10 @@ class AviationStackProvider(FlightProvider):
             type=ac_obj.get("iata"),
         )
 
-        if is_retargeted:
+        raw_status = raw.get("flight_status") or raw.get("status") or "scheduled"
+        formatted_status = str(raw_status).capitalize()
+        if is_retargeted and formatted_status.upper() in ("DEPARTED", "ACTIVE", "EN ROUTE", "IN-AIR", "IN FLIGHT", "LANDED", "ARRIVED"):
             formatted_status = "Scheduled"
-        else:
-            raw_status = raw.get("flight_status") or raw.get("status") or "scheduled"
-            formatted_status = str(raw_status).capitalize()
 
         return FlightStatusData(
             airline=airline_details,
