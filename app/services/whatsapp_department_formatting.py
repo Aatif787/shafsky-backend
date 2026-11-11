@@ -537,6 +537,49 @@ class WhatsAppDepartmentFormattingMixin:
 
         return [{"type": "body", "parameters": parameters}]
 
+    DEPT1_CATEGORIES = {
+        "meet & greet",
+        "meet and greet",
+        "airport assistance",
+        "airport services",
+        "lounge",
+        "airport lounge",
+        "lounge access",
+        "vip lounge",
+        "fast track",
+        "baggage assistance",
+    }
+
+    DEPT2_CATEGORIES = {
+        "ticketing",
+        "air ticketing",
+        "flight ticket",
+        "flight booking",
+        "transport",
+        "ground transport",
+        "round trip",
+        "round_trip",
+        "roundtrip",
+        "transportation services",
+        "hotel & transportation",
+        "hotel",
+        "hotels",
+        "hotel booking",
+        "hotel services",
+        "travel support",
+    }
+
+    DEPT3_CATEGORIES = {
+        "private charter",
+        "charter",
+        "air charter",
+        "cargo",
+        "cargo & logistics",
+        "medical assistance",
+        "medical services",
+        "special services",
+    }
+
     @classmethod
     def resolve_department(
         cls,

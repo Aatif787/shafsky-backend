@@ -39,7 +39,7 @@ class WhatsAppDepartmentExtMixin:
         template_lang = (template_lang or "en").strip()
 
         from app.core.runtime import in_automated_test_runtime
-        if not template_name or template_name.lower() in ("none", "off", "unset"):
+        if not template_name or template_name.lower() in ("none", "off", "unset") or template_name == "shafsky_operations_alert":
             live_production = bool(getattr(settings, "is_production", False))
             # Pytest stays template-less unless a test explicitly marks production,
             # so suites can still assert freeform / missing-config behaviour.
@@ -47,10 +47,10 @@ class WhatsAppDepartmentExtMixin:
                 return "", template_lang
             # Live (and production-flagged tests) always use the approved Meta
             # template so alerts are never blocked by the 24-hour window (131047).
-            template_name = "shafsky_operations_alert"
-            if not template_lang:
-                template_lang = "en"
-            logger.warning(
+            template_name = "shafsky_ops_booking_clean"
+            if not template_lang or template_lang == "en":
+                template_lang = "en_US"
+            logger.info(
                 "[WhatsApp Notify] using the approved default template '%s' (%s) for guaranteed delivery.",
                 template_name,
                 template_lang,
@@ -95,7 +95,7 @@ class WhatsAppDepartmentExtMixin:
         if not res.get("success") and res.get("error_code") == 132001:
             alt_lang = cls.alternate_template_language(template_lang)
             if alt_lang and alt_lang != template_lang:
-                logger.error(
+                logger.warning(
                     "[WhatsApp Notify] Template '%s' is not approved for language '%s' (132001). "
                     "Retrying once with '%s'. Align WHATSAPP_DEPARTMENT_TEMPLATE_LANG with the "
                     "language registered in Meta.",
@@ -111,15 +111,31 @@ class WhatsAppDepartmentExtMixin:
                 )
                 if retry.get("success"):
                     return retry
-                if retry.get("error_code") == 132001:
-                    logger.error(
-                        "[WhatsApp Notify] Template '%s' is not approved for '%s' either. "
-                        "Check WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE against the approved "
-                        "template list in Meta WhatsApp Manager.",
-                        template_name,
-                        alt_lang,
+
+            # If template name itself was rejected or unapproved (e.g. shafsky_operations_alert pending approval),
+            # automatically fall back to the approved live operational templates
+            for fallback_tpl in ("shafsky_ops_booking_clean", "shafsky_clean_booking_alert"):
+                if template_name != fallback_tpl:
+                    fallback_comp = cls.build_template_components(
+                        template_text or message_body,
+                        template_name=fallback_tpl,
+                        context=context,
                     )
-                return retry
+                    logger.warning(
+                        "[WhatsApp Notify] Falling back to approved Meta template '%s' for %s.",
+                        fallback_tpl,
+                        phone,
+                    )
+                    retry = whatsapp_client.send_message(
+                        to_phone=phone,
+                        template_name=fallback_tpl,
+                        template_language="en_US",
+                        template_components=fallback_comp,
+                    )
+                    if retry.get("success"):
+                        return retry
+
+            return retry if 'retry' in locals() else res
 
         return res
 
