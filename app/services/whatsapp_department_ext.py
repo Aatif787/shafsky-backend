@@ -50,7 +50,7 @@ class WhatsAppDepartmentExtMixin:
             template_name = "shafsky_ops_booking_clean"
             if not template_lang or template_lang == "en":
                 template_lang = "en_US"
-            logger.info(
+            logger.warning(
                 "[WhatsApp Notify] using the approved default template '%s' (%s) for guaranteed delivery.",
                 template_name,
                 template_lang,
