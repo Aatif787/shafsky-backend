@@ -54,7 +54,7 @@ logger = logging.getLogger("shafsky.flight.aerodatabox_provider")
 
 _IN_MEMORY_CACHE: Dict[str, Tuple[float, Any]] = {}
 _NOT_FOUND_CACHE: Dict[str, float] = {}
-NOT_FOUND_CACHE_TTL = 900  # 15 minutes
+NOT_FOUND_CACHE_TTL = 60  # 1 minute (allows fast recovery and fallback)
 
 AIRLINE_IATA_MASTER: Dict[str, str] = {
     "6E": "IndiGo",

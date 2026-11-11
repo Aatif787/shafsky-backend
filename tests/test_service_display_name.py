@@ -111,3 +111,38 @@ def test_clean_booking_alert_and_summary_never_show_multi_service():
     summary = WhatsAppDepartmentService._build_single_variable_summary(context)
     assert "multi_service" not in summary
     assert "Gold" in summary
+
+
+def test_multi_service_with_service_breakdown_metadata():
+    """Verifies that service_breakdown list from journey bookings correctly resolves package."""
+    meta = {
+        "service_breakdown": [
+            {
+                "service_type": "DEPARTURE",
+                "package_slug": "platinum",
+                "package_name": "Platinum Service",
+            }
+        ]
+    }
+    assert resolve_service_display_name("multi_service", meta) == "Platinum"
+    assert resolve_service_display_name("Meet & Greet — multi_service", meta) == "Meet & Greet — Platinum"
+
+
+def test_multi_service_never_leaks_even_with_dirty_context_strings():
+    """Verifies that even if service_name or service_type contains raw multi_service, it is cleaned out."""
+    context = {
+        "booking_ref": "SHF-DIRTY-1",
+        "service_category": "Meet & Greet",
+        "service_type": "multi_service",
+        "service_name": "Meet & Greet — multi_service",
+    }
+    comps = WhatsAppDepartmentService.build_template_components(
+        message_body="",
+        template_name="shafsky_operations_alert",
+        context=context,
+    )
+    param_text = comps[0]["parameters"][1]["text"]
+    assert "multi_service" not in param_text
+    assert "multi-service" not in param_text
+    assert param_text == "Meet & Greet"
+

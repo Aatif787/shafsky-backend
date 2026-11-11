@@ -35,7 +35,7 @@ flights_router = APIRouter(prefix="/api/flights", tags=["Flight Operations"])
 
 
 def get_flight_service() -> FlightIntelligenceService:
-    """Dependency provider creating FlightIntelligenceService with the active FlightProvider."""
+    """Dependency provider creating FlightIntelligenceService with primary and fallback FlightProviders."""
     provider_name = getattr(settings, "FLIGHT_PROVIDER", "").lower()
     if os.getenv("TESTING") == "1":
         if provider_name not in ("aviationstack", "aerodatabox"):
@@ -44,12 +44,15 @@ def get_flight_service() -> FlightIntelligenceService:
         provider_name = "aerodatabox"
 
     if provider_name == "aviation_edge":
-        provider = AviationEdgeProvider()
+        primary = AviationEdgeProvider()
+        fallback = None
     elif provider_name == "aviationstack":
-        provider = AviationStackProvider()
+        primary = AviationStackProvider()
+        fallback = AeroDataBoxProvider()
     else:
-        provider = AeroDataBoxProvider()
-    return FlightIntelligenceService(provider=provider)
+        primary = AeroDataBoxProvider()
+        fallback = AviationStackProvider()
+    return FlightIntelligenceService(provider=primary, fallback_provider=fallback)
 
 
 def check_flight_expiry(

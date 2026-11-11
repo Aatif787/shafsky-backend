@@ -701,6 +701,7 @@ def verify_flight_for_whatsapp(
             pass
 
     # ── 2. Check if AeroDataBox is the configured primary provider ─────────
+    adb_mismatch_flight = None
     active_provider = (getattr(settings, "FLIGHT_PROVIDER", None) or os.getenv("FLIGHT_PROVIDER", "")).strip().lower()
     if active_provider == "aerodatabox" and os.getenv("TESTING") != "1":
         adb_flight = _aerodatabox_verification(normalized, svc, jt, travel_date=travel_date)
@@ -708,30 +709,28 @@ def verify_flight_for_whatsapp(
             if not svc:
                 return _build_airport_mismatch_payload(adb_flight, "", selected_airport_name, jt, normalized)
             ok, _ = _match_route(jt, svc, adb_flight)
-            if not ok:
+            if ok:
                 logger.info(
-                    "Flight verification requested | Flight: %s | Provider: AeroDataBox | Result: AIRPORT_MISMATCH | Route: %s → %s | Selected: %s | Journey: %s",
+                    "Flight verification requested | Flight: %s | Provider: AeroDataBox | Result: SUCCESS | Route: %s → %s",
+                    normalized,
+                    (adb_flight.get("departure") or {}).get("iata"),
+                    (adb_flight.get("arrival") or {}).get("iata"),
+                )
+                return _build_verified_success_payload(adb_flight, svc, selected_airport_name, jt, normalized, fast_cache_key, travel_date)
+            else:
+                logger.info(
+                    "Flight verification | Flight: %s | AeroDataBox route mismatch (%s → %s vs %s) | Checking AviationStack fallback",
                     normalized,
                     (adb_flight.get("departure") or {}).get("iata"),
                     (adb_flight.get("arrival") or {}).get("iata"),
                     svc,
-                    jt,
                 )
-                return _build_airport_mismatch_payload(adb_flight, svc, selected_airport_name, jt, normalized)
-
-            logger.info(
-                "Flight verification requested | Flight: %s | Provider: AeroDataBox | Result: SUCCESS | Route: %s → %s",
-                normalized,
-                (adb_flight.get("departure") or {}).get("iata"),
-                (adb_flight.get("arrival") or {}).get("iata"),
-            )
-            return _build_verified_success_payload(adb_flight, svc, selected_airport_name, jt, normalized, fast_cache_key, travel_date)
+                adb_mismatch_flight = adb_flight
         else:
             logger.info(
-                "Flight verification requested | Flight: %s | Provider: AeroDataBox | Result: FLIGHT_NOT_FOUND",
+                "Flight verification requested | Flight: %s | Provider: AeroDataBox returned no flight; falling back to AviationStack",
                 normalized,
             )
-            return {"success": False, "reason": REASON_FLIGHT_NOT_FOUND, "flight": None}
 
     ttl = int(getattr(settings, "AVIATIONSTACK_CACHE_TTL_SECONDS", 300) or 300)
 
@@ -855,6 +854,8 @@ def verify_flight_for_whatsapp(
     if select_reason == REASON_AMBIGUOUS:
         return {"success": False, "reason": REASON_AMBIGUOUS, "flight": None}
     if select_reason in (REASON_FLIGHT_NOT_FOUND, REASON_MALFORMED_RESPONSE) or not flight:
+        if adb_mismatch_flight is not None:
+            return _build_airport_mismatch_payload(adb_mismatch_flight, svc, selected_airport_name, jt, normalized)
         return {
             "success": False,
             "reason": select_reason or REASON_FLIGHT_NOT_FOUND,

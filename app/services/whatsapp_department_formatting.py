@@ -269,6 +269,19 @@ class WhatsAppDepartmentFormattingMixin:
             if is_multi_service_placeholder(service_text) or "multi_service" in str(service_text).lower() or "multi-service" in str(service_text).lower():
                 service_text = service_label or "Meet & Greet"
 
+        # Absolute guarantee that multi_service never leaks in service_text or service_type
+        for ph in ("multi_service", "multi-service", "multiservice"):
+            if ph in service_text.lower():
+                service_text = re.sub(r"\s*[-—–]\s*" + ph, "", service_text, flags=re.IGNORECASE).strip()
+                service_text = re.sub(ph, "", service_text, flags=re.IGNORECASE).strip()
+                if not service_text:
+                    service_text = service_label or "Meet & Greet"
+            if ph in service_type.lower():
+                service_type = re.sub(r"\s*[-—–]\s*" + ph, "", service_type, flags=re.IGNORECASE).strip()
+                service_type = re.sub(ph, "", service_type, flags=re.IGNORECASE).strip()
+                if not service_type:
+                    service_type = service_label or "Meet & Greet"
+
         return service_type, service_text
 
     @classmethod
