@@ -64,82 +64,105 @@ def check_flight_expiry(
     Returns (is_expired, rejection_message).
     Evaluates whether the flight event corresponding to the selected direction has already passed.
     """
-    from datetime import datetime, timezone
+    import re
+    from datetime import datetime, timezone, timedelta
     from app.services.booking_cutoff import lookup_airport_timezone, airport_tzinfo
 
     dir_clean = (direction or "").strip().lower()
     if dir_clean not in ("departure", "arrival", "transit"):
         return False, None
 
-    status_clean = (flight_data.status or "").strip().upper()
-    if status_clean in ("CANCELLED", "CANCELED", "DIVERTED"):
-        return True, "This flight has been cancelled. Please select an active future flight."
-
-    if dir_clean == "departure" and status_clean in ("DEPARTED", "ACTIVE", "EN ROUTE", "IN-AIR", "IN FLIGHT", "LANDED", "ARRIVED"):
-        return True, "This flight has already departed. Please select a future flight."
-
-    if dir_clean in ("arrival", "transit") and status_clean in ("LANDED", "ARRIVED"):
-        msg = "This flight has already arrived. Please select a future flight." if dir_clean == "arrival" else "This flight has already arrived/departed. Please select a future flight."
-        return True, msg
-
     now_utc = datetime.now(timezone.utc)
+    target_date_clean = (flight_date or "").strip() or now_utc.strftime("%Y-%m-%d")
+
+    def _extract_and_anchor(raw_dt_str: Optional[str], target_date: str, is_next_day: bool = False) -> Optional[datetime]:
+        if not raw_dt_str:
+            return None
+        s = str(raw_dt_str).strip()
+        time_match = re.search(r'(?:T|\s)?(\d{1,2}:\d{2}(?::\d{2})?)', s)
+        clock_time = time_match.group(1) if time_match else "00:00:00"
+        if len(clock_time) == 5:
+            clock_time += ":00"
+        base_d = target_date
+        if is_next_day:
+            try:
+                base_d = (datetime.strptime(target_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+            except Exception:
+                pass
+        try:
+            return datetime.fromisoformat(f"{base_d}T{clock_time}")
+        except Exception:
+            return None
+
+    dep_raw = flight_data.departure.scheduled if flight_data.departure else None
+    arr_raw = flight_data.arrival.scheduled if flight_data.arrival else None
+    is_arr_next_day = False
+    if dep_raw and arr_raw:
+        dep_m = re.search(r'(\d{1,2}:\d{2})', str(dep_raw))
+        arr_m = re.search(r'(\d{1,2}:\d{2})', str(arr_raw))
+        if dep_m and arr_m and arr_m.group(1) < dep_m.group(1):
+            is_arr_next_day = True
 
     # 1. Evaluate Departure
     if dir_clean == "departure":
-        dep_sched = flight_data.departure.scheduled if flight_data.departure else None
         dep_ap = flight_data.departure.airport if flight_data.departure else None
         tz_name = (flight_data.departure.timezone if flight_data.departure else None) or lookup_airport_timezone(None, dep_ap)
         tz = airport_tzinfo(tz_name)
-        sched_dt = None
-        if dep_sched:
-            sched_str = str(dep_sched).strip()
-            if "T" not in sched_str and "-" not in sched_str:
-                sched_str = f"{flight_date}T{sched_str}"
-            try:
-                parsed = datetime.fromisoformat(sched_str.replace("Z", "+00:00"))
-                sched_dt = parsed if parsed.tzinfo else parsed.replace(tzinfo=tz)
-            except Exception:
-                pass
-        if sched_dt and sched_dt.astimezone(timezone.utc) <= now_utc:
-            return True, "This flight has already departed. Please select a future flight."
+        dep_dt = _extract_and_anchor(dep_raw, target_date_clean, is_next_day=False)
+        if dep_dt:
+            sched_dt = dep_dt.replace(tzinfo=tz)
+            if sched_dt.astimezone(timezone.utc) <= now_utc:
+                return True, "This flight has already departed. Please select a future flight."
+
+            # Check live operational status only if the flight is scheduled for today in airport local time
+            sched_local = sched_dt.astimezone(tz)
+            now_local = now_utc.astimezone(tz)
+            if sched_local.date() == now_local.date():
+                status_clean = (flight_data.status or "").strip().upper()
+                if status_clean in ("CANCELLED", "CANCELED", "DIVERTED"):
+                    return True, "This flight has been cancelled. Please select an active future flight."
+                if status_clean in ("DEPARTED", "ACTIVE", "EN ROUTE", "IN-AIR", "IN FLIGHT", "LANDED", "ARRIVED"):
+                    return True, "This flight has already departed. Please select a future flight."
 
     # 2. Evaluate Arrival
     if dir_clean == "arrival":
-        arr_sched = flight_data.arrival.scheduled if flight_data.arrival else None
         arr_ap = flight_data.arrival.airport if flight_data.arrival else None
         tz_name = (flight_data.arrival.timezone if flight_data.arrival else None) or lookup_airport_timezone(None, arr_ap)
         tz = airport_tzinfo(tz_name)
-        sched_dt = None
-        if arr_sched:
-            sched_str = str(arr_sched).strip()
-            if "T" not in sched_str and "-" not in sched_str:
-                sched_str = f"{flight_date}T{sched_str}"
-            try:
-                parsed = datetime.fromisoformat(sched_str.replace("Z", "+00:00"))
-                sched_dt = parsed if parsed.tzinfo else parsed.replace(tzinfo=tz)
-            except Exception:
-                pass
-        if sched_dt and sched_dt.astimezone(timezone.utc) <= now_utc:
-            return True, "This flight has already arrived. Please select a future flight."
+        arr_dt = _extract_and_anchor(arr_raw, target_date_clean, is_next_day=is_arr_next_day)
+        if arr_dt:
+            sched_dt = arr_dt.replace(tzinfo=tz)
+            if sched_dt.astimezone(timezone.utc) <= now_utc:
+                return True, "This flight has already arrived. Please select a future flight."
+
+            sched_local = sched_dt.astimezone(tz)
+            now_local = now_utc.astimezone(tz)
+            if sched_local.date() == now_local.date():
+                status_clean = (flight_data.status or "").strip().upper()
+                if status_clean in ("CANCELLED", "CANCELED", "DIVERTED"):
+                    return True, "This flight has been cancelled. Please select an active future flight."
+                if status_clean in ("LANDED", "ARRIVED"):
+                    return True, "This flight has already arrived. Please select a future flight."
 
     # 3. Evaluate Transit
     if dir_clean == "transit":
-        arr_sched = flight_data.arrival.scheduled if flight_data.arrival else None
         arr_ap = flight_data.arrival.airport if flight_data.arrival else None
         tz_name = (flight_data.arrival.timezone if flight_data.arrival else None) or lookup_airport_timezone(None, arr_ap)
         tz = airport_tzinfo(tz_name)
-        sched_arr_dt = None
-        if arr_sched:
-            sched_str = str(arr_sched).strip()
-            if "T" not in sched_str and "-" not in sched_str:
-                sched_str = f"{flight_date}T{sched_str}"
-            try:
-                parsed = datetime.fromisoformat(sched_str.replace("Z", "+00:00"))
-                sched_arr_dt = parsed if parsed.tzinfo else parsed.replace(tzinfo=tz)
-            except Exception:
-                pass
-        if sched_arr_dt and sched_arr_dt.astimezone(timezone.utc) <= now_utc:
-            return True, "This flight has already arrived/departed. Please select a future flight."
+        arr_dt = _extract_and_anchor(arr_raw, target_date_clean, is_next_day=is_arr_next_day)
+        if arr_dt:
+            sched_arr_dt = arr_dt.replace(tzinfo=tz)
+            if sched_arr_dt.astimezone(timezone.utc) <= now_utc:
+                return True, "This flight has already arrived/departed. Please select a future flight."
+
+            sched_local = sched_arr_dt.astimezone(tz)
+            now_local = now_utc.astimezone(tz)
+            if sched_local.date() == now_local.date():
+                status_clean = (flight_data.status or "").strip().upper()
+                if status_clean in ("CANCELLED", "CANCELED", "DIVERTED"):
+                    return True, "This flight has been cancelled. Please select an active future flight."
+                if status_clean in ("LANDED", "ARRIVED"):
+                    return True, "This flight has already arrived/departed. Please select a future flight."
 
     return False, None
 

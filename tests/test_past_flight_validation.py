@@ -143,6 +143,51 @@ class TestPastFlightApiValidation:
         assert data["data"]["is_bookable"] is True
         assert data["data"]["is_expired"] is False
 
+    @patch("app.flight.service.FlightIntelligenceService.validate_flight")
+    def test_future_flight_with_stale_landed_status_allowed(self, mock_validate):
+        # Flight departing 3 days in future, but external provider status says 'Landed' or 'Departed'
+        future_dt = datetime.now(timezone.utc) + timedelta(days=3)
+        mock_validate.return_value = build_mock_flight(status="Landed", dep_time="14:00:00", arr_time="16:30:00")
+
+        res = client.post(
+            "/api/flight/validate",
+            json={
+                "flightNum": "AI2424",
+                "departDate": future_dt.strftime("%Y-%m-%d"),
+                "direction": "departure",
+                "originCode": "BOM",
+                "destCode": "DEL",
+                "airportCode": "BOM",
+            },
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert data["success"] is True
+        assert data["data"]["is_expired"] is False
+
+    @patch("app.flight.service.FlightIntelligenceService.validate_flight")
+    def test_future_flight_with_stale_timetable_date_allowed(self, mock_validate):
+        # Timetable fallback returns a timestamp with yesterday's date, but requested departDate is in future
+        future_dt = datetime.now(timezone.utc) + timedelta(days=2)
+        yesterday_str = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT10:00:00")
+        mock_validate.return_value = build_mock_flight(dep_time=yesterday_str, arr_time=yesterday_str)
+
+        res = client.post(
+            "/api/flight/validate",
+            json={
+                "flightNum": "AI2424",
+                "departDate": future_dt.strftime("%Y-%m-%d"),
+                "direction": "departure",
+                "originCode": "BOM",
+                "destCode": "DEL",
+                "airportCode": "BOM",
+            },
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert data["success"] is True
+        assert data["data"]["is_expired"] is False
+
     def test_manual_flight_past_departure_blocked(self):
         # Manual entry with past time
         res = client.post(

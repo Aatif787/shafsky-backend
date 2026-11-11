@@ -89,3 +89,4 @@ def test_both_providers_fail_raises_exception():
     service = FlightIntelligenceService(provider=mock_primary, fallback_provider=mock_fallback)
     with pytest.raises(FlightNotFoundException):
         service.validate_flight("XY999", "2026-11-13")
+

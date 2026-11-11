@@ -327,10 +327,14 @@ class AeroDataBoxProvider(FlightProvider):
         arr_sched_str = arr_sched_raw.replace(" ", "T") if arr_sched_raw else None
 
         # Retarget schedule dates if requested target_date differs from candidate date
+        is_retargeted = False
         if target_date and dep_sched_str and arr_sched_str:
+            dep_orig = dep_sched_str
             dep_sched_str, arr_sched_str = _retarget_schedule_dates(
                 dep_sched_str, arr_sched_str, target_date
             )
+            if dep_sched_str != dep_orig:
+                is_retargeted = True
 
         # Compute durations from real timestamps
         dep_dt: Optional[datetime] = None
@@ -388,6 +392,12 @@ class AeroDataBoxProvider(FlightProvider):
         dep_est_str = dep_est_raw.replace(" ", "T") if dep_est_raw else None
         arr_est_str = arr_est_raw.replace(" ", "T") if arr_est_raw else None
 
+        if is_retargeted:
+            dep_act_str = None
+            arr_act_str = None
+            dep_est_str = None
+            arr_est_str = None
+
         # Extract real terminals, gates, desks, and belts
         dep_terminal = dep_dict.get("terminal")
         arr_terminal = arr_dict.get("terminal")
@@ -430,7 +440,10 @@ class AeroDataBoxProvider(FlightProvider):
             registration=aircraft_dict.get("reg"),
         )
 
-        status_str = (item.get("status") or "Scheduled").strip().capitalize()
+        if is_retargeted:
+            status_str = "Scheduled"
+        else:
+            status_str = (item.get("status") or "Scheduled").strip().capitalize()
 
         return FlightStatusData(
             airline=airline_details,

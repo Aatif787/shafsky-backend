@@ -432,6 +432,7 @@ class AviationStackProvider(FlightProvider):
         )
 
         # 5. Retarget schedule date if requested booking date differs from returned timetable
+        is_retargeted = False
         if date_context and dep_details.scheduled:
             retargeted_dep, retargeted_arr = _retarget_schedule_dates(
                 dep_details.scheduled, arr_details.scheduled, date_context
@@ -441,11 +442,13 @@ class AviationStackProvider(FlightProvider):
                 dep_details.estimated = None
                 dep_details.actual = None
                 dep_details.delay = None
+                is_retargeted = True
             if retargeted_arr != arr_details.scheduled:
                 arr_details.scheduled = retargeted_arr
                 arr_details.estimated = None
                 arr_details.actual = None
                 arr_details.delay = None
+                is_retargeted = True
 
         # 6. Duration
         dep_dt = None
@@ -469,8 +472,11 @@ class AviationStackProvider(FlightProvider):
             type=ac_obj.get("iata"),
         )
 
-        raw_status = raw.get("flight_status") or raw.get("status") or "scheduled"
-        formatted_status = str(raw_status).capitalize()
+        if is_retargeted:
+            formatted_status = "Scheduled"
+        else:
+            raw_status = raw.get("flight_status") or raw.get("status") or "scheduled"
+            formatted_status = str(raw_status).capitalize()
 
         return FlightStatusData(
             airline=airline_details,
