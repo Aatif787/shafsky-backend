@@ -76,6 +76,8 @@ def configure_test_database() -> None:
     else:
         os.environ.setdefault("RAZORPAY_KEY_SECRET", "rzp_test_ci_secret_not_live")
     os.environ["WHATSAPP_DEPARTMENT_NOTIFICATION_TEMPLATE"] = ""
+    os.environ["WHATSAPP_INVOICE_PDF_TEMPLATE"] = ""
+    os.environ["WHATSAPP_INVOICE_TEMPLATE"] = ""
     os.environ.setdefault("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "shafsky_wa_verify_token")
     os.environ.setdefault("WHATSAPP_VERIFY_TOKEN", "shafsky_wa_verify_token")
     os.environ.setdefault("WHATSAPP_ACCESS_TOKEN", "test_wa_access_token")

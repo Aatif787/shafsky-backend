@@ -137,6 +137,12 @@ class Settings(BaseSettings):
     # Customer WhatsApp Confirmation Notifications
     WHATSAPP_CUSTOMER_CONFIRMATION_TEMPLATE: str = os.getenv("WHATSAPP_CUSTOMER_CONFIRMATION_TEMPLATE", "")
     WHATSAPP_CUSTOMER_TEMPLATE_LANG: str = os.getenv("WHATSAPP_CUSTOMER_TEMPLATE_LANG", "en")
+    # Customer WhatsApp Tax Invoice PDF Template Notifications (for delivery outside 24h window)
+    WHATSAPP_INVOICE_PDF_TEMPLATE: str = os.getenv(
+        "WHATSAPP_INVOICE_PDF_TEMPLATE",
+        os.getenv("WHATSAPP_INVOICE_TEMPLATE", ""),
+    )
+    WHATSAPP_INVOICE_TEMPLATE_LANG: str = os.getenv("WHATSAPP_INVOICE_TEMPLATE_LANG", "en")
     SUPPORT_PHONE: str = os.getenv("SUPPORT_PHONE", "+91 9599087959")
     WHATSAPP_BOOKING_PHONE: str = os.getenv("WHATSAPP_BOOKING_PHONE", os.getenv("WHATSAPP_BOT_PHONE", "917428300207"))
     WHATSAPP_BOT_PHONE: str = WHATSAPP_BOOKING_PHONE

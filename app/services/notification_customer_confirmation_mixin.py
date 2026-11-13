@@ -621,6 +621,8 @@ class NotificationCustomerConfirmationMixin:
             "date_time": date_time_str,
             "status": "CONFIRMED",
             "support_phone": support_phone,
+            "invoice_number": invoice_number,
+            "invoice_url": invoice_url,
         }
 
         # 7. Idempotency Claim, Template Resolution & Dispatch
