@@ -375,6 +375,10 @@ def test_cross_airport_isolation_bom(db_session: Session):
         select(SupportedAirport).where(SupportedAirport.iata_code == "HYD")
     ).scalar_one_or_none()
 
+    assert bom_airport is not None
+    assert del_airport is not None
+    assert hyd_airport is not None
+
     bom_rows = {
         r.flight_type: float(r.price) for r in db_session.execute(
             select(AirportService).where(
@@ -433,7 +437,7 @@ def test_full_20_airports_regression_suite(db_session: Session):
     """Verify all 20 supported airports maintain their exact production active package inventory."""
     expected_active_counts = {
         "AMD": 7,
-        "ATQ": 4,
+        "ATQ": 11,
         "BBI": 3,
         "BLR": 12,
         "BOM": 16,  # 12 Non-Transit + 4 Transit

@@ -569,7 +569,7 @@ def test_full_20_airports_regression_suite(db: Session):
     """Verify all 20 supported airports maintain their exact production active package inventory."""
     expected_active_counts = {
         "AMD": 7,
-        "ATQ": 4,
+        "ATQ": 11,
         "BBI": 3,
         "BLR": 12,
         "BOM": (12, 16),

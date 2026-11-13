@@ -308,8 +308,9 @@ class JourneyDetectionEngine(JourneyMultiServiceMixin):
             if derived is not None:
                 flight_type = derived
             else:
-                # TRANSIT — preserve existing compound type from client
-                flight_type = normalize_flight_type(flight_type)
+                # TRANSIT — derive compound type authoritatively from route endpoints when present
+                transit_derived = derive_transit_type_from_route(db, departure_code, arrival_code)
+                flight_type = transit_derived if transit_derived is not None else normalize_flight_type(flight_type)
         except ValueError:
             # Catalog browsing: origin/dest may be missing. Graceful fallback.
             explicit_flight_type = normalize_flight_type(flight_type)

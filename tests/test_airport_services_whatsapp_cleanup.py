@@ -112,7 +112,8 @@ def test_delhi_whatsapp_menu_cleanliness(db_session):
 
 def test_atq_and_bom_transit_cleanliness(db_session):
     """
-    Verifies that ATQ departure sells the seeded meet_greet product, and BOM transit returns the live transit package.
+    Verifies that ATQ departure sells Silver and Elite packages and ATQ transit sells meet_greet at 5000,
+    while BOM transit returns the live transit package.
     """
     atq_airport = db_session.execute(
         select(SupportedAirport).where(SupportedAirport.iata_code == "ATQ")
@@ -121,9 +122,17 @@ def test_atq_and_bom_transit_cleanliness(db_session):
     atq_rows = WhatsAppBookingStateMachine._get_authoritative_airport_packages(
         db_session, atq_airport.id, "DEPARTURE", ["DOMESTIC", "ALL"]
     )
-    assert len(atq_rows) == 1
-    assert atq_rows[0][1].slug == "meet_greet"
-    assert float(atq_rows[0][0].price) == 2500.0
+    assert [(svc.slug, float(aps.price)) for aps, svc in atq_rows] == [
+        ("silver", 2500.0),
+        ("elite", 4000.0),
+    ]
+
+    atq_transit_rows = WhatsAppBookingStateMachine._get_authoritative_airport_packages(
+        db_session, atq_airport.id, "TRANSIT", ["DOMESTIC_DOMESTIC", "ALL"]
+    )
+    assert len(atq_transit_rows) == 1
+    assert atq_transit_rows[0][1].slug == "meet_greet"
+    assert float(atq_transit_rows[0][0].price) == 5000.0
 
     bom_airport = db_session.execute(
         select(SupportedAirport).where(SupportedAirport.iata_code == "BOM")
