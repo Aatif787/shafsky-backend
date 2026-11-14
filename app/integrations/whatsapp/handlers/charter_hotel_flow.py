@@ -203,27 +203,51 @@ class CharterHotelFlowMixin:
     @classmethod
     def _notify_charter_desk(cls, conv: WhatsAppConversation, request_reference: str) -> None:
         """Stage 3: land the enquiry on the charter desk with full details."""
-        from app.services.notification_routing_service import database_routing_active
+        from app.models.notification_routing import ROUTING_MODE_DATABASE
+        from app.services.notification_routing_service import (
+            deliver_operations_text,
+            resolve_operations_recipients,
+        )
 
-        if database_routing_active():
-            logger.info(
-                "[WhatsApp Charter] Charter desk alert skipped. Database service routing owns this enquiry."
-            )
-            return
-        officer_phone = os.getenv("WHATSAPP_OFFICER_NOTIFY_PHONE", "919599087959").strip()
-        metadata = conv.flight_details_json if isinstance(conv.flight_details_json, dict) else {}
+        metadata = conv.flight_details_json if conv and isinstance(conv.flight_details_json, dict) else {}
+        context = {
+            "service_category": "Charter",
+            "service_name": getattr(conv, "selected_service_name", None) if conv else None,
+            "request_reference": request_reference,
+            "metadata_json": metadata,
+        }
+        routing = resolve_operations_recipients("Charter", context=context)
+
         team_msg = (
             "🚩 *NEW CHARTER ENQUIRY (WhatsApp)*\n\n"
             f" *Reference*: {request_reference}\n"
-            f" *Customer*: {conv.customer_name} ({conv.customer_phone})\n"
-            f" *Email*: {conv.customer_email}\n"
-            f" *Service*: {conv.selected_service_name}\n"
+            f" *Customer*: {getattr(conv, 'customer_name', 'N/A')} ({getattr(conv, 'customer_phone', 'N/A')})\n"
+            f" *Email*: {getattr(conv, 'customer_email', 'N/A')}\n"
+            f" *Service*: {getattr(conv, 'selected_service_name', 'N/A')}\n"
             f" *Route*: {metadata.get('charter_origin') or 'N/A'} to {metadata.get('charter_destination') or 'N/A'}\n"
-            f" *Date*: {conv.booking_date}\n"
-            f" *Passengers*: {conv.passenger_count}\n"
-            f" *Notes*: {conv.additional_requirements or 'N/A'}\n"
+            f" *Date*: {getattr(conv, 'booking_date', 'N/A')}\n"
+            f" *Passengers*: {getattr(conv, 'passenger_count', 'N/A')}\n"
+            f" *Notes*: {getattr(conv, 'additional_requirements', 'N/A') or 'N/A'}\n"
             f" *Status*: REQUESTED - contact the customer within 30 minutes"
         )
+
+        if routing["routing_mode"] == ROUTING_MODE_DATABASE:
+            recipients = routing.get("recipients", [])
+            if not recipients:
+                logger.info(
+                    "[WhatsApp Charter] No active recipients assigned for Charter in database routing mode. Enquiry alert skipped."
+                )
+                return
+            deliver_operations_text(
+                recipients,
+                team_msg,
+                lambda ph, body: whatsapp_client.send_text_message(ph, body),
+            )
+            return
+
+        officer_phone = os.getenv("WHATSAPP_OFFICER_NOTIFY_PHONE", "919599087959").strip()
+        if not officer_phone:
+            return
         try:
             whatsapp_client.send_text_message(officer_phone, team_msg)
         except Exception as err:

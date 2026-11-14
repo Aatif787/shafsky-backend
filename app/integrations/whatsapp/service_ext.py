@@ -783,35 +783,27 @@ class WhatsAppService:
 def trigger_booking_whatsapp_notifications(booking: Any) -> None:
     """Non-blocking notification helper for direct web bookings."""
     s = _svc()
-    whatsapp_client = s.whatsapp_client
-    settings = s.settings
     logger = s.logger
     try:
-        from app.services.notification_routing_service import database_routing_active
+        from app.services.whatsapp_department_service import WhatsAppDepartmentService
 
-        if database_routing_active():
-            logger.info(
-                "[WhatsApp Notification Hook] Officer alert skipped. Database service routing owns operations alerts."
-            )
-            return
-        if not whatsapp_client.is_configured():
-            return
-        officer_phone = (
-            getattr(settings, "WHATSAPP_OFFICER_NOTIFY_PHONE", None)
-            or os.getenv("WHATSAPP_OFFICER_NOTIFY_PHONE", "")
-        ).strip()
-        if not officer_phone:
-            logger.warning("[WhatsApp Notification Hook] WHATSAPP_OFFICER_NOTIFY_PHONE not set; skipping officer notify")
-            return
-        msg = (
-            "🚨 *NEW DIRECT BOOKING CREATED*\n\n"
-            f"• *Booking Ref*: {getattr(booking, 'booking_ref', 'N/A')}\n"
-            f"• *Customer*: {getattr(booking, 'passenger_name', 'N/A')} ({getattr(booking, 'passenger_phone', 'N/A')})\n"
-            f"• *Service*: {getattr(booking, 'service_type', 'N/A')}\n"
-            f"• *Airport*: {getattr(booking, 'origin_code', 'N/A')}\n"
-            f"• *Amount*: ₹{int(getattr(booking, 'total_amount', 0)):,}\n"
-            f"• *Status*: {getattr(booking, 'status', 'PENDING')}"
-        )
-        whatsapp_client.send_text_message(officer_phone, msg)
+        ctx = {
+            "booking_ref": getattr(booking, "booking_ref", "N/A"),
+            "passenger_name": getattr(booking, "passenger_name", "Valued Guest"),
+            "passenger_phone": getattr(booking, "passenger_phone", "N/A"),
+            "passenger_email": getattr(booking, "passenger_email", None),
+            "service_category": getattr(booking, "service_category", None) or getattr(booking, "service_type", "Meet & Greet"),
+            "service_type": getattr(booking, "service_type", None) or getattr(booking, "service_package", "Meet & Greet"),
+            "service_name": getattr(booking, "service_type", None) or getattr(booking, "service_package", "Meet & Greet"),
+            "origin_code": getattr(booking, "origin_code", "DEL"),
+            "dest_code": getattr(booking, "dest_code", "BOM"),
+            "total_amount": float(getattr(booking, "total_amount", 0) or getattr(booking, "total_price", 0) or 0),
+            "currency": getattr(booking, "currency", "INR"),
+            "status": getattr(booking, "status", "PENDING"),
+            "flight_num": getattr(booking, "flight_number", None) or getattr(booking, "flight_num", "N/A"),
+            "terminal": getattr(booking, "terminal", None),
+            "passenger_count": getattr(booking, "passenger_count", 1),
+        }
+        WhatsAppDepartmentService.dispatch_booking_or_enquiry_notification(ctx)
     except Exception as err:  # pylint: disable=broad-exception-caught
         logger.warning("[WhatsApp Notification Hook] Exception: %s", err)

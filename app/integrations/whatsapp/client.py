@@ -408,6 +408,33 @@ class WhatsAppClient:
             logger.error("[WhatsApp] Media upload exception: %s", type(err).__name__)
             return None
 
+    def _resolve_document_object(
+        self,
+        *,
+        filename: str,
+        document_url: Optional[str] = None,
+        pdf_bytes: Optional[bytes] = None,
+    ) -> tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        """Resolve a Meta-accessible document descriptor via Media upload or HTTPS link."""
+        safe_name = (filename or "invoice.pdf").replace("\\", "_").replace("/", "_")[:180]
+        document: Dict[str, Any] = {"filename": safe_name}
+
+        media_id = None
+        if pdf_bytes:
+            media_id = self.upload_media_document(pdf_bytes, safe_name)
+        if media_id:
+            document["id"] = media_id
+        elif document_url and self._is_meta_fetchable_url(document_url):
+            document["link"] = document_url.strip()
+        else:
+            logger.warning("[WhatsApp] Document send skipped: no Meta-fetchable PDF (media id or https URL)")
+            return None, {
+                "success": False,
+                "error": "no_meta_accessible_document",
+                "status": "failed",
+            }
+        return document, None
+
     def send_document_message(
         self,
         to_phone: str,
@@ -434,25 +461,15 @@ class WhatsAppClient:
             logger.info("[WhatsApp] Skipping live document send in offline/test runtime")
             return {"success": False, "error": "offline_document_send", "status": "failed"}
 
-        safe_name = (filename or "invoice.pdf").replace("\\", "_").replace("/", "_")[:180]
-        document: Dict[str, Any] = {"filename": safe_name}
+        document, err = self._resolve_document_object(
+            filename=filename,
+            document_url=document_url,
+            pdf_bytes=pdf_bytes,
+        )
+        if err or document is None:
+            return err or {"success": False, "error": "no_meta_accessible_document", "status": "failed"}
         if caption:
             document["caption"] = str(caption)[:1024]
-
-        media_id = None
-        if pdf_bytes:
-            media_id = self.upload_media_document(pdf_bytes, safe_name)
-        if media_id:
-            document["id"] = media_id
-        elif document_url and self._is_meta_fetchable_url(document_url):
-            document["link"] = document_url.strip()
-        else:
-            logger.warning("[WhatsApp] Document send skipped: no Meta-fetchable PDF (media id or https URL)")
-            return {
-                "success": False,
-                "error": "no_meta_accessible_document",
-                "status": "failed",
-            }
 
         payload = {
             "messaging_product": "whatsapp",
@@ -462,6 +479,67 @@ class WhatsAppClient:
             "document": document,
         }
         return self._dispatch_http(clean_phone, payload, "Document")
+
+    def send_document_template_message(
+        self,
+        to_phone: str,
+        *,
+        template_name: str,
+        template_language: str = "en",
+        filename: str,
+        body_parameters: Optional[List[str]] = None,
+        document_url: Optional[str] = None,
+        pdf_bytes: Optional[bytes] = None,
+    ) -> Dict[str, Any]:
+        """
+        Send an approved WhatsApp utility template containing a PDF document header.
+        Required by Meta for initiating PDF delivery outside the 24-hour session window.
+        """
+        self._load_config()
+        clean_phone = "".join(filter(str.isdigit, str(to_phone)))
+        if not clean_phone or len(clean_phone) < 10:
+            logger.error("[WhatsApp] Invalid recipient phone for template document: '%s'", to_phone)
+            return {"success": False, "error": "invalid_recipient_phone", "status": "failed"}
+
+        tpl_name = (template_name or "").strip()
+        if not tpl_name:
+            return {"success": False, "error": "missing_document_template", "status": "failed"}
+
+        from app.core.runtime import offline_third_party_calls
+
+        if offline_third_party_calls() and os.getenv("WHATSAPP_INVOICE_ENABLED") != "1":
+            logger.info("[WhatsApp] Skipping live document template send in offline/test runtime")
+            return {"success": False, "error": "offline_document_send", "status": "failed"}
+
+        document, err = self._resolve_document_object(
+            filename=filename,
+            document_url=document_url,
+            pdf_bytes=pdf_bytes,
+        )
+        if err or document is None:
+            return err or {"success": False, "error": "no_meta_accessible_document", "status": "failed"}
+
+        components: List[Dict[str, Any]] = [
+            {
+                "type": "header",
+                "parameters": [{"type": "document", "document": document}],
+            }
+        ]
+        if body_parameters:
+            components.append({
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": str(val or "").replace("\n", " ").replace("\r", " ").strip()[:1024] or "-"}
+                    for val in body_parameters
+                ],
+            })
+
+        return self.send_message(
+            to_phone=clean_phone,
+            template_name=tpl_name,
+            template_language=(template_language or "en").strip() or "en",
+            template_components=components,
+        )
 
     def send_interactive_buttons(
         self,

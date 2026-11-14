@@ -1,24 +1,36 @@
+# pylint: disable=not-callable,protected-access
+
 import pytest
-import uuid
-from decimal import Decimal
 from sqlalchemy import select, func
 
-from app.database import SessionLocal
+from app.database import Base, SessionLocal, engine
 from app.models.journey_models import SupportedAirport, Service, AirportService
-from app.models.schema import Booking
 from app.integrations.whatsapp.service import WhatsAppBookingStateMachine
-from app.models.whatsapp_models import WhatsAppConversation
+from app.seeds.seed_journey_data import run_seed
 
 PACKAGE_SLUGS = {
     "silver", "silver-service", "gold", "gold-service",
     "elite", "elite-service", "elite_plus", "elite-plus",
-    "platinum", "platinum-service", "essential", "premium", "vip"
+    "platinum", "platinum-service", "essential", "premium", "vip",
+    "bronze", "diamond",
 }
-UNWANTED_STANDALONE_SLUGS = {"meet_greet", "fast_track", "lounge", "porter", "buggy", "wheelchair", "transport"}
+ADDON_STANDALONE_SLUGS = {"porter", "buggy", "wheelchair", "transport", "fast_track", "lounge"}
 
 
-@pytest.fixture
-def db_session():
+@pytest.fixture(scope="module", autouse=True)
+def _ensure_seeded_catalog():
+    Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    try:
+        airport_count = db.execute(select(func.count(SupportedAirport.id))).scalar() or 0
+    finally:
+        db.close()
+    if airport_count < 20:
+        run_seed()
+
+
+@pytest.fixture(name="db_session")
+def _db_session_fixture():
     db = SessionLocal()
     try:
         yield db
@@ -45,11 +57,10 @@ def test_database_invariants_preserved(db_session):
     airports = db_session.execute(select(SupportedAirport)).scalars().all()
     assert len(airports) == 20
 
-    addon_slugs = {"porter", "buggy", "wheelchair", "transport", "fast_track", "lounge"}
     leaked = db_session.execute(
         select(func.count(AirportService.id))
         .join(Service, AirportService.service_id == Service.id)
-        .where(AirportService.is_available.is_(True), Service.slug.in_(addon_slugs))
+        .where(AirportService.is_available.is_(True), Service.slug.in_(ADDON_STANDALONE_SLUGS))
     ).scalar()
     assert leaked == 0
 
@@ -97,9 +108,11 @@ def test_delhi_whatsapp_menu_cleanliness(db_session):
     rows_dom_arr = WhatsAppBookingStateMachine._get_authoritative_airport_packages(
         db_session, del_airport.id, "ARRIVAL", ["DOMESTIC", "ALL"], terminal="Terminal 1 & 2"
     )
+    assert len(rows_dom_arr) == 2
     returned_dom_slugs = [svc.slug.lower() for _, svc in rows_dom_arr]
     assert "silver" in returned_dom_slugs
     assert "elite" in returned_dom_slugs
+    assert "gold" not in returned_dom_slugs
     assert "meet_greet" not in returned_dom_slugs
 
     # Test DEL Transit (Active: returns 1 meet_greet via standalone fallback)
@@ -112,7 +125,8 @@ def test_delhi_whatsapp_menu_cleanliness(db_session):
 
 def test_atq_and_bom_transit_cleanliness(db_session):
     """
-    Verifies that ATQ departure sells the seeded meet_greet product, and BOM transit returns the live transit package.
+    Verifies that ATQ departure sells Silver and Elite packages and ATQ transit sells meet_greet at 5000,
+    while BOM transit returns the live transit package.
     """
     atq_airport = db_session.execute(
         select(SupportedAirport).where(SupportedAirport.iata_code == "ATQ")
@@ -121,9 +135,17 @@ def test_atq_and_bom_transit_cleanliness(db_session):
     atq_rows = WhatsAppBookingStateMachine._get_authoritative_airport_packages(
         db_session, atq_airport.id, "DEPARTURE", ["DOMESTIC", "ALL"]
     )
-    assert len(atq_rows) == 1
-    assert atq_rows[0][1].slug == "meet_greet"
-    assert float(atq_rows[0][0].price) == 2500.0
+    assert [(svc.slug, float(aps.price)) for aps, svc in atq_rows] == [
+        ("silver", 2500.0),
+        ("elite", 4000.0),
+    ]
+
+    atq_transit_rows = WhatsAppBookingStateMachine._get_authoritative_airport_packages(
+        db_session, atq_airport.id, "TRANSIT", ["DOMESTIC_DOMESTIC", "ALL"]
+    )
+    assert len(atq_transit_rows) == 1
+    assert atq_transit_rows[0][1].slug == "meet_greet"
+    assert float(atq_transit_rows[0][0].price) == 5000.0
 
     bom_airport = db_session.execute(
         select(SupportedAirport).where(SupportedAirport.iata_code == "BOM")
@@ -158,7 +180,7 @@ def test_all_20_airports_whatsapp_package_menu(db_session):
             rows = WhatsAppBookingStateMachine._get_authoritative_airport_packages(
                 db_session, ap.id, jt, ftypes
             )
-            for aps, svc in rows:
+            for _, svc in rows:
                 slug = svc.slug.lower()
                 # Transit and ATQ sell meet_greet as the catalog product, not silver/gold/elite.
                 if jt == "TRANSIT" or slug == "meet_greet":
@@ -175,6 +197,7 @@ def test_terminal_isolation(db_session):
     del_airport = db_session.execute(
         select(SupportedAirport).where(SupportedAirport.iata_code == "DEL")
     ).scalar_one_or_none()
+    assert del_airport is not None
 
     # T1/T2 Domestic Departure
     t1_rows = WhatsAppBookingStateMachine._get_authoritative_airport_packages(
@@ -182,6 +205,8 @@ def test_terminal_isolation(db_session):
     )
     t1_prices = {svc.slug: float(aps.price) for aps, svc in t1_rows}
     assert t1_prices.get("silver") == 3000.0
+    assert t1_prices.get("elite") == 5000.0
+    assert "gold" not in t1_prices
 
     # T3 Domestic Departure
     t3_rows = WhatsAppBookingStateMachine._get_authoritative_airport_packages(
@@ -190,3 +215,4 @@ def test_terminal_isolation(db_session):
     t3_prices = {svc.slug: float(aps.price) for aps, svc in t3_rows}
     assert t3_prices.get("silver") == 3000.0
     assert t3_prices.get("gold") == 3500.0
+    assert t3_prices.get("elite") == 5000.0

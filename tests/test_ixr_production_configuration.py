@@ -435,7 +435,7 @@ def test_full_airports_regression_suite(db: Session):
     """
     expected_active_counts = {
         "AMD": 7,
-        "ATQ": 4,
+        "ATQ": 11,
         "BBI": 3,
         "BLR": 12,
         "BOM": 16,

@@ -427,7 +427,7 @@ class JourneyMultiServiceMixin:
 
         unavail_msg = None
         if none_avail:
-            unavail_msg = "This airport is not currently serviceable. Submit your request and our team will check availability."
+            unavail_msg = "Submit your request and our team will check availability."
         elif unavail_count > 0:
             unavail_msg = f"{unavail_count} of your requested services require an operational request, while available services can be booked and paid for now."
 

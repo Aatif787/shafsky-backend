@@ -66,6 +66,13 @@ def _extract_services_from_dict(d: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Extract list of service dictionaries from a payload or metadata dict."""
     services: List[Dict[str, Any]] = []
 
+    # 0. service_breakdown
+    breakdown = d.get("service_breakdown")
+    if isinstance(breakdown, list):
+        for s in breakdown:
+            if isinstance(s, dict):
+                services.append(s)
+
     # 1. available_services
     avail = d.get("available_services")
     if isinstance(avail, list):
@@ -188,7 +195,13 @@ def resolve_service_display_name(
     if services:
         entries: List[Tuple[str, str]] = []
         for svc in services:
-            pkg = svc.get("package") or svc.get("package_slug") or svc.get("service_type")
+            pkg = (
+                svc.get("package")
+                or svc.get("package_slug")
+                or svc.get("package_name")
+                or svc.get("service_type")
+                or svc.get("slug")
+            )
             if not pkg or is_multi_service_placeholder(pkg):
                 continue
             label = _package_label(pkg)
@@ -223,11 +236,14 @@ def resolve_service_display_name(
         return resolved_label
 
     if contains_placeholder:
-        for suffix in (" — multi_service", " — multi-service", " - multi_service", " - multi-service"):
-            if name_str.endswith(suffix):
-                return name_str[: -len(suffix)].strip()
+        import re
+        cleaned = re.sub(r"\s*[-—–]\s*multi[-_]services?", "", name_str, flags=re.IGNORECASE).strip()
+        cleaned = re.sub(r"multi[-_]services?", "", cleaned, flags=re.IGNORECASE).strip()
+        if cleaned:
+            return cleaned
         cat = meta_dict.get("service_category") or meta_dict.get("category")
         if cat and not is_multi_service_placeholder(cat):
             return str(cat).strip()
+        return "Meet & Greet"
 
     return name

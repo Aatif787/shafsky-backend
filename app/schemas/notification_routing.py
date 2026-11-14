@@ -187,9 +187,47 @@ class ServiceKeyListResponse(BaseModel):
     data: List[ServiceKeyItem]
 
 
+class RecipientServicesUpdate(BaseModel):
+    service_keys: List[str] = Field(default_factory=list, max_length=50)
+
+    @model_validator(mode="after")
+    def unique_services(self) -> "RecipientServicesUpdate":
+        if len(self.service_keys) != len(set(self.service_keys)):
+            raise ValueError("Duplicate service in this recipient assignment.")
+        return self
+
+
+class RecipientServicesResponse(BaseModel):
+    recipient_id: uuid.UUID
+    service_keys: List[str]
+
+
+class RecipientServicesEnvelope(BaseModel):
+    success: bool = True
+    data: RecipientServicesResponse
+
+
+class AdoptEnvRoutingResponse(BaseModel):
+    routing_mode: str
+    adopted: bool
+    recipients_created: int
+    routes_created: int
+
+
+class AdoptEnvRoutingEnvelope(BaseModel):
+    success: bool = True
+    data: AdoptEnvRoutingResponse
+
+
+class LiveRecipient(BaseModel):
+    label: str
+    phone_number: str
+
+
 class RoutingSettingsResponse(BaseModel):
     routing_mode: str
     settings_id: uuid.UUID
+    live_recipients: List[LiveRecipient] = []
 
 
 class RoutingSettingsEnvelope(BaseModel):

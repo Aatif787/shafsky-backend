@@ -59,7 +59,7 @@ class NotificationCustomerEnquiryMixin:
             resolve_operations_recipients,
         )
 
-        routing = resolve_operations_recipients("Round Trip")
+        routing = resolve_operations_recipients("Round Trip", context=context)
         if routing["routing_mode"] != ROUTING_MODE_DATABASE and not officer_phone:
             logger.warning(
                 "Round Trip enquiry WhatsApp skipped: staff phone is not configured",
@@ -182,7 +182,7 @@ class NotificationCustomerEnquiryMixin:
             resolve_operations_recipients,
         )
 
-        routing = resolve_operations_recipients("Ticketing")
+        routing = resolve_operations_recipients("Ticketing", context=context)
         if routing["routing_mode"] != ROUTING_MODE_DATABASE and not officer_phone:
             logger.warning(
                 "Ticketing enquiry WhatsApp skipped: staff phone is not configured",
@@ -297,7 +297,7 @@ class NotificationCustomerEnquiryMixin:
             resolve_operations_recipients,
         )
 
-        routing = resolve_operations_recipients("Lounge")
+        routing = resolve_operations_recipients("Lounge", context=context)
         if routing["routing_mode"] != ROUTING_MODE_DATABASE and not officer_phone:
             logger.warning(
                 "Lounge enquiry WhatsApp skipped: staff phone is not configured",

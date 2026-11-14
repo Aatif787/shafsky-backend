@@ -152,3 +152,8 @@ def test_flight_cache_conversion_to_schema():
     assert schema.arrival.gate == "B12"
     assert schema.arrival.actual == "2026-10-29T00:32:00+01:00"
     assert schema.arrival.baggage_belt == "Belt 4"
+
+
+def test_cache_does_not_rewrite_another_days_schedule():
+    """A stored schedule for one date must not be presented as another date."""
+    assert to_flight_status_data(SAMPLE_FLIGHT_DATA, "AI101", target_date="2026-11-01") is None

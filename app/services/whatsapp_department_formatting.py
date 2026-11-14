@@ -115,6 +115,11 @@ class WhatsAppDepartmentFormattingMixin:
         - WHATSAPP_BOOKING_NOTIFY_PHONE_5
         Fallback: If none of the 5 are configured, checks legacy WHATSAPP_OFFICER_NOTIFY_PHONE.
         """
+        return [item["phone_number"] for item in cls.describe_recipient_phone_numbers()]
+
+    @classmethod
+    def describe_recipient_phone_numbers(cls) -> List[Dict[str, str]]:
+        """The numbers live env-mode dispatch sends to, in delivery order."""
         env_vars = [
             "WHATSAPP_BOOKING_NOTIFY_PHONE_1",
             "WHATSAPP_BOOKING_NOTIFY_PHONE_2",
@@ -122,26 +127,32 @@ class WhatsAppDepartmentFormattingMixin:
             "WHATSAPP_BOOKING_NOTIFY_PHONE_4",
             "WHATSAPP_BOOKING_NOTIFY_PHONE_5",
         ]
-        recipients: List[str] = []
+        described: List[Dict[str, str]] = []
+        seen = set()
         current_settings = _get_settings()
-        for var in env_vars:
+        for index, var in enumerate(env_vars, start=1):
             val = getattr(current_settings, var, None)
             if val is None:
                 val = os.getenv(var, "")
             norm = cls.normalize_phone_number(val)
-            if norm and norm not in recipients:
-                recipients.append(norm)
+            if norm and norm not in seen:
+                seen.add(norm)
+                described.append({
+                    "label": f"Environment recipient {index}",
+                    "phone_number": norm,
+                })
 
-        # Fallback if none of the 5 are configured
-        if not recipients:
+        if not described:
             legacy_officer = getattr(current_settings, "WHATSAPP_OFFICER_NOTIFY_PHONE", None)
             if legacy_officer is None:
                 legacy_officer = os.getenv("WHATSAPP_OFFICER_NOTIFY_PHONE", "")
             norm = cls.normalize_phone_number(legacy_officer)
             if norm:
-                recipients.append(norm)
-
-        return recipients
+                described.append({
+                    "label": "Officer notification number",
+                    "phone_number": norm,
+                })
+        return described
 
     @classmethod
     def _mask_phone(cls, phone: str) -> str:
@@ -257,6 +268,19 @@ class WhatsAppDepartmentFormattingMixin:
             service_text = resolve_service_display_name(service_text, resolution_dict)
             if is_multi_service_placeholder(service_text) or "multi_service" in str(service_text).lower() or "multi-service" in str(service_text).lower():
                 service_text = service_label or "Meet & Greet"
+
+        # Absolute guarantee that multi_service never leaks in service_text or service_type
+        for ph in ("multi_service", "multi-service", "multiservice"):
+            if ph in service_text.lower():
+                service_text = re.sub(r"\s*[-—–]\s*" + ph, "", service_text, flags=re.IGNORECASE).strip()
+                service_text = re.sub(ph, "", service_text, flags=re.IGNORECASE).strip()
+                if not service_text:
+                    service_text = service_label or "Meet & Greet"
+            if ph in service_type.lower():
+                service_type = re.sub(r"\s*[-—–]\s*" + ph, "", service_type, flags=re.IGNORECASE).strip()
+                service_type = re.sub(ph, "", service_type, flags=re.IGNORECASE).strip()
+                if not service_type:
+                    service_type = service_label or "Meet & Greet"
 
         return service_type, service_text
 
@@ -512,6 +536,49 @@ class WhatsAppDepartmentFormattingMixin:
         ]
 
         return [{"type": "body", "parameters": parameters}]
+
+    DEPT1_CATEGORIES = {
+        "meet & greet",
+        "meet and greet",
+        "airport assistance",
+        "airport services",
+        "lounge",
+        "airport lounge",
+        "lounge access",
+        "vip lounge",
+        "fast track",
+        "baggage assistance",
+    }
+
+    DEPT2_CATEGORIES = {
+        "ticketing",
+        "air ticketing",
+        "flight ticket",
+        "flight booking",
+        "transport",
+        "ground transport",
+        "round trip",
+        "round_trip",
+        "roundtrip",
+        "transportation services",
+        "hotel & transportation",
+        "hotel",
+        "hotels",
+        "hotel booking",
+        "hotel services",
+        "travel support",
+    }
+
+    DEPT3_CATEGORIES = {
+        "private charter",
+        "charter",
+        "air charter",
+        "cargo",
+        "cargo & logistics",
+        "medical assistance",
+        "medical services",
+        "special services",
+    }
 
     @classmethod
     def resolve_department(
