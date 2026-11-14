@@ -129,7 +129,7 @@ def test_non_serviceable_airport_enquiry_flow():
         # Verify no usage of the word 'concierge' in messages
         assert "concierge" not in (res.unavailable_message or "").lower()
         assert "concierge" not in (res.services[0].status_reason or "").lower()
-        assert res.unavailable_message == "This airport is not currently serviceable. Submit your request and our team will check availability."
+        assert res.unavailable_message == "Submit your request and our team will check availability."
 
 
 def test_create_service_query_mirrors_to_bookings_desk():
