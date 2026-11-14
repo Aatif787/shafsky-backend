@@ -24,8 +24,8 @@ from app.seeds.airports.atq import (
 )
 
 
-@pytest.fixture
-def db():
+@pytest.fixture(name="db")
+def _db_fixture():
     session = SessionLocal()
     try:
         yield session
@@ -33,8 +33,8 @@ def db():
         session.close()
 
 
-@pytest.fixture
-def api_client(db):
+@pytest.fixture(name="api_client")
+def _api_client_fixture(db):
     def _override_db():
         yield db
 
@@ -44,11 +44,11 @@ def api_client(db):
     app.dependency_overrides.clear()
 
 
-def _get_active_atq_rows(db):
-    atq = db.query(SupportedAirport).filter_by(iata_code="ATQ").first()
+def _get_active_atq_rows(session):
+    atq = session.query(SupportedAirport).filter_by(iata_code="ATQ").first()
     assert atq is not None, "ATQ airport must exist"
     rows = (
-        db.query(AirportService, Service)
+        session.query(AirportService, Service)
         .join(Service, AirportService.service_id == Service.id)
         .filter(
             AirportService.airport_id == atq.id,
@@ -91,7 +91,7 @@ def test_atq_pricing_and_package_mappings(db):
     assert set(matrix.keys()) == set(expected_prices.keys())
 
     for key, expected_price in expected_prices.items():
-        aps, svc = matrix[key]
+        aps, _ = matrix[key]
         assert float(aps.price) == expected_price, f"{key} expected {expected_price}, got {aps.price}"
         assert aps.currency == "INR"
 
@@ -266,7 +266,7 @@ def test_atq_seed_idempotency_and_preservation(db):
     - Does not delete existing rows or touch unrelated ATQ service records
     """
     try:
-        atq, initial_rows = _get_active_atq_rows(db)
+        atq, _ = _get_active_atq_rows(db)
         all_before = db.query(AirportService).filter_by(airport_id=atq.id).all()
         before_ids = {r.id for r in all_before}
 

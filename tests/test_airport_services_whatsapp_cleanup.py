@@ -1,13 +1,11 @@
+# pylint: disable=not-callable,protected-access
+
 import pytest
-import uuid
-from decimal import Decimal
 from sqlalchemy import select, func
 
 from app.database import SessionLocal
 from app.models.journey_models import SupportedAirport, Service, AirportService
-from app.models.schema import Booking
 from app.integrations.whatsapp.service import WhatsAppBookingStateMachine
-from app.models.whatsapp_models import WhatsAppConversation
 
 PACKAGE_SLUGS = {
     "silver", "silver-service", "gold", "gold-service",
@@ -17,8 +15,8 @@ PACKAGE_SLUGS = {
 UNWANTED_STANDALONE_SLUGS = {"meet_greet", "fast_track", "lounge", "porter", "buggy", "wheelchair", "transport"}
 
 
-@pytest.fixture
-def db_session():
+@pytest.fixture(name="db_session")
+def _db_session_fixture():
     db = SessionLocal()
     try:
         yield db
@@ -167,7 +165,7 @@ def test_all_20_airports_whatsapp_package_menu(db_session):
             rows = WhatsAppBookingStateMachine._get_authoritative_airport_packages(
                 db_session, ap.id, jt, ftypes
             )
-            for aps, svc in rows:
+            for _, svc in rows:
                 slug = svc.slug.lower()
                 # Transit and ATQ sell meet_greet as the catalog product, not silver/gold/elite.
                 if jt == "TRANSIT" or slug == "meet_greet":
